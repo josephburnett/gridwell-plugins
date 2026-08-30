@@ -16,8 +16,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell-plugins/proc/procsource"
+	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
 // Killer is the signal interface, injected so tests never signal real

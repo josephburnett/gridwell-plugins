@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell-plugins/gitlab/gitlabapi"
+	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
 // DefaultURL is the GitLab instance when config names none.

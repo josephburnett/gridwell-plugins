@@ -5,8 +5,8 @@
 package main
 
 import (
-	"github.com/josephburnett/gridwell-plugins/guest"
 	"github.com/josephburnett/gridwell-plugins/gitlab/plugin"
+	"github.com/josephburnett/gridwell-plugins/guest"
 )
 
 func main() { guest.Main(plugin.FromConfig) }

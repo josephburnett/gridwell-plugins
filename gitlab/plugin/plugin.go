@@ -17,8 +17,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell-plugins/gitlab/todos"
+	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
 // Kind is the plugin's declared kind, and the suffix of its binary name.

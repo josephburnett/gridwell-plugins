@@ -17,11 +17,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	gridwellv1 "github.com/josephburnett/gridwell/api/gen/gridwell/v1"
-	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell-plugins/fs/fsfile"
 	"github.com/josephburnett/gridwell-plugins/fs/fssource"
 	"github.com/josephburnett/gridwell-plugins/fs/trash"
+	gridwellv1 "github.com/josephburnett/gridwell/api/gen/gridwell/v1"
+	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
 // Host is the destructive side-effect surface, injected so tests never touch

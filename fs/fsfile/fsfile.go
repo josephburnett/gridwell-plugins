@@ -14,9 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/josephburnett/gridwell-plugins/fs/fssource"
 	gridwellv1 "github.com/josephburnett/gridwell/api/gen/gridwell/v1"
 	"github.com/josephburnett/gridwell/api/rpc"
-	"github.com/josephburnett/gridwell-plugins/fs/fssource"
 )
 
 // pageMediaTypes is fs's own table, deliberately not mime.TypeByExtension,
