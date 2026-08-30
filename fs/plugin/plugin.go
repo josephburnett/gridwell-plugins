@@ -39,9 +39,8 @@ func (trashHost) RemoveAll(p string) error { return trash.Trash(p) }
 // Plugin implements pluginv1.PluginServer for one directory root.
 type Plugin struct {
 	pluginv1.UnimplementedPluginServer
-	root    string
-	host    Host
-	readDir func(dir string) ([]fssource.Entry, error)
+	root string
+	host Host
 }
 
 // FromConfig builds the production plugin from the shared config vocabulary.
@@ -60,16 +59,7 @@ func New(root string, host Host) *Plugin {
 	if host == nil {
 		host = trashHost{}
 	}
-	return &Plugin{root: filepath.Clean(root), host: host, readDir: fssource.Read}
-}
-
-// SetReadDir overrides the directory reader, so a test can simulate EACCES
-// without root. nil restores the default.
-func (p *Plugin) SetReadDir(f func(dir string) ([]fssource.Entry, error)) {
-	if f == nil {
-		f = fssource.Read
-	}
-	p.readDir = f
+	return &Plugin{root: filepath.Clean(root), host: host}
 }
 
 // abs resolves a relative key under the root, refusing escapes. Keys are
@@ -121,7 +111,7 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 	if err != nil {
 		return nil, err
 	}
-	entries, readErr := p.readDir(dir)
+	entries, readErr := fssource.Read(dir)
 	if readErr != nil {
 		if errors.Is(readErr, iofs.ErrNotExist) {
 			return &pluginv1.ListResponse{Authoritative: true, SourceLabel: dir}, nil
