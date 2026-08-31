@@ -28,3 +28,19 @@ func TestFromConfigOwnsThePidDerivation(t *testing.T) {
 		}
 	}
 }
+
+// The process table is host state, and saying so is what earns its grids the
+// host treatment on the client. Nothing downstream knows the kind "proc".
+func TestInfoDeclaresHostContent(t *testing.T) {
+	impl, err := FromConfig(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := impl.(*Plugin).Info(context.Background(), &pluginv1.InfoRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.GetHostContent() {
+		t.Error("host_content false; the process table is host state")
+	}
+}

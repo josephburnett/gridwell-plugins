@@ -91,6 +91,9 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		DisplayName: label,
 		Glyph:       "process",
 		RootContext: strconv.FormatInt(p.rootPID, 10),
+		// The process table is host state, projected: declaring it is what
+		// earns these grids the host treatment on the client.
+		HostContent: true,
 	}, nil
 }
 

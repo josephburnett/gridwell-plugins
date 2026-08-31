@@ -54,3 +54,24 @@ func TestAbsStillRefusesEscapes(t *testing.T) {
 		}
 	}
 }
+
+// The host treatment a directory grid wears — the outside tint on every
+// tile, the exit border on a descent — is this DECLARATION, not the node
+// recognizing the kind "fs". A rootless fs is still a projection of the
+// host, so it declares the same thing.
+func TestInfoDeclaresHostContent(t *testing.T) {
+	ctx := context.Background()
+	for _, cfg := range []map[string]string{{"root": "/srv/docs"}, {}} {
+		impl, err := FromConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := impl.(*Plugin).Info(ctx, &pluginv1.InfoRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.GetHostContent() {
+			t.Errorf("config %v → host_content false; a directory tree is host state", cfg)
+		}
+	}
+}

@@ -89,6 +89,11 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		Kind:        "fs",
 		DisplayName: "files",
 		Glyph:       "folder",
+		// A directory tree is host state this plugin projects: its rows are
+		// summaries of files that live outside Gridwell. Declaring it is what
+		// earns the grids their host treatment on the client — the node has
+		// no list of host-backed kinds to consult.
+		HostContent: true,
 	}
 	// No configured root makes the plugin rootless: it is listed but not
 	// enterable, because no context exists to descend into.
