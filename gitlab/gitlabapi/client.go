@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,10 +30,19 @@ type Client struct {
 	http  *http.Client
 }
 
-// New builds a client. A nil httpClient uses http.DefaultClient.
+// DefaultTimeout bounds one page request end to end. http.DefaultClient has
+// no timeout, and a GitLab response that stalls mid-body would park the walk
+// forever — the plugin's shared flight then holds every reader on that one
+// hung request, and the UI says "loading" for the life of the process with
+// no error to surface. A timeout turns the stall into Unavailable, "not
+// right now", and the node serves its remembered listing until the next
+// walk.
+const DefaultTimeout = 30 * time.Second
+
+// New builds a client. A nil httpClient gets a default with DefaultTimeout.
 func New(base, token string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: DefaultTimeout}
 	}
 	return &Client{base: strings.TrimRight(base, "/"), token: token, http: httpClient}
 }

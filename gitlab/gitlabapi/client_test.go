@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -48,5 +49,32 @@ func TestPageMapsOutagesToUnavailable(t *testing.T) {
 	srv.Close()
 	if _, _, err := New(srv.URL, "t", nil).Page(context.Background(), "done", 1); status.Code(err) != codes.Unavailable {
 		t.Errorf("refused connection → %v", err)
+	}
+}
+
+// TestDefaultClientHasATimeout pins the guard against the wedge that hung a
+// real node: http.DefaultClient never times out, so one GitLab response that
+// stalls mid-body parks the walk forever, and the plugin's shared flight
+// turns that one hung request into every reader waiting on it — the UI shows
+// "loading" for the life of the process, with no error to surface.
+func TestDefaultClientHasATimeout(t *testing.T) {
+	c := New("https://gitlab.example", "tok", nil)
+	if c.http.Timeout <= 0 {
+		t.Fatal("the default HTTP client must carry a timeout: a stalled response wedges the walk forever")
+	}
+}
+
+// TestStalledResponseIsUnavailable: a request that exceeds the client timeout
+// answers Unavailable — "not right now", transport-shaped — so the node
+// degrades to its remembered listing instead of waiting forever.
+func TestStalledResponseIsUnavailable(t *testing.T) {
+	stall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	defer stall.Close()
+	c := New(stall.URL, "tok", &http.Client{Timeout: 50 * time.Millisecond})
+	_, _, err := c.Page(context.Background(), "pending", 1)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("stalled page = %v, want Unavailable", err)
 	}
 }
