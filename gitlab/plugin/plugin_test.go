@@ -117,6 +117,34 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	}
 }
 
+// TestReadContentBeforeFirstWalkIsUnavailable: a fresh process asked for a
+// todo it has not yet seen must answer "not right now", never a Gone body.
+// The node serves reads from its cache while the first walk runs, so this
+// read can arrive before the walk lands — and a Gone body would be a live
+// success the cache stores over the remembered markdown.
+func TestReadContentBeforeFirstWalkIsUnavailable(t *testing.T) {
+	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
+	p := New(src, Options{})
+	r := &reader{}
+	err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "todo:1"}, r)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("pre-walk unknown todo = (%v, %v), want Unavailable", r.chunks, err)
+	}
+	// After a completed walk the same guard stands aside: a known todo
+	// answers, and an unknown one is honestly gone.
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatal(err)
+	}
+	r = &reader{}
+	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "todo:1"}, r); err != nil {
+		t.Fatal(err)
+	}
+	r = &reader{}
+	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "todo:99"}, r); err != nil || !strings.Contains(string(r.chunks[0].Data), "todo:99") {
+		t.Fatalf("post-walk unknown todo = (%s, %v), want the gone body", r.chunks[0].GetData(), err)
+	}
+}
+
 func TestReadContentAndProbe(t *testing.T) {
 	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
 	p := New(src, Options{})

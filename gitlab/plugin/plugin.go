@@ -176,6 +176,13 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	}
 	t, known := p.mem.Get(id)
 	if !known {
+		// Before the first completed walk, "not in memory" means "not yet",
+		// not "gone" — and it must answer Unavailable, transport-shaped, so
+		// the node's cache serves the remembered body instead of storing a
+		// Gone body over it while the walk is still running.
+		if !p.mem.Walked() {
+			return status.Error(codes.Unavailable, "gitlab plugin: the first walk has not completed")
+		}
 		return stream.Send(&pluginv1.ContentChunk{Data: todos.GoneMarkdown(req.Key), MediaType: "text/markdown"})
 	}
 	return stream.Send(&pluginv1.ContentChunk{Data: todos.Markdown(&t), MediaType: "text/markdown"})

@@ -143,6 +143,15 @@ func descending(todos []Todo) bool {
 	return true
 }
 
+// Walked reports whether some walk has run to the end of GitLab's lists, so
+// absence from this memory means something: an unknown todo is gone, rather
+// than not yet seen. It is the same fact the done walk's early stop keys on.
+func (m *Memory) Walked() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.doneComplete
+}
+
 // Get answers one remembered todo (a copy).
 func (m *Memory) Get(id int64) (Todo, bool) {
 	m.mu.Lock()
