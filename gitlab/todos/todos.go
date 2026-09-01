@@ -1,8 +1,9 @@
 // Package todos is the pure half of the gitlab todos plugin: the todo record,
 // the week calendar, the memory of every todo seen, and the derivations —
-// entries, labels, placement hints — the plugin answers with. There is no
-// network and no gRPC here, so everything is unit-tested against fakes, and
-// the plugin package only wires it to the wire.
+// entries, labels, placement hints — the plugin answers with, plus the
+// disposable cache file that memory rewarms itself from. There is no network
+// and no gRPC here, so everything is unit-tested against fakes, and the plugin
+// package only wires it to the wire.
 package todos
 
 import (

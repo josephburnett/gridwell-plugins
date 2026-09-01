@@ -16,15 +16,18 @@ type Source interface {
 	Page(ctx context.Context, state string, page int) (todos []Todo, more bool, err error)
 }
 
-// Memory is everything the plugin has seen this process lifetime, keyed by
-// todo id. A todo that vanishes from GitLab keeps its record here and shows as
-// done; nothing is ever removed. Durable memory is the node's, in its
-// read-through cache: a plugin is stateless by contract, so a restart re-walks
-// GitLab and the node bridges the gap.
+// Memory is everything the plugin has seen, keyed by todo id. A todo that
+// vanishes from GitLab keeps its record here and shows as done; nothing is
+// ever removed. It survives a restart through the cache file in the plugin's
+// state directory — see Snapshot and store.go — which holds this plugin's
+// memory of ITS SOURCE and never a node fact. The node keeps its own
+// read-through cache of what the plugin last said; this one only saves the
+// walk.
 type Memory struct {
 	mu    sync.Mutex
 	todos map[int64]*Todo
-	// doneComplete records that some walk reached the end of the done list.
+	// doneComplete records that some walk — this process's, or one whose
+	// snapshot Restore folded back in — reached the end of the done list.
 	// Only then does a page of already-known done todos prove every older one
 	// is known: a targeted week walk stops at the week boundary having
 	// absorbed one page past it, so until a walk has run to the end, a
@@ -161,7 +164,8 @@ func descending(todos []Todo) bool {
 	return true
 }
 
-// Walked reports whether some walk has run to the end of GitLab's lists, so
+// Walked reports whether some walk, in this process or a previous one whose
+// snapshot was restored, has run to the end of GitLab's lists, so
 // absence from this memory means something: an unknown todo is gone, rather
 // than not yet seen. It is the same fact the done walk's early stop keys on.
 func (m *Memory) Walked() bool {
