@@ -2,6 +2,7 @@ package todos
 
 import (
 	"context"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -56,7 +57,9 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 	coverage := since
 	fullWalk := false
 	for page := 1; ; page++ {
+		pageStart := time.Now()
 		todos, more, err := src.Page(ctx, StatePending, page)
+		logPage(StatePending, page, len(todos), more, time.Since(pageStart), err)
 		if err != nil {
 			return err
 		}
@@ -90,7 +93,9 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 	m.mu.Unlock()
 
 	for page := 1; ; page++ {
+		pageStart := time.Now()
 		todos, more, err := src.Page(ctx, StateDone, page)
+		logPage(StateDone, page, len(todos), more, time.Since(pageStart), err)
 		if err != nil {
 			return err
 		}
@@ -115,6 +120,19 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 		}
 	}
 	return nil
+}
+
+// logPage narrates one page of a walk: which list, how far in, what it
+// carried, how long GitLab took, and the error when there is one. The walk is
+// the plugin's only slow work and its only network dependency, so when a grid
+// sits on "loading" this line is the difference between a stall, a crawl, and
+// a loop.
+func logPage(state string, page, n int, more bool, took time.Duration, err error) {
+	if err != nil {
+		log.Printf("gitlab plugin: %s page %d failed after %s: %v", state, page, took.Round(time.Millisecond), err)
+		return
+	}
+	log.Printf("gitlab plugin: %s page %d: %d todos, more=%v, %s", state, page, n, more, took.Round(time.Millisecond))
 }
 
 // absorb records a page, with GitLab's record replacing the remembered one,

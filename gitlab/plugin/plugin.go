@@ -10,6 +10,7 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -111,10 +112,13 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 	for _, k := range []string{ctxKey, todos.RootContext} {
 		if f, ok := p.flights[k]; ok {
 			p.mu.Unlock()
+			log.Printf("gitlab plugin: sync %q waiting on the %q walk in flight", ctxKey, k)
 			select {
 			case <-f.done:
+				log.Printf("gitlab plugin: sync %q done waiting on %q: err=%v", ctxKey, k, f.err)
 				return f.err
 			case <-ctx.Done():
+				log.Printf("gitlab plugin: sync %q abandoned waiting on %q: %v", ctxKey, k, ctx.Err())
 				return ctx.Err()
 			}
 		}
@@ -123,7 +127,10 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 	p.flights[ctxKey] = f
 	p.mu.Unlock()
 
+	log.Printf("gitlab plugin: walk %q starting (since=%s)", ctxKey, since.Format("2006-01-02"))
+	start := time.Now()
 	err := p.mem.Sync(ctx, p.src, since)
+	log.Printf("gitlab plugin: walk %q finished in %s: err=%v", ctxKey, time.Since(start).Round(time.Millisecond), err)
 	p.mu.Lock()
 	if err == nil {
 		p.syncedAt[ctxKey] = p.now()
