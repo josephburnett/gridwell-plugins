@@ -33,10 +33,24 @@ type Memory struct {
 	// absorbed one page past it, so until a walk has run to the end, a
 	// fully-known page proves nothing about the rest.
 	doneComplete bool
+	// resumes is where a failed walk stopped, by the window it was walking.
+	// A walk that succeeds leaves none.
+	resumes map[string]*resumePoint
+}
+
+// resumePoint is a failed walk's mark: the phase that failed, and the page the
+// next walk over the same window starts at — one before the failure. The
+// overlap is free, because absorb is idempotent, and it re-reads the page the
+// list may have shifted items onto while the walk was down.
+type resumePoint struct {
+	state string // StatePending or StateDone
+	page  int
 }
 
 // NewMemory builds an empty memory.
-func NewMemory() *Memory { return &Memory{todos: map[int64]*Todo{}} }
+func NewMemory() *Memory {
+	return &Memory{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}}
+}
 
 // Sync refreshes the memory from src. A zero since walks everything: every
 // pending page, then done pages to the end. Once a walk has reached that end,
@@ -53,53 +67,71 @@ func NewMemory() *Memory { return &Memory{todos: map[int64]*Todo{}} }
 // covered the todo's creation time. A page that is not newest-first therefore
 // disables the early stop, and the walk runs to the end, rather than risk
 // marking live todos done.
+//
+// A walk that fails keeps everything it absorbed and leaves a mark: the next
+// walk over the same window starts one page before the failure instead of at
+// the first page again, so a lid closing mid-walk costs a page rather than
+// dozens. A resumed pending walk does NOT derive completion — it never saw
+// the pages the failed attempt covered, and the list may have shifted items
+// across the seam in between, so absence proves nothing. Only a walk that
+// started at the first pending page judges absence; the next one does, one
+// refresh later.
 func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
-	seenPending := map[int64]bool{}
-	// coverage is the oldest creation time the pending walk provably
-	// enumerated past; zero means everything.
-	coverage := since
-	fullWalk := false
-	for page := 1; ; page++ {
-		pageStart := time.Now()
-		todos, more, err := src.Page(ctx, StatePending, page)
-		logPage(StatePending, page, len(todos), more, time.Since(pageStart), err)
-		if err != nil {
-			return err
-		}
-		m.absorb(todos)
-		for i := range todos {
-			seenPending[todos[i].ID] = true
-		}
-		if !more {
-			fullWalk = true
-			break
-		}
-		if since.IsZero() || !descending(todos) {
-			continue
-		}
-		if len(todos) > 0 && todos[len(todos)-1].CreatedAt.Before(since) {
-			break
+	pendingFrom, doneFrom := 1, 1
+	if r := m.takeResume(since); r != nil {
+		if r.state == StatePending {
+			pendingFrom = r.page
+		} else {
+			// The pending half finished, and judged absence, in the attempt
+			// that went on to fail in the done list. Walking it again would
+			// only re-page GitLab for what is already known.
+			pendingFrom, doneFrom = 0, r.page
 		}
 	}
-	if fullWalk {
-		coverage = time.Time{}
-	}
-	m.mu.Lock()
-	for _, t := range m.todos {
-		if t.State != StatePending || seenPending[t.ID] {
-			continue
-		}
-		if coverage.IsZero() || !t.CreatedAt.Before(coverage) {
-			t.State = StateDone
-		}
-	}
-	m.mu.Unlock()
 
-	for page := 1; ; page++ {
+	if pendingFrom > 0 {
+		seenPending := map[int64]bool{}
+		// coverage is the oldest creation time the pending walk provably
+		// enumerated past; zero means everything.
+		coverage := since
+		fullWalk := false
+		for page := pendingFrom; ; page++ {
+			pageStart := time.Now()
+			todos, more, err := src.Page(ctx, StatePending, page)
+			logPage(StatePending, page, len(todos), more, time.Since(pageStart), err)
+			if err != nil {
+				m.keepResume(since, &resumePoint{state: StatePending, page: rewind(page)})
+				return err
+			}
+			m.absorb(todos)
+			for i := range todos {
+				seenPending[todos[i].ID] = true
+			}
+			if !more {
+				fullWalk = true
+				break
+			}
+			if since.IsZero() || !descending(todos) {
+				continue
+			}
+			if len(todos) > 0 && todos[len(todos)-1].CreatedAt.Before(since) {
+				break
+			}
+		}
+		if fullWalk {
+			coverage = time.Time{}
+		}
+		if pendingFrom == 1 {
+			m.deriveDone(seenPending, coverage)
+		}
+	}
+
+	for page := doneFrom; ; page++ {
 		pageStart := time.Now()
 		todos, more, err := src.Page(ctx, StateDone, page)
 		logPage(StateDone, page, len(todos), more, time.Since(pageStart), err)
 		if err != nil {
+			m.keepResume(since, &resumePoint{state: StateDone, page: rewind(page)})
 			return err
 		}
 		unknown := m.absorb(todos)
@@ -136,6 +168,54 @@ func logPage(state string, page, n int, more bool, took time.Duration, err error
 		return
 	}
 	log.Printf("gitlab plugin: %s page %d: %d todos, more=%v, %s", state, page, n, more, took.Round(time.Millisecond))
+}
+
+// deriveDone marks every remembered pending todo the walk did not see, within
+// the coverage it proved, as done. It is the one place a todo's state changes
+// without GitLab saying so.
+func (m *Memory) deriveDone(seenPending map[int64]bool, coverage time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.todos {
+		if t.State != StatePending || seenPending[t.ID] {
+			continue
+		}
+		if coverage.IsZero() || !t.CreatedAt.Before(coverage) {
+			t.State = StateDone
+		}
+	}
+}
+
+// takeResume removes and returns where the last walk over this window failed.
+// Removing it is the point: a walk that fails again leaves a fresh mark, and
+// a walk that succeeds leaves none, so the walk after it starts at page one
+// and may judge absence again.
+func (m *Memory) takeResume(since time.Time) *resumePoint {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := resumeKey(since)
+	r := m.resumes[k]
+	delete(m.resumes, k)
+	return r
+}
+
+func (m *Memory) keepResume(since time.Time, r *resumePoint) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resumes[resumeKey(since)] = r
+}
+
+// resumeKey names the window a walk covered. A week's walk and the root's
+// cover different pages, so one cannot resume the other.
+func resumeKey(since time.Time) string { return since.UTC().Format(time.RFC3339Nano) }
+
+// rewind is the page a failed walk restarts at: one before the failure, never
+// before the first.
+func rewind(page int) int {
+	if page <= 1 {
+		return 1
+	}
+	return page - 1
 }
 
 // absorb records a page, with GitLab's record replacing the remembered one,

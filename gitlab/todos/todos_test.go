@@ -87,12 +87,20 @@ type fakeSource struct {
 	ascending     bool
 	calls         []string
 	err           error
+	// failOn is one page — "pending/3" — that fails once, the way a lid
+	// closing mid-walk does.
+	failOn string
 }
 
 func (f *fakeSource) Page(_ context.Context, state string, page int) ([]Todo, bool, error) {
-	f.calls = append(f.calls, state+"/"+itoa(page))
+	key := state + "/" + itoa(page)
+	f.calls = append(f.calls, key)
 	if f.err != nil {
 		return nil, false, f.err
+	}
+	if f.failOn == key {
+		f.failOn = ""
+		return nil, false, errors.New("connection reset")
 	}
 	src := f.pending
 	if state == StateDone {
@@ -359,5 +367,150 @@ func TestSyncFullAfterTargetedWalksDoneToTheEnd(t *testing.T) {
 	_ = m.Sync(context.Background(), src, time.Time{})
 	if got := strings.Join(src.calls, " "); got != "pending/1 done/1" {
 		t.Errorf("resync calls = %s", got)
+	}
+}
+
+// A walk that dies mid-list keeps what it absorbed and starts the next one
+// ONE PAGE BACK, not at the beginning: a lid closing costs a page, not the
+// dozens already paid for. The overlap re-reads the page the list may have
+// shifted items onto while the walk was down.
+func TestAFailedPendingWalkResumesOnePageBack(t *testing.T) {
+	src := &fakeSource{per: 2, failOn: "pending/3", pending: []Todo{
+		mk(1, "2026-08-10T10:00:00Z", StatePending), mk(2, "2026-08-11T10:00:00Z", StatePending),
+		mk(3, "2026-08-12T10:00:00Z", StatePending), mk(4, "2026-08-13T10:00:00Z", StatePending),
+		mk(5, "2026-08-14T10:00:00Z", StatePending), mk(6, "2026-08-15T10:00:00Z", StatePending),
+	}}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
+		t.Fatal("expected the page failure to fail the walk")
+	}
+	if got := strings.Join(src.calls, " "); got != "pending/1 pending/2 pending/3" {
+		t.Fatalf("failed walk = %s", got)
+	}
+	if n := len(m.All()); n != 4 {
+		t.Errorf("the failed walk kept %d todos, want the 4 it absorbed", n)
+	}
+	src.calls = nil
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(src.calls, " "); got != "pending/2 pending/3 done/1" {
+		t.Errorf("resumed walk = %s, want it to restart at pending/2", got)
+	}
+	if n := len(m.All()); n != 6 {
+		t.Errorf("after the resumed walk remembered %d, want 6", n)
+	}
+	// The mark is spent: the walk after a successful one starts over.
+	src.calls = nil
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(src.calls, " "); got != "pending/1 pending/2 pending/3 done/1" {
+		t.Errorf("the walk after a success = %s, want a fresh start", got)
+	}
+}
+
+// A resumed pending walk must not judge absence. It never saw the pages the
+// failed attempt covered, and the list may have shifted items across the seam
+// in between — deriving done from that would mark live todos done, which is
+// the one thing the walk may never get wrong. The next walk starts at page one
+// and judges then.
+func TestAResumedPendingWalkDoesNotJudgeAbsence(t *testing.T) {
+	all := []Todo{
+		mk(5, "2026-08-15T10:00:00Z", StatePending), mk(4, "2026-08-14T10:00:00Z", StatePending),
+		mk(3, "2026-08-13T10:00:00Z", StatePending), mk(2, "2026-08-12T10:00:00Z", StatePending),
+		mk(1, "2026-08-11T10:00:00Z", StatePending),
+	}
+	src := &fakeSource{per: 1, pending: all}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	// The walk dies on page 4, so the next starts at page 3 — and by then
+	// todo 5, which lives on page 1, has left GitLab's pending list.
+	src.failOn = "pending/4"
+	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
+		t.Fatal("expected the page failure")
+	}
+	src.pending = all[1:]
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if five, _ := m.Get(5); five.Done() {
+		t.Error("the resumed walk judged a todo it never walked past")
+	}
+	// The next walk starts at page one, sees the whole pending list, and
+	// only then flips it.
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if five, _ := m.Get(5); !five.Done() {
+		t.Error("the fresh walk after it must judge absence")
+	}
+	for _, id := range []int64{1, 2, 3, 4} {
+		if got, _ := m.Get(id); got.Done() {
+			t.Errorf("todo %d, still pending in GitLab, was flipped", id)
+		}
+	}
+}
+
+// A walk that fails in the DONE list resumes there: the pending half already
+// finished, and judged absence, in the attempt that failed. Walking it again
+// would re-page GitLab for what is already known.
+func TestAFailedDoneWalkResumesWithoutRepeatingPending(t *testing.T) {
+	src := &fakeSource{per: 2, failOn: "done/3",
+		pending: []Todo{mk(9, "2026-08-20T10:00:00Z", StatePending)},
+		done: []Todo{
+			mk(1, "2026-08-10T10:00:00Z", StateDone), mk(2, "2026-08-11T10:00:00Z", StateDone),
+			mk(3, "2026-08-12T10:00:00Z", StateDone), mk(4, "2026-08-13T10:00:00Z", StateDone),
+			mk(5, "2026-08-14T10:00:00Z", StateDone), mk(6, "2026-08-15T10:00:00Z", StateDone),
+		},
+	}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
+		t.Fatal("expected the page failure")
+	}
+	if m.Walked() {
+		t.Error("a walk that never reached the end of the done list must not claim it did")
+	}
+	src.calls = nil
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(src.calls, " "); got != "done/2 done/3" {
+		t.Errorf("resumed walk = %s, want the done list from page 2 and no pending pages", got)
+	}
+	if !m.Walked() || len(m.All()) != 7 {
+		t.Errorf("after the resume: walked=%v remembered=%d, want true and 7", m.Walked(), len(m.All()))
+	}
+}
+
+// One window's failure does not send another window's walk to the wrong page:
+// a week's pages and the root's are different lists.
+func TestAResumeBelongsToItsWindow(t *testing.T) {
+	week := at("2026-08-17T00:00:00Z")
+	src := &fakeSource{per: 2, failOn: "pending/3", pending: []Todo{
+		mk(1, "2026-08-17T10:00:00Z", StatePending), mk(2, "2026-08-18T10:00:00Z", StatePending),
+		mk(3, "2026-08-19T10:00:00Z", StatePending), mk(4, "2026-08-20T10:00:00Z", StatePending),
+		mk(5, "2026-08-21T10:00:00Z", StatePending), mk(6, "2026-08-22T10:00:00Z", StatePending),
+	}}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
+		t.Fatal("expected the page failure")
+	}
+	src.calls = nil
+	if err := m.Sync(context.Background(), src, week); err != nil {
+		t.Fatal(err)
+	}
+	if got := src.calls[0]; got != "pending/1" {
+		t.Errorf("the week's walk started at %s; the root's mark is not its", got)
+	}
+	// The root's mark is untouched and still spends on the root's next walk.
+	src.calls = nil
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := src.calls[0]; got != "pending/2" {
+		t.Errorf("the root's walk started at %s, want pending/2", got)
 	}
 }
