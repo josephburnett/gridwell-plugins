@@ -243,3 +243,72 @@ func TestConcurrentListsShareOneWalk(t *testing.T) {
 		t.Errorf("GitLab saw %d page calls, want 2 (one pending + one done page: one shared walk)", n)
 	}
 }
+
+// paged is a source whose pending list is two pages, the second parked
+// behind a gate — a slow GitLab mid-walk. Calls are counted at entry.
+type paged struct {
+	gate  chan struct{}
+	calls atomic.Int32
+}
+
+func (s *paged) Page(ctx context.Context, state string, page int) ([]todos.Todo, bool, error) {
+	s.calls.Add(1)
+	if state == todos.StatePending {
+		switch page {
+		case 1:
+			return []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}, true, nil
+		case 2:
+			select {
+			case <-s.gate:
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			}
+			return []todos.Todo{mk(2, "2026-08-11T10:00:00Z", "pending")}, false, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// TestListStreamsWhileTheWalkRuns: a cold walk over a real history runs
+// minutes, and a List that waits for all of it shows the user nothing the
+// whole time. The walk detaches from its caller and List answers what memory
+// holds after FirstAnswer — GitLab pages newest-first, so the first answer is
+// the most recent weeks, and the node's refresh paints the rest in as pages
+// land. One walk serves it all: no restarts, no per-reader paging.
+func TestListStreamsWhileTheWalkRuns(t *testing.T) {
+	src := &paged{gate: make(chan struct{})}
+	p := New(src, Options{FirstAnswer: 20 * time.Millisecond})
+	ctx := context.Background()
+
+	// The walk is parked on pending page 2; the first answer is page 1's
+	// newest todo, already a visible week.
+	first, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Entries) != 1 || first.Entries[0].Key != "week:2026-08-17" {
+		t.Fatalf("first answer = %v, want the newest week so far", first.Entries)
+	}
+
+	// The walk finishes behind; a later read has the full history, and the
+	// source was paged exactly once per page — the parked walk kept going,
+	// never restarted.
+	close(src.gate)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		root, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(root.Entries) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the walk never completed behind the first answer: %v", root.Entries)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := src.calls.Load(); n != 3 {
+		t.Fatalf("source paged %d times, want 3 (pending 1, pending 2, done 1 — one walk)", n)
+	}
+}

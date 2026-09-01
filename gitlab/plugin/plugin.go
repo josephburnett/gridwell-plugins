@@ -35,13 +35,21 @@ const displayName = "gitlab todos"
 // rather than cost a round of API pages each time.
 const DefaultRefresh = 30 * time.Second
 
+// DefaultFirstAnswer bounds how long a List waits on a walk in flight before
+// answering what memory holds so far. GitLab pages newest-first, so the first
+// answer is the most recent weeks; the walk streams on behind, and the node's
+// refresh paints the rest in as pages land. A real cold walk runs minutes —
+// waiting for all of it showed the user "loading" the whole time.
+const DefaultFirstAnswer = time.Second
+
 // Plugin implements pluginv1.PluginServer.
 type Plugin struct {
 	pluginv1.UnimplementedPluginServer
-	src     todos.Source
-	mem     *todos.Memory
-	refresh time.Duration
-	now     func() time.Time
+	src         todos.Source
+	mem         *todos.Memory
+	refresh     time.Duration
+	firstAnswer time.Duration
+	now         func() time.Time
 
 	mu       sync.Mutex
 	syncedAt map[string]time.Time // context → last successful walk
@@ -60,17 +68,21 @@ type flight struct {
 
 // Options tunes a plugin. Zero values take the defaults.
 type Options struct {
-	Refresh time.Duration
-	Now     func() time.Time
+	Refresh     time.Duration
+	FirstAnswer time.Duration
+	Now         func() time.Time
 }
 
 // New builds a plugin over src. Whether there is a source is decided before
 // this point: FromConfig refuses a missing token, and both doors stop the
 // launch with its reason.
 func New(src todos.Source, o Options) *Plugin {
-	p := &Plugin{src: src, mem: todos.NewMemory(), refresh: o.Refresh, now: o.Now, syncedAt: map[string]time.Time{}, flights: map[string]*flight{}}
+	p := &Plugin{src: src, mem: todos.NewMemory(), refresh: o.Refresh, firstAnswer: o.FirstAnswer, now: o.Now, syncedAt: map[string]time.Time{}, flights: map[string]*flight{}}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
+	}
+	if p.firstAnswer <= 0 {
+		p.firstAnswer = DefaultFirstAnswer
 	}
 	if p.now == nil {
 		p.now = time.Now
@@ -99,37 +111,53 @@ func (p *Plugin) freshLocked(ctxKey string) bool {
 	return false
 }
 
-// sync walks GitLab for ctxKey unless it is fresh. since is zero for the root,
-// meaning everything, and the Monday for a week. A walk already in flight for
-// the context, or for the root, which covers every week, is shared: this call
-// waits for its verdict.
+// sync makes ctxKey answerable: fresh memory as-is, else a walk. since is
+// zero for the root, meaning everything, and the Monday for a week. A walk
+// already in flight for the context, or for the root, which covers every
+// week, is shared — one walk per burst of readers — and no walk belongs to
+// its starter: it runs detached, so no reader's patience or hangup can kill
+// or restart it. The caller waits at most firstAnswer, then answers what
+// memory holds so far: pages land newest-first, so a partial answer is the
+// most recent weeks, and the node's refresh paints in the rest.
 func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error {
 	p.mu.Lock()
 	if p.freshLocked(ctxKey) {
 		p.mu.Unlock()
 		return nil
 	}
+	var f *flight
 	for _, k := range []string{ctxKey, todos.RootContext} {
-		if f, ok := p.flights[k]; ok {
-			p.mu.Unlock()
-			log.Printf("gitlab plugin: sync %q waiting on the %q walk in flight", ctxKey, k)
-			select {
-			case <-f.done:
-				log.Printf("gitlab plugin: sync %q done waiting on %q: err=%v", ctxKey, k, f.err)
-				return f.err
-			case <-ctx.Done():
-				log.Printf("gitlab plugin: sync %q abandoned waiting on %q: %v", ctxKey, k, ctx.Err())
-				return ctx.Err()
-			}
+		if ex, ok := p.flights[k]; ok {
+			f = ex
+			break
 		}
 	}
-	f := &flight{done: make(chan struct{})}
-	p.flights[ctxKey] = f
+	if f == nil {
+		f = &flight{done: make(chan struct{})}
+		p.flights[ctxKey] = f
+		go p.walk(ctxKey, since, f)
+	}
 	p.mu.Unlock()
 
+	select {
+	case <-f.done:
+		return f.err
+	case <-time.After(p.firstAnswer):
+		log.Printf("gitlab plugin: %q answering with memory so far; the walk streams on", ctxKey)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// walk is one detached walk: it owns its flight and outlives every reader.
+// Its context is the plugin's lifetime — each page request is bounded by the
+// API client's own timeout, so a dead source ends the walk with its error
+// rather than hanging it.
+func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
 	log.Printf("gitlab plugin: walk %q starting (since=%s)", ctxKey, since.Format("2006-01-02"))
 	start := time.Now()
-	err := p.mem.Sync(ctx, p.src, since)
+	err := p.mem.Sync(context.Background(), p.src, since)
 	log.Printf("gitlab plugin: walk %q finished in %s: err=%v", ctxKey, time.Since(start).Round(time.Millisecond), err)
 	p.mu.Lock()
 	if err == nil {
@@ -139,7 +167,6 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 	p.mu.Unlock()
 	f.err = err
 	close(f.done)
-	return err
 }
 
 // List answers the root, listing weeks, or one week, listing todos. A walk
