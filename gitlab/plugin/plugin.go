@@ -166,6 +166,28 @@ func (p *Plugin) saveCache(walkedAt time.Time) {
 	}
 }
 
+// Run keeps the memory warm until ctx is done: one goroutine walking the root
+// context every refresh interval, so the walk has happened before a read asks
+// rather than because one did. It shares the flights and the freshness window
+// with the reads, so a tick that lands on a memory a read has just refreshed
+// costs GitLab nothing. FromConfig starts it; a walk that fails is reported
+// and the next tick tries again, one page back.
+func (p *Plugin) Run(ctx context.Context) {
+	t := time.NewTicker(p.refresh)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			// No verdict to read: the walk logs its own start and finish, and
+			// sync answers the first-answer bound rather than the walk's end.
+			// The refresher's whole job is to make sure a walk happens.
+			_ = p.sync(ctx, todos.RootContext, time.Time{})
+		}
+	}
+}
+
 func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,

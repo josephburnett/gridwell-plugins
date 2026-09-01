@@ -324,6 +324,52 @@ func TestAnUnusableCacheIsReportedAndTheWalkStillAnswers(t *testing.T) {
 	}
 }
 
+// The refresher walks on its own, so a memory is warm because the interval
+// came round, not because a read paid for it — and the cache file is warm
+// with it, so the next restart answers from disk.
+func TestRunWalksOnTheIntervalAndWritesTheCache(t *testing.T) {
+	dir := t.TempDir()
+	src := &gated{gate: make(chan struct{})}
+	close(src.gate) // never blocks: this walk is the refresher's own
+	p := New(src, Options{StateDir: dir, Refresh: 2 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	go p.Run(ctx)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for src.calls.Load() == 0 {
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("the refresher never walked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, todos.CacheFile)); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("the refresher walked but wrote no cache")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Cancelling stops it: the walks end with the process's context.
+	cancel()
+	deadline = time.Now().Add(5 * time.Second)
+	var stopped int32
+	for time.Now().Before(deadline) {
+		n := src.calls.Load()
+		time.Sleep(20 * time.Millisecond)
+		if src.calls.Load() == n {
+			stopped = n
+			break
+		}
+	}
+	if stopped == 0 {
+		t.Error("the refresher kept walking after its context was done")
+	}
+}
+
 func TestUnknownContextIsAnArgumentError(t *testing.T) {
 	p := New(&oneShot{}, Options{})
 	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "bogus"}); status.Code(err) != codes.InvalidArgument {

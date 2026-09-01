@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,12 +15,12 @@ import (
 // DefaultURL is the GitLab instance when config names none.
 const DefaultURL = "https://gitlab.com"
 
-// FromConfig builds the production plugin from the shared config vocabulary.
-// It is the one owner of the config-to-plugin derivation, so the subprocess
-// main and a bundled binary compose exactly the same plugin. A missing or
-// unreadable token is a refusal: the error is the verdict, and both doors turn
-// it into a launch that stops with the reason instead of a plugin serving an
-// empty grid.
+// FromConfig builds the production plugin from the shared config vocabulary
+// and starts its refresher. It is the one owner of the config-to-plugin
+// derivation, so the subprocess main and a bundled binary compose exactly the
+// same plugin. A missing or unreadable token is a refusal: the error is the
+// verdict, and both doors turn it into a launch that stops with the reason
+// instead of a plugin serving an empty grid.
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	base := strings.TrimSpace(cfg["url"])
 	if base == "" {
@@ -49,5 +50,9 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	if token == "" {
 		return nil, fmt.Errorf("gitlab plugin: token_file %s is empty", tokenFile)
 	}
-	return New(gitlabapi.New(base, token, nil), opts), nil
+	p := New(gitlabapi.New(base, token, nil), opts)
+	// The refresher lives as long as the process does: a plugin subprocess is
+	// stopped by the node killing it, and there is nothing else to unwind.
+	go p.Run(context.Background())
+	return p, nil
 }
