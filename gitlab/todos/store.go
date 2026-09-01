@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // CacheFile is the plugin's cache file, inside the private directory the node
@@ -19,15 +20,18 @@ const CacheFile = "todos.json"
 // costs one walk.
 const snapshotVersion = 1
 
-// Snapshot is everything a Memory knows: every todo it has seen, with the
-// derived state each carries, and whether some walk has reached the end of
-// GitLab's done list. Those are the two facts a restart needs — the records
-// to answer listings from, and the high-water mark that lets the next done
-// walk stop at the first page carrying nothing unknown.
+// Snapshot is what the cache file holds. Memory owns two of its facts: every
+// todo it has seen, with the derived state each carries, and whether some walk
+// has reached the end of GitLab's done list — the records to answer listings
+// from, and the high-water mark that lets the next done walk stop at the first
+// page carrying nothing unknown. WalkedAt is the plugin's own fact, when its
+// last root walk landed, so a restart inside the refresh window answers from
+// the file without walking at all; Memory neither sets nor reads it.
 type Snapshot struct {
-	Version      int    `json:"version"`
-	DoneComplete bool   `json:"doneComplete"`
-	Todos        []Todo `json:"todos"`
+	Version      int       `json:"version"`
+	WalkedAt     time.Time `json:"walkedAt,omitempty"`
+	DoneComplete bool      `json:"doneComplete"`
+	Todos        []Todo    `json:"todos"`
 }
 
 // Snapshot copies out everything the memory holds, oldest first, so two

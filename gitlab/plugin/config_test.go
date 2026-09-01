@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/josephburnett/gridwell-plugins/gitlab/todos"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
@@ -37,6 +38,19 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 	p := impl.(*Plugin)
 	if p.src == nil || p.refresh != 5*time.Minute {
 		t.Errorf("plugin = src %v refresh %v", p.src, p.refresh)
+	}
+	// state_dir is the node's key, beside uuid and kind. A node that hands
+	// none is no error: the plugin then keeps its memory in process.
+	if p.cache != "" {
+		t.Errorf("cache path = %q with no state_dir in the config", p.cache)
+	}
+	dir := t.TempDir()
+	impl, err = FromConfig(map[string]string{"token_file": writeTemp(t, "tok"), "state_dir": dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := impl.(*Plugin).cache, filepath.Join(dir, todos.CacheFile); got != want {
+		t.Errorf("cache path = %q, want %q", got, want)
 	}
 	// The user-facing name is server.yaml's `name` (the registry label);
 	// the plugin's own DisplayName is only the fallback.

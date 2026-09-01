@@ -3,14 +3,19 @@
 // "week:<monday>", lists the todos created that week as markdown text tiles.
 // Keys are GitLab's todo ids, stable forever. Listings are non-authoritative
 // and Probe never answers GONE: a todo never disappears from the grid, it
-// changes state when refreshed, and the node's read-through cache remembers it
-// across plugin restarts, since the plugin itself is stateless by contract.
+// changes state when refreshed, and both the node's read-through cache and
+// this plugin's own cache file remember it across restarts. The plugin holds
+// no node fact — no id, no layout — only its memory of GitLab, in the private
+// directory the node hands it as `state_dir`.
 package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +55,14 @@ type Plugin struct {
 	refresh     time.Duration
 	firstAnswer time.Duration
 	now         func() time.Time
+	// cache is the memory's file in the state directory, "" when the node
+	// handed no state_dir — then the plugin runs as it always did, walking
+	// GitLab from cold at every start.
+	cache string
+	// logf is the plugin's one log door: the walk's narration, and what must
+	// not be swallowed and must not fail a read — a cache the plugin could
+	// not read or write, a walk that failed.
+	logf func(format string, args ...any)
 
 	mu       sync.Mutex
 	syncedAt map[string]time.Time // context → last successful walk
@@ -71,13 +84,33 @@ type Options struct {
 	Refresh     time.Duration
 	FirstAnswer time.Duration
 	Now         func() time.Time
+	// StateDir is the private directory the node hands the plugin. Empty
+	// means no cache: the plugin keeps everything in memory for its process
+	// lifetime, as it did before the node handed one out.
+	StateDir string
+	// Logf takes every line the plugin writes: the walk's narration, and the
+	// failures that must not be swallowed and must not fail a read. It
+	// defaults to the standard logger, which the node captures from the
+	// subprocess's stderr.
+	Logf func(format string, args ...any)
 }
 
 // New builds a plugin over src. Whether there is a source is decided before
 // this point: FromConfig refuses a missing token, and both doors stop the
-// launch with its reason.
+// launch with its reason. A state directory holding a cache file is loaded
+// here, before the plugin serves its first request, so the first listing is
+// answered from what the last process walked.
 func New(src todos.Source, o Options) *Plugin {
-	p := &Plugin{src: src, mem: todos.NewMemory(), refresh: o.Refresh, firstAnswer: o.FirstAnswer, now: o.Now, syncedAt: map[string]time.Time{}, flights: map[string]*flight{}}
+	p := &Plugin{
+		src:         src,
+		mem:         todos.NewMemory(),
+		refresh:     o.Refresh,
+		firstAnswer: o.FirstAnswer,
+		now:         o.Now,
+		logf:        o.Logf,
+		syncedAt:    map[string]time.Time{},
+		flights:     map[string]*flight{},
+	}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
 	}
@@ -87,7 +120,50 @@ func New(src todos.Source, o Options) *Plugin {
 	if p.now == nil {
 		p.now = time.Now
 	}
+	if p.logf == nil {
+		p.logf = log.Printf
+	}
+	if dir := strings.TrimSpace(o.StateDir); dir != "" {
+		p.cache = filepath.Join(dir, todos.CacheFile)
+		p.loadCache()
+	}
 	return p
+}
+
+// loadCache folds the last process's walk into memory, its landing time
+// included: a walk is fresh for the refresh window whichever process ran it,
+// so a restart inside that window answers every listing from the file without
+// touching GitLab. A missing file is the first boot, which is not news;
+// anything else is reported and the plugin starts cold, because a cache is
+// disposable and a walk rebuilds it, but a cache that cannot be read must not
+// vanish in silence.
+func (p *Plugin) loadCache() {
+	snap, err := todos.LoadCache(p.cache)
+	switch {
+	case err == nil:
+		p.mem.Restore(snap)
+		if !snap.WalkedAt.IsZero() {
+			p.syncedAt[todos.RootContext] = snap.WalkedAt
+		}
+	case errors.Is(err, fs.ErrNotExist):
+	default:
+		p.logf("gitlab plugin: cache: %v (starting cold)", err)
+	}
+}
+
+// saveCache writes memory back after a successful walk, stamped with when the
+// last root walk landed. A failure is reported and nothing else: the walk
+// succeeded, the answer is good, and only the next restart pays for the lost
+// write.
+func (p *Plugin) saveCache(walkedAt time.Time) {
+	if p.cache == "" {
+		return
+	}
+	snap := p.mem.Snapshot()
+	snap.WalkedAt = walkedAt
+	if err := todos.SaveCache(p.cache, snap); err != nil {
+		p.logf("gitlab plugin: cache: %v", err)
+	}
 }
 
 func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
@@ -99,13 +175,17 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 }
 
 // freshLocked reports whether ctxKey was walked within the refresh window. A
-// root walk covers every week, so a week is fresh under either. The caller
-// holds p.mu.
+// root walk covers every week, so a week is fresh under either. A walk stamped
+// in the FUTURE is not fresh: the root stamp can come from the cache file, and
+// a clock that has since stepped back would otherwise freeze the plugin on a
+// stale memory. The caller holds p.mu.
 func (p *Plugin) freshLocked(ctxKey string) bool {
 	now := p.now()
 	for _, k := range []string{ctxKey, todos.RootContext} {
-		if t, ok := p.syncedAt[k]; ok && now.Sub(t) < p.refresh {
-			return true
+		if t, ok := p.syncedAt[k]; ok {
+			if d := now.Sub(t); d >= 0 && d < p.refresh {
+				return true
+			}
 		}
 	}
 	return false
@@ -143,7 +223,7 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 	case <-f.done:
 		return f.err
 	case <-time.After(p.firstAnswer):
-		log.Printf("gitlab plugin: %q answering with memory so far; the walk streams on", ctxKey)
+		p.logf("gitlab plugin: %q answering with memory so far; the walk streams on", ctxKey)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -155,16 +235,24 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 // API client's own timeout, so a dead source ends the walk with its error
 // rather than hanging it.
 func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
-	log.Printf("gitlab plugin: walk %q starting (since=%s)", ctxKey, since.Format("2006-01-02"))
+	p.logf("gitlab plugin: walk %q starting (since=%s)", ctxKey, since.Format("2006-01-02"))
 	start := time.Now()
 	err := p.mem.Sync(context.Background(), p.src, since)
-	log.Printf("gitlab plugin: walk %q finished in %s: err=%v", ctxKey, time.Since(start).Round(time.Millisecond), err)
+	p.logf("gitlab plugin: walk %q finished in %s: err=%v", ctxKey, time.Since(start).Round(time.Millisecond), err)
 	p.mu.Lock()
 	if err == nil {
 		p.syncedAt[ctxKey] = p.now()
 	}
+	rootWalk := p.syncedAt[todos.RootContext]
 	delete(p.flights, ctxKey)
 	p.mu.Unlock()
+	// The cache lands before the flight closes: a listing that waited for the
+	// walk is one a restart can repeat, and a listing answered early on the
+	// firstAnswer bound becomes repeatable as soon as the walk behind it
+	// lands.
+	if err == nil {
+		p.saveCache(rootWalk)
+	}
 	f.err = err
 	close(f.done)
 }

@@ -2,6 +2,9 @@ package plugin
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -181,6 +184,143 @@ func TestReadContentAndProbe(t *testing.T) {
 	res, _ := p.Search(ctx, &pluginv1.SearchRequest{Query: "REVIEW"})
 	if len(res.Results) != 1 || res.Results[0].Entry.Key != "todo:1" || strings.Join(res.Results[0].ContextPath, "/") != "todos/week:2026-08-17" {
 		t.Errorf("search = %v", res.Results)
+	}
+}
+
+// A restart over a kept state_dir answers the first listing from the cache
+// file, with no walk at all: the node lists a plugin's root the moment a pane
+// opens it, and that must not wait on GitLab for what the last process
+// already knew.
+func TestRestartAnswersFromTheCacheFileWithoutWalking(t *testing.T) {
+	dir := t.TempDir()
+	src := &oneShot{
+		pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending"), mk(2, "2026-08-25T10:00:00Z", "pending")},
+		done:    []todos.Todo{mk(3, "2026-08-19T10:00:00Z", "done")},
+	}
+	first := New(src, Options{StateDir: dir})
+	ctx := context.Background()
+	if _, err := first.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, todos.CacheFile)); err != nil {
+		t.Fatalf("no cache file after a successful walk: %v", err)
+	}
+
+	// The restart: a new plugin over the same directory, and a GitLab that
+	// answers nothing, so every entry below can only come from the file.
+	cold := &oneShot{}
+	second := New(cold, Options{StateDir: dir})
+	root, err := second.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cold.calls != 0 {
+		t.Errorf("the restart walked GitLab %d times; the last walk is still inside the refresh window", cold.calls)
+	}
+	if len(root.Entries) != 2 || root.Entries[1].Label != "2026-08-17 · 1 open · 1 done" {
+		t.Fatalf("root after restart = %v", root.Entries)
+	}
+	wk, err := second.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wk.Entries) != 2 || wk.Entries[0].Key != "todo:1" {
+		t.Fatalf("week after restart = %v", wk.Entries)
+	}
+	// The restored high-water mark stands: an unknown todo reads as gone
+	// rather than Unavailable, because a walk DID once reach the end.
+	r := &reader{}
+	if err := second.ReadContent(&pluginv1.ReadContentRequest{Key: "todo:99"}, r); err != nil {
+		t.Fatalf("post-restart unknown todo = %v, want the gone body", err)
+	}
+	r = &reader{}
+	if err := second.ReadContent(&pluginv1.ReadContentRequest{Key: "todo:1"}, r); err != nil || !strings.Contains(string(r.chunks[0].Data), "mr x") {
+		t.Errorf("a cached todo's body = (%s, %v)", r.chunks[0].GetData(), err)
+	}
+}
+
+// The restored walk time is not a licence to stop walking: past the refresh
+// window, and for a stamp a stepped-back clock puts in the future, the restart
+// walks GitLab like any other read.
+func TestARestoredWalkTimeStillExpires(t *testing.T) {
+	dir := t.TempDir()
+	clock := at("2026-08-25T12:00:00Z")
+	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
+	first := New(src, Options{StateDir: dir, Now: func() time.Time { return clock }})
+	if _, err := first.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+	}{
+		{"past the window", clock.Add(DefaultRefresh + time.Second)},
+		{"a clock stepped back", clock.Add(-time.Hour)},
+	} {
+		next := &oneShot{pending: src.pending}
+		p := New(next, Options{StateDir: dir, Now: func() time.Time { return tc.now }})
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+			t.Fatal(err)
+		}
+		if next.calls == 0 {
+			t.Errorf("%s: the restart served a stale memory instead of walking", tc.name)
+		}
+	}
+}
+
+// Without a state_dir the plugin behaves exactly as it did: memory only, no
+// file, and an unknown todo before the first walk is still Unavailable.
+func TestNoStateDirWritesNothingAndStaysCold(t *testing.T) {
+	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{})
+	if p.cache != "" {
+		t.Errorf("cache path = %q with no state_dir", p.cache)
+	}
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatal(err)
+	}
+	cold := New(&oneShot{}, Options{StateDir: " "})
+	if cold.cache != "" {
+		t.Errorf("a blank state_dir became the path %q", cold.cache)
+	}
+	r := &reader{}
+	if err := cold.ReadContent(&pluginv1.ReadContentRequest{Key: "todo:1"}, r); status.Code(err) != codes.Unavailable {
+		t.Errorf("cold read = %v, want Unavailable", err)
+	}
+}
+
+// A cache that cannot be read or written is reported, never swallowed, and
+// never fails the read that provoked it.
+func TestAnUnusableCacheIsReportedAndTheWalkStillAnswers(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, todos.CacheFile), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	logf := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{StateDir: dir, Logf: logf})
+	if len(lines) != 1 || !strings.Contains(lines[0], "cache") {
+		t.Fatalf("a corrupt cache logged %v, want one report", lines)
+	}
+	root, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})
+	if err != nil || len(root.Entries) != 1 {
+		t.Fatalf("the walk after a corrupt cache = (%v, %v)", root.GetEntries(), err)
+	}
+
+	// A directory the plugin cannot write reports on every walk and still
+	// answers from GitLab.
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.Mkdir(blocked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(blocked, 0o700) })
+	lines = nil
+	q := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{StateDir: filepath.Join(blocked, "gitlab"), Logf: logf})
+	root, err = q.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})
+	if err != nil || len(root.Entries) != 1 {
+		t.Fatalf("the walk with an unwritable cache = (%v, %v)", root.GetEntries(), err)
+	}
+	if len(lines) == 0 {
+		t.Error("an unwritable cache was swallowed")
 	}
 }
 

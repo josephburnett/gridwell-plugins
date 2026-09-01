@@ -25,7 +25,11 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	if base == "" {
 		base = DefaultURL
 	}
-	var opts Options
+	// state_dir is the private directory the node mints for this plugin and
+	// hands over beside uuid and kind. The plugin caches its walk there. A
+	// node that hands none — an older one, or a hand-launched binary — is no
+	// error: the plugin then keeps its memory for its process lifetime.
+	opts := Options{StateDir: cfg["state_dir"]}
 	if r := strings.TrimSpace(cfg["refresh"]); r != "" {
 		d, err := time.ParseDuration(r)
 		if err != nil || d <= 0 {
