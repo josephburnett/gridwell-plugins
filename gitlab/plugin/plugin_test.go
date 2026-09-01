@@ -331,7 +331,7 @@ func TestRunWalksOnTheIntervalAndWritesTheCache(t *testing.T) {
 	dir := t.TempDir()
 	src := &gated{gate: make(chan struct{})}
 	close(src.gate) // never blocks: this walk is the refresher's own
-	p := New(src, Options{StateDir: dir, Refresh: 2 * time.Millisecond})
+	p := New(src, Options{StateDir: dir, Refresh: MinRefresherInterval})
 	ctx, cancel := context.WithCancel(context.Background())
 	go p.Run(ctx)
 
@@ -367,6 +367,29 @@ func TestRunWalksOnTheIntervalAndWritesTheCache(t *testing.T) {
 	}
 	if stopped == 0 {
 		t.Error("the refresher kept walking after its context was done")
+	}
+}
+
+// The warmer never spins. A refresh window shorter than a walk — a test's way
+// of saying "walk on every read" — would otherwise leave the refresher always
+// walking, hammering GitLab and answering every read from a walk that started
+// before the read arrived.
+func TestTheRefresherNeverRunsHotterThanItsFloor(t *testing.T) {
+	if got := New(&oneShot{}, Options{Refresh: time.Nanosecond}).refresherInterval(); got != MinRefresherInterval {
+		t.Errorf("a 1ns window refreshes every %v, want the floor %v", got, MinRefresherInterval)
+	}
+	if got := New(&oneShot{}, Options{Refresh: time.Hour}).refresherInterval(); got != time.Hour {
+		t.Errorf("a 1h window refreshes every %v", got)
+	}
+	// The floor is the refresher's alone: a read on a tiny window still walks.
+	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{Refresh: time.Nanosecond})
+	for i := 0; i < 2; i++ {
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := p.src.(retrying).src.(*oneShot).calls; n != 4 {
+		t.Errorf("two reads on a 1ns window made %d page calls, want 4 (both walked)", n)
 	}
 }
 

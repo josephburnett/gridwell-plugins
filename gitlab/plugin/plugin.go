@@ -166,14 +166,30 @@ func (p *Plugin) saveCache(walkedAt time.Time) {
 	}
 }
 
+// MinRefresherInterval is the fastest the background refresher runs, whatever
+// the refresh window says. The refresher is a warmer, not a poller: a window
+// shorter than a walk would leave it always walking, hammering GitLab and
+// answering every read from a walk that started before the read arrived.
+// Reads still walk on the configured window — a tiny one is how a test says
+// "walk on every read", and that keeps working.
+const MinRefresherInterval = time.Second
+
+// refresherInterval is how often the warmer walks: the refresh window, floored.
+func (p *Plugin) refresherInterval() time.Duration {
+	if p.refresh < MinRefresherInterval {
+		return MinRefresherInterval
+	}
+	return p.refresh
+}
+
 // Run keeps the memory warm until ctx is done: one goroutine walking the root
-// context every refresh interval, so the walk has happened before a read asks
-// rather than because one did. It shares the flights and the freshness window
-// with the reads, so a tick that lands on a memory a read has just refreshed
-// costs GitLab nothing. FromConfig starts it; a walk that fails is reported
-// and the next tick tries again, one page back.
+// context on the refresher's interval, so the walk has happened before a read
+// asks rather than because one did. It shares the flights and the freshness
+// window with the reads, so a tick that lands on a memory a read has just
+// refreshed costs GitLab nothing. FromConfig starts it; a walk that fails is
+// reported and the next tick tries again, one page back.
 func (p *Plugin) Run(ctx context.Context) {
-	t := time.NewTicker(p.refresh)
+	t := time.NewTicker(p.refresherInterval())
 	defer t.Stop()
 	for {
 		select {
