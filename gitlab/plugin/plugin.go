@@ -102,7 +102,7 @@ type Options struct {
 // answered from what the last process walked.
 func New(src todos.Source, o Options) *Plugin {
 	p := &Plugin{
-		src:         src,
+		src:         retrying{src: src, attempts: pageAttempts, backoff: pageBackoff},
 		mem:         todos.NewMemory(),
 		refresh:     o.Refresh,
 		firstAnswer: o.FirstAnswer,
@@ -231,9 +231,10 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 }
 
 // walk is one detached walk: it owns its flight and outlives every reader.
-// Its context is the plugin's lifetime — each page request is bounded by the
-// API client's own timeout, so a dead source ends the walk with its error
-// rather than hanging it.
+// Its context is the plugin's lifetime — each page REQUEST is bounded by the
+// API client's own timeout and each PAGE is retried in place a bounded number
+// of times, so a dead source ends the walk with its error rather than hanging
+// it.
 func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
 	p.logf("gitlab plugin: walk %q starting (since=%s)", ctxKey, since.Format("2006-01-02"))
 	start := time.Now()
