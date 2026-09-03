@@ -50,7 +50,7 @@ func Markdown(t *Todo) []byte {
 		head = r + " " + head
 	}
 	if t.Done() {
-		head = "✓ " + head
+		head = DoneMark + " " + head
 	}
 	fmt.Fprintf(&b, "# %s\n\n", head)
 	line := t.Action()

@@ -59,7 +59,7 @@ func TestLabelAndRef(t *testing.T) {
 		t.Errorf("label = %q", mr.Label())
 	}
 	mr.State = StateDone
-	if mr.Label() != "✓ !42 Fix it" {
+	if mr.Label() != DoneMark+" !42 Fix it" {
 		t.Errorf("done label = %q", mr.Label())
 	}
 	var commit Todo
@@ -290,7 +290,7 @@ func TestWeeksAndEntries(t *testing.T) {
 	if h := wk[2].PlacementHint; h.X != 6*TodoTileW || h.Y != 0 {
 		t.Errorf("Sunday hint = %+v", h)
 	}
-	if wk[0].ServesPage || wk[0].Kind != "text" || wk[1].Label != "✓ #2 t2" || wk[1].StatusDetail != StateDone {
+	if wk[0].ServesPage || wk[0].Kind != "text" || wk[1].Label != DoneMark+" #2 t2" || wk[1].StatusDetail != StateDone {
 		t.Errorf("entry facts = %v", wk[1])
 	}
 }
@@ -321,7 +321,7 @@ func TestMarkdownCarriesTheEssentials(t *testing.T) {
 		t.Errorf("label = %q", td.Label())
 	}
 	td.State = StateDone
-	if got := string(Markdown(&td)); !strings.HasPrefix(got, "# ✓ #9") || !strings.Contains(got, "· done") {
+	if got := string(Markdown(&td)); !strings.HasPrefix(got, "# "+DoneMark+" #9") || !strings.Contains(got, "· done") {
 		t.Errorf("done must show in the heading and the line:\n%s", got)
 	}
 	if !strings.Contains(string(GoneMarkdown("todo:<1>")), "todo:<1>") {

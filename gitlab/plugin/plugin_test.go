@@ -102,12 +102,12 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	// past it, the descent's targeted walk flips the label.
 	src.pending = src.pending[1:]
 	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
-	if strings.HasPrefix(wk.Entries[0].Label, "✓") {
+	if strings.HasPrefix(wk.Entries[0].Label, todos.DoneMark) {
 		t.Error("state changed inside the refresh window")
 	}
 	clock = clock.Add(DefaultRefresh + time.Second)
 	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
-	if src.calls != 4 || !strings.HasPrefix(wk.Entries[0].Label, "✓ !1 ") || wk.Entries[0].StatusDetail != todos.StateDone {
+	if src.calls != 4 || !strings.HasPrefix(wk.Entries[0].Label, todos.DoneMark+" !1 ") || wk.Entries[0].StatusDetail != todos.StateDone {
 		t.Errorf("after the window: calls=%d entry=%v", src.calls, wk.Entries[0])
 	}
 	// The todo did not go away.

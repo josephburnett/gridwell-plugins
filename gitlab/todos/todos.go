@@ -107,12 +107,17 @@ func (t *Todo) Action() string {
 	return strings.ReplaceAll(t.ActionName, "_", " ")
 }
 
+// DoneMark is the resolved todo's banner glyph: the filled green checkbox,
+// not a hairline check, because the mark must read at a distance — a week is
+// scanned zoomed out, and done-ness is the one fact worth seeing from there.
+const DoneMark = "✅"
+
 // Label is the tile's banner: a done mark, who it is from, the short
 // ref, and the title.
 func (t *Todo) Label() string {
 	var b strings.Builder
 	if t.Done() {
-		b.WriteString("✓ ")
+		b.WriteString(DoneMark + " ")
 	}
 	if name := strings.TrimSpace(t.Author.Name); name != "" {
 		b.WriteString(name)
