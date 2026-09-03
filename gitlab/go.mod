@@ -1,6 +1,6 @@
 module github.com/josephburnett/gridwell-plugins/gitlab
 
-go 1.26.5
+go 1.26.6
 
 require github.com/josephburnett/gridwell/api v0.2.0
 

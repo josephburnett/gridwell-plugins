@@ -3,7 +3,7 @@
 // (GOWORK=off) — the workspace is convenience, never the contract. It uses
 // only modules in this repo; the gridwell api arrives from the module proxy
 // like any other dependency.
-go 1.26.5
+go 1.26.6
 
 use (
 	./fs
