@@ -50,7 +50,11 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	if token == "" {
 		return nil, fmt.Errorf("gitlab plugin: token_file %s is empty", tokenFile)
 	}
-	p := New(gitlabapi.New(base, token, nil), opts)
+	api := gitlabapi.New(base, token, nil)
+	// The API client is both halves: the pager the walk reads, and the
+	// mark-as-done writer the trash gesture becomes.
+	opts.Marker = api
+	p := New(api, opts)
 	// The refresher lives as long as the process does: a plugin subprocess is
 	// stopped by the node killing it, and there is nothing else to unwind.
 	go p.Run(context.Background())

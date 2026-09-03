@@ -4,7 +4,9 @@
 // Keys are GitLab's todo ids, stable forever. Listings are non-authoritative
 // and Probe never answers GONE: a todo never disappears from the grid, it
 // changes state when refreshed, and both the node's read-through cache and
-// this plugin's own cache file remember it across restarts. The plugin holds
+// this plugin's own cache file remember it across restarts. The one write is
+// Delete, which here means mark-as-done: the trash gesture resolves the todo
+// at GitLab rather than removing anything. The plugin holds
 // no node fact — no id, no layout — only its memory of GitLab, in the private
 // directory the node hands it as `state_dir`.
 package plugin
@@ -47,10 +49,19 @@ const DefaultRefresh = 30 * time.Second
 // waiting for all of it showed the user "loading" the whole time.
 const DefaultFirstAnswer = time.Second
 
+// Marker is the write half of the source: marking one todo done at GitLab.
+// It is a separate interface from Source because the walk and the write have
+// different lives — everything reads, one gesture writes — and a test fakes
+// them separately. *gitlabapi.Client implements both.
+type Marker interface {
+	MarkDone(ctx context.Context, id int64) error
+}
+
 // Plugin implements pluginv1.PluginServer.
 type Plugin struct {
 	pluginv1.UnimplementedPluginServer
 	src         todos.Source
+	marker      Marker
 	mem         *todos.Memory
 	refresh     time.Duration
 	firstAnswer time.Duration
@@ -84,6 +95,9 @@ type Options struct {
 	Refresh     time.Duration
 	FirstAnswer time.Duration
 	Now         func() time.Time
+	// Marker is the mark-as-done writer. Nil means read-only: Delete answers
+	// Unimplemented and everything else works as before.
+	Marker Marker
 	// StateDir is the private directory the node hands the plugin. Empty
 	// means no cache: the plugin keeps everything in memory for its process
 	// lifetime, as it did before the node handed one out.
@@ -103,6 +117,7 @@ type Options struct {
 func New(src todos.Source, o Options) *Plugin {
 	p := &Plugin{
 		src:         retrying{src: src, attempts: pageAttempts, backoff: pageBackoff},
+		marker:      o.Marker,
 		mem:         todos.NewMemory(),
 		refresh:     o.Refresh,
 		firstAnswer: o.FirstAnswer,
@@ -347,6 +362,47 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 		return stream.Send(&pluginv1.ContentChunk{Data: todos.GoneMarkdown(req.Key), MediaType: "text/markdown"})
 	}
 	return stream.Send(&pluginv1.ContentChunk{Data: todos.Markdown(&t), MediaType: "text/markdown"})
+}
+
+// Delete is what the trash gesture means here: mark the todo done at GitLab.
+// The tile does not vanish — a todo never disappears from the grid, it changes
+// state — so the next listing shows it done and the week's counts move. The
+// flip lands in memory and the cache file only after GitLab accepted the
+// write, so a refused write changes nothing anywhere. A week well refuses:
+// one gesture must not resolve a whole week. An already-done todo succeeds
+// without a write — the gesture is idempotent, like fs's already-gone path.
+func (p *Plugin) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {
+	if _, isWeek := todos.ParseWeekKey(req.Key); isWeek {
+		return nil, status.Errorf(codes.FailedPrecondition, "gitlab plugin: a week cannot be marked done — mark its todos")
+	}
+	id, ok := todos.ParseKey(req.Key)
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "gitlab plugin: unknown key %q", req.Key)
+	}
+	if p.marker == nil {
+		return nil, status.Error(codes.Unimplemented, "gitlab plugin: no mark-done writer configured")
+	}
+	t, known := p.mem.Get(id)
+	if !known {
+		if !p.mem.Walked() {
+			return nil, status.Error(codes.Unavailable, "gitlab plugin: the first walk has not completed")
+		}
+		return nil, status.Errorf(codes.NotFound, "gitlab plugin: no todo %d", id)
+	}
+	if t.Done() {
+		return &pluginv1.DeleteResponse{}, nil
+	}
+	if err := p.marker.MarkDone(ctx, id); err != nil {
+		return nil, err
+	}
+	p.mem.MarkDone(id)
+	// The flip is worth a restart: save under the standing walk stamp, not a
+	// fresh one — marking done is not a walk and must not extend the window.
+	p.mu.Lock()
+	walked := p.syncedAt[todos.RootContext]
+	p.mu.Unlock()
+	p.saveCache(walked)
+	return &pluginv1.DeleteResponse{}, nil
 }
 
 // Probe never says GONE: a remembered todo is PRESENT, and one this process

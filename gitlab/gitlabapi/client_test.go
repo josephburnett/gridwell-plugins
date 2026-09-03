@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,5 +77,39 @@ func TestStalledResponseIsUnavailable(t *testing.T) {
 	_, _, err := c.Page(context.Background(), "pending", 1)
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("stalled page = %v, want Unavailable", err)
+	}
+}
+
+func TestMarkDoneSpeaksTheGitLabWire(t *testing.T) {
+	var got *http.Request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r
+		if r.Header.Get("PRIVATE-TOKEN") != "tok" {
+			w.WriteHeader(403)
+			return
+		}
+		w.WriteHeader(201)
+	}))
+	defer srv.Close()
+	if err := New(srv.URL, "tok", nil).MarkDone(context.Background(), 42); err != nil {
+		t.Fatal(err)
+	}
+	if got.Method != http.MethodPost || got.URL.Path != "/api/v4/todos/42/mark_as_done" {
+		t.Errorf("request = %s %s", got.Method, got.URL)
+	}
+	err := New(srv.URL, "wrong", nil).MarkDone(context.Background(), 42)
+	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "api scope") {
+		t.Errorf("403 → %v; want PermissionDenied naming the api scope, which reads get by without", err)
+	}
+}
+
+func TestMarkDoneMapsTheVerdicts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) }))
+	if err := New(srv.URL, "t", nil).MarkDone(context.Background(), 7); status.Code(err) != codes.NotFound {
+		t.Errorf("404 → %v, want NotFound", err)
+	}
+	srv.Close()
+	if err := New(srv.URL, "t", nil).MarkDone(context.Background(), 7); status.Code(err) != codes.Unavailable {
+		t.Errorf("refused connection → %v, want Unavailable", err)
 	}
 }

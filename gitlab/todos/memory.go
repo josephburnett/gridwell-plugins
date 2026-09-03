@@ -254,6 +254,22 @@ func (m *Memory) Walked() bool {
 	return m.doneComplete
 }
 
+// MarkDone records GitLab's acceptance of a mark-as-done: the remembered todo
+// flips to done. It is the write-side sibling of deriveDone's absence rule —
+// the only other place state changes without a walk saying so — and it is only
+// called after GitLab itself accepted the write, so the next walk's record
+// agrees with it. False when the todo is unknown.
+func (m *Memory) MarkDone(id int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.todos[id]
+	if !ok {
+		return false
+	}
+	t.State = StateDone
+	return true
+}
+
 // Get answers one remembered todo (a copy).
 func (m *Memory) Get(id int64) (Todo, bool) {
 	m.mu.Lock()

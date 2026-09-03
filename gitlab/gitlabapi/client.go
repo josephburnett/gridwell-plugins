@@ -85,6 +85,41 @@ func (c *Client) Page(ctx context.Context, state string, page int) ([]todos.Todo
 	return out, resp.Header.Get("X-Next-Page") != "", nil
 }
 
+// MarkDone marks one todo done: POST /api/v4/todos/:id/mark_as_done, the
+// plugin's only write, and the only call that needs the token's api scope —
+// the reads get by on read_api, so the permission verdict names the scope the
+// user must add. The other codes map like Page's: a network failure, a 5xx or
+// a 429 is Unavailable, and GitLab not knowing the id is NotFound.
+func (c *Client) MarkDone(ctx context.Context, id int64) error {
+	u := fmt.Sprintf("%s/api/v4/todos/%d/mark_as_done", c.base, id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "gitlab: %v", err)
+	}
+	req.Header.Set("PRIVATE-TOKEN", c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "gitlab: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "gitlab: read: %v", err)
+	}
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return nil
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return status.Errorf(codes.PermissionDenied, "gitlab: %s (marking done needs the token's api scope)", resp.Status)
+	case resp.StatusCode == http.StatusNotFound:
+		return status.Errorf(codes.NotFound, "gitlab: %s", resp.Status)
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+		return status.Errorf(codes.Unavailable, "gitlab: %s", resp.Status)
+	default:
+		return status.Errorf(codes.Internal, "gitlab: %s: %s", resp.Status, trim(body))
+	}
+}
+
 func trim(b []byte) string {
 	s := strings.TrimSpace(string(b))
 	if len(s) > 200 {
