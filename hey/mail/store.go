@@ -21,21 +21,23 @@ const CacheFile = "mail.json"
 const snapshotVersion = 1
 
 // Snapshot is what the cache file holds: every thread the memory has seen,
-// each collection's membership and whether it has been read to its end, and
-// when the last sweep landed. SweptAt is the plugin's own fact, so a restart
-// inside the refresh window answers from the file without running the CLI at
-// all; Memory neither sets nor reads it.
+// and each collection's membership.
 type Snapshot struct {
 	Version     int                     `json:"version"`
-	SweptAt     time.Time               `json:"sweptAt,omitempty"`
 	Threads     []Thread                `json:"threads"`
 	Collections map[string]CollectionIn `json:"collections"`
 }
 
-// CollectionIn is one collection's remembered membership.
+// CollectionIn is one collection's remembered membership: what it held, and
+// whether the walk that read it reached the end of the box. WalkedAt is the
+// PLUGIN's fact — when that walk landed, so a restart inside the refresh
+// window answers from the file without running the CLI at all. Memory neither
+// sets nor reads it; the plugin stamps it on the way out and takes it back on
+// the way in.
 type CollectionIn struct {
-	Complete bool    `json:"complete"`
-	TopicIDs []int64 `json:"topicIds"`
+	Complete bool      `json:"complete"`
+	WalkedAt time.Time `json:"walkedAt,omitempty"`
+	TopicIDs []int64   `json:"topicIds"`
 }
 
 // Snapshot copies out everything the memory holds, threads oldest first, so

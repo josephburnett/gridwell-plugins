@@ -11,6 +11,7 @@ build:
 	cd proc && CGO_ENABLED=0 go build -o ../gridwell-plugin-proc ./cmd/gridwell-plugin-proc
 	cd gitlab && CGO_ENABLED=0 go build -o ../gridwell-plugin-gitlab ./cmd/gridwell-plugin-gitlab
 	cd pages && CGO_ENABLED=0 go build -o ../gridwell-plugin-pages ./cmd/gridwell-plugin-pages
+	cd hey && CGO_ENABLED=0 go build -o ../gridwell-plugin-hey ./cmd/gridwell-plugin-hey
 
 # check is the per-commit gate: gofmt, then every module vetted and tested
 # ALONE (GOWORK=off), so no module can quietly lean on the workspace, and
@@ -25,4 +26,4 @@ check:
 	$(MAKE) build
 
 clean:
-	rm -f gridwell-plugin-fs gridwell-plugin-proc gridwell-plugin-gitlab gridwell-plugin-pages
+	rm -f gridwell-plugin-fs gridwell-plugin-proc gridwell-plugin-gitlab gridwell-plugin-pages gridwell-plugin-hey
