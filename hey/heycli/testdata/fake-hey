@@ -1,0 +1,73 @@
+#!/bin/sh
+# fake-hey is the CLI contract, executable: the shapes the hey plugin is
+# built against, answered without a HEY account. TestExecRunsTheRealCLI runs
+# THIS through the production Exec, so the argv, the environment, the exit
+# codes and the stdout/stderr split are all exercised for real.
+#
+# It answers exactly what hey 1.4.1 answers:
+#   box view <box> --json --all   the response envelope, data.postings
+#   thread read <id> --html       a bare HTML5 document, no envelope
+set -e
+
+# The plugin must never let the CLI prompt: a prompt with nothing to read it
+# would hang the sweep. Refuse to answer if it forgot.
+if [ "$HEY_NONINTERACTIVE" != "1" ]; then
+  echo '{"ok":false,"error":"interactive","code":"interactive"}'
+  exit 1
+fi
+
+# The real CLI warns on stderr when the host has no keyring. Always emit it,
+# so a parser that reads stderr as data fails here rather than in production.
+echo "warning: system keyring unavailable" >&2
+
+case "$1 $2" in
+  "box view")
+    case "$3" in
+      imbox)
+        cat <<'JSON'
+{"ok":true,"data":{"id":1,"kind":"imbox","name":"Imbox","postings":[
+ {"id":900,"topic_id":101,"kind":"topic","name":"Lunch plans","summary":"Are you free friday?","seen":false,"created_at":"2026-01-05T14:03:00Z","creator":{"name":"Alice","email_address":"alice@example.com"}},
+ {"id":901,"kind":"bundle","name":"News","summary":"three unseen","seen":false,"created_at":"2026-01-05T09:00:00Z","creator":{"name":"News","email_address":"news@example.com"}}
+]},"summary":"2 threads in Imbox"}
+JSON
+        ;;
+      laterbox)
+        echo '{"ok":true,"data":{"id":2,"kind":"laterbox","name":"Reply Later","postings":[],"next_page":"cursor-2"},"summary":"0 threads in Reply Later"}'
+        ;;
+      asidebox)
+        echo '{"ok":true,"data":{"id":3,"kind":"asidebox","name":"Set Aside","postings":[]},"summary":"0 threads in Set Aside"}'
+        ;;
+      trailbox)
+        echo '{"ok":false,"error":"Not logged in","code":"auth","hint":"Run: hey auth login"}'
+        exit 3
+        ;;
+      *)
+        echo '{"ok":false,"error":"no box of kind","code":"not_found"}'
+        exit 2
+        ;;
+    esac
+    ;;
+  "thread read")
+    if [ "$3" = "404" ]; then
+      echo '{"ok":false,"error":"Thread not found","code":"not_found"}'
+      exit 2
+    fi
+    cat <<HTML
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8">
+<title>Thread $3</title></head>
+<body>
+<article id="entry-1" data-entry-id="1" data-created-at="2026-01-05T14:03:00Z" data-body-state="hydrated">
+<header>Alice &middot; 2026-01-05</header>
+<p>Are you free friday?</p>
+</article>
+</body>
+</html>
+HTML
+    ;;
+  *)
+    echo '{"ok":false,"error":"unknown command","code":"usage"}'
+    exit 1
+    ;;
+esac
