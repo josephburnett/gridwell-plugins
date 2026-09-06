@@ -18,7 +18,7 @@ build:
 check:
 	@bad=$$(gofmt -l $$(git ls-files '*.go')); \
 	if [ -n "$$bad" ]; then echo "gofmt needed (run: gofmt -w <file>):"; echo "$$bad"; exit 1; fi
-	@for m in guest fs proc gitlab pages; do \
+	@for m in guest fs proc gitlab pages hey; do \
 		echo "== module $$m (standalone)"; \
 		(cd $$m && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...) || exit 1; \
 	done
