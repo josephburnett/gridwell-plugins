@@ -20,6 +20,7 @@
 package heycli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -226,17 +227,25 @@ func (c *Client) read(ctx context.Context, what string, args ...string) ([]byte,
 // answered "not right now" to "you are not signed in" would leave the user
 // staring at an empty grid with nothing said.
 func refusal(what string, out []byte, errText string, code int) error {
-	var env envelope
-	_ = json.Unmarshal(out, &env)
-	detail := strings.TrimSpace(env.Error)
-	if detail == "" {
-		detail = strings.TrimSpace(errText)
+	env, ok := readEnvelope(out)
+	if !ok {
+		// A refusal goes to STDERR, envelope and all — stdout stays empty.
+		env, ok = readEnvelope([]byte(errText))
+	}
+	var detail string
+	switch {
+	case ok && strings.TrimSpace(env.Error) != "":
+		detail = strings.TrimSpace(env.Error)
+		if hint := strings.TrimSpace(env.Hint); hint != "" {
+			detail += " (" + hint + ")"
+		}
+	default:
+		// No envelope: `--html` carries none, in success or in failure. What
+		// stderr says IS the reason, minus the lines that are not about it.
+		detail = reason(errText)
 	}
 	if detail == "" {
 		detail = fmt.Sprintf("exit %d", code)
-	}
-	if hint := strings.TrimSpace(env.Hint); hint != "" {
-		detail += " (" + hint + ")"
 	}
 	var c codes.Code
 	switch code {
@@ -250,4 +259,37 @@ func refusal(what string, out []byte, errText string, code int) error {
 		c = codes.InvalidArgument
 	}
 	return status.Errorf(c, "hey plugin: %s: %s", what, detail)
+}
+
+// readEnvelope finds the response envelope in one stream. It scans for the
+// first '{' rather than decoding from byte zero, because the envelope on
+// stderr arrives after whatever the CLI has already said there — the keyring
+// warning, most often.
+func readEnvelope(b []byte) (envelope, bool) {
+	i := bytes.IndexByte(b, '{')
+	if i < 0 {
+		return envelope{}, false
+	}
+	var env envelope
+	if err := json.Unmarshal(b[i:], &env); err != nil {
+		return envelope{}, false
+	}
+	return env, true
+}
+
+// reason is what stderr says, minus the CLI's warnings: a warning is a note
+// about the host, never the reason a command refused, and pasting the whole
+// transcript into the error buries the one line the user needs. "Error: " is
+// the CLI's own prefix for that line, and it says nothing a caller who is
+// already reporting an error needs repeated.
+func reason(errText string) string {
+	var keep []string
+	for _, line := range strings.Split(errText, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "warning:") {
+			continue
+		}
+		keep = append(keep, strings.TrimPrefix(line, "Error: "))
+	}
+	return strings.Join(keep, "; ")
 }

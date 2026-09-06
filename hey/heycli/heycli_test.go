@@ -111,7 +111,9 @@ func TestExitCodesMapToTheNodesVocabulary(t *testing.T) {
 		{8, codes.InvalidArgument},
 	}
 	for _, c := range cases {
-		f := &fake{code: c.code, out: `{"ok":false,"error":"Not logged in","code":"auth","hint":"Run: hey auth login"}`}
+		// The envelope rides stderr, where the CLI prints it.
+		f := &fake{code: c.code, errOut: "warning: system keyring unavailable\n" +
+			`{"ok":false,"error":"Not logged in","code":"auth","hint":"Run: hey auth login"}`}
 		_, _, err := New(f).Box(context.Background(), "imbox")
 		if got := status.Code(err); got != c.want {
 			t.Errorf("exit %d = %v, want %v", c.code, got, c.want)
@@ -122,12 +124,32 @@ func TestExitCodesMapToTheNodesVocabulary(t *testing.T) {
 	}
 }
 
-// A refusal with no envelope to read still has to say something: stderr is
-// the only text there is, and losing it leaves the user a bare exit number.
-func TestRefusalFallsBackToStderr(t *testing.T) {
-	f := &fake{code: 7, errOut: "hey: the server said no\n"}
+// A refusal with no envelope to read still has to say something — `--html`
+// carries none — and a bare exit number is not something. The CLI's warnings
+// are not the reason and must not bury it.
+func TestRefusalWithNoEnvelopeReadsStderr(t *testing.T) {
+	f := &fake{code: 7, errOut: "warning: system keyring unavailable\nError: the server said no\n"}
 	_, _, err := New(f).Box(context.Background(), "imbox")
-	if !strings.Contains(err.Error(), "the server said no") {
+	if got := err.Error(); !strings.HasSuffix(got, "the server said no") {
+		t.Fatalf("error = %v", got)
+	}
+}
+
+// Nothing to read at all: the exit code is still an answer.
+func TestASilentRefusalStillSaysSomething(t *testing.T) {
+	f := &fake{code: 7}
+	_, _, err := New(f).Box(context.Background(), "imbox")
+	if !strings.Contains(err.Error(), "exit 7") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// An envelope on stdout is read too: the CLI's own docs put it there, and a
+// release that moved it back must not lose the reason.
+func TestAnEnvelopeOnStdoutIsReadToo(t *testing.T) {
+	f := &fake{code: 3, out: `{"ok":false,"error":"Not logged in","hint":"Run: hey auth login"}`}
+	_, _, err := New(f).Box(context.Background(), "imbox")
+	if !strings.Contains(err.Error(), "Not logged in (Run: hey auth login)") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -204,10 +226,24 @@ func TestExecRunsTheRealCLI(t *testing.T) {
 		t.Fatalf("html = %q", html)
 	}
 
-	if _, _, err := c.Box(context.Background(), "trailbox"); status.Code(err) != codes.PermissionDenied {
+	// A refusal prints on STDERR, envelope and all, after the keyring
+	// warning — and --html prints no envelope at all. The reason is what
+	// reaches the user, not the transcript around it.
+	_, _, err = c.Box(context.Background(), "trailbox")
+	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("a logged-out box = %v, want PermissionDenied", err)
 	}
-	if _, err := c.ThreadHTML(context.Background(), 404); status.Code(err) != codes.NotFound {
+	if !strings.Contains(err.Error(), "Not logged in (Run: hey auth login)") {
+		t.Errorf("the envelope was not read: %v", err)
+	}
+	if strings.Contains(err.Error(), "keyring") || strings.Contains(err.Error(), "\"ok\"") {
+		t.Errorf("the whole stderr transcript rode the error: %v", err)
+	}
+	_, err = c.ThreadHTML(context.Background(), 404)
+	if status.Code(err) != codes.NotFound {
 		t.Errorf("a missing thread = %v, want NotFound", err)
+	}
+	if !strings.Contains(err.Error(), "Thread not found") || strings.Contains(err.Error(), "keyring") {
+		t.Errorf("an envelope-less refusal read as %v", err)
 	}
 }

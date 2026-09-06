@@ -7,17 +7,22 @@
 # It answers exactly what hey 1.4.1 answers:
 #   box view <box> --json --all   the response envelope, data.postings
 #   thread read <id> --html       a bare HTML5 document, no envelope
+#
+# A REFUSAL goes to stderr, not stdout, and stdout stays empty — verified
+# against hey 1.4.1. `--json` puts the error envelope there, after the
+# keyring warning; `--html` has no envelope at all and prints "Error: …".
 set -e
 
 # The plugin must never let the CLI prompt: a prompt with nothing to read it
 # would hang the sweep. Refuse to answer if it forgot.
 if [ "$HEY_NONINTERACTIVE" != "1" ]; then
-  echo '{"ok":false,"error":"interactive","code":"interactive"}'
+  echo "Error: interactive" >&2
   exit 1
 fi
 
 # The real CLI warns on stderr when the host has no keyring. Always emit it,
-# so a parser that reads stderr as data fails here rather than in production.
+# so a parser that reads stderr as data — or that takes the whole of it as
+# the reason — fails here rather than in production.
 echo "warning: system keyring unavailable" >&2
 
 case "$1 $2" in
@@ -38,18 +43,26 @@ JSON
         echo '{"ok":true,"data":{"id":3,"kind":"asidebox","name":"Set Aside","postings":[]},"summary":"0 threads in Set Aside"}'
         ;;
       trailbox)
-        echo '{"ok":false,"error":"Not logged in","code":"auth","hint":"Run: hey auth login"}'
+        cat >&2 <<'JSON'
+{
+  "ok": false,
+  "error": "Not logged in",
+  "code": "auth",
+  "hint": "Run: hey auth login"
+}
+JSON
         exit 3
         ;;
       *)
-        echo '{"ok":false,"error":"no box of kind","code":"not_found"}'
+        echo '{"ok":false,"error":"no box of kind","code":"not_found"}' >&2
         exit 2
         ;;
     esac
     ;;
   "thread read")
     if [ "$3" = "404" ]; then
-      echo '{"ok":false,"error":"Thread not found","code":"not_found"}'
+      # --html carries no envelope, in success or in failure.
+      echo "Error: Thread not found" >&2
       exit 2
     fi
     cat <<HTML
@@ -67,7 +80,7 @@ JSON
 HTML
     ;;
   *)
-    echo '{"ok":false,"error":"unknown command","code":"usage"}'
+    echo "Error: unknown command" >&2
     exit 1
     ;;
 esac
