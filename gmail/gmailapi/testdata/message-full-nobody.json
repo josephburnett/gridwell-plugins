@@ -1,0 +1,19 @@
+{
+  "id": "18c2a1b3f4d5e6f9",
+  "threadId": "18c2a1b3f4d5e6f9",
+  "labelIds": ["INBOX"],
+  "snippet": "",
+  "internalDate": "1767448980000",
+  "payload": {
+    "partId": "",
+    "mimeType": "multipart/mixed",
+    "filename": "",
+    "headers": [{"name": "Subject", "value": "no body"}],
+    "body": {"size": 0},
+    "parts": [
+      {"partId": "0", "mimeType": "image/png", "filename": "logo.png",
+       "headers": [{"name": "Content-ID", "value": "<logo>"}],
+       "body": {"attachmentId": "ANGjdJ_x", "size": 9182}}
+    ]
+  }
+}

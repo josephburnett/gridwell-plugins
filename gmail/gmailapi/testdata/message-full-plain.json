@@ -1,0 +1,17 @@
+{
+  "id": "18c2a1b3f4d5e6f8",
+  "threadId": "18c2a1b3f4d5e6f8",
+  "labelIds": ["INBOX"],
+  "snippet": "Your build failed",
+  "internalDate": "1767535380000",
+  "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+      {"name": "Subject", "value": "Build <failed>"},
+      {"name": "From", "value": "ci@example.com"}
+    ],
+    "body": {"size": 30, "data": "Qm9iIHNhaWQgPGI-bm88L2I-Cm5leHQgbGluZQ=="}
+  }
+}
