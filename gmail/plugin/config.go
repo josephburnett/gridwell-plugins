@@ -25,6 +25,12 @@ import (
 //	token        the token file `-auth` wrote (required)
 //	refresh      how often a collection is re-walked (default: 1m)
 //	max_messages how many of the newest messages a grid holds (default: 500)
+//	endpoint     the Gmail API base URL (default: Gmail's own)
+//
+// endpoint is the same ordinary knob gitlab's url is — the address of the
+// service this plugin reads. A node points it at a recorded Gmail to exercise
+// the plugin without an account; nothing else about the plugin changes, and
+// the credential is still required and still sent.
 //
 // Both files are the user's own, on the user's host, and neither belongs in
 // the plugin's state directory: that directory is disposable, and a deleted
@@ -87,7 +93,7 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 		// restart goes back to Google for a token it already had.
 		log.Printf("gmail plugin: token: %v", err)
 	})
-	src, err := gmailapi.New(ctx, ts)
+	src, err := gmailapi.New(ctx, ts, strings.TrimSpace(cfg["endpoint"]))
 	if err != nil {
 		return nil, err
 	}

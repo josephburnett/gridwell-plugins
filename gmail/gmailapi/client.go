@@ -61,18 +61,20 @@ var MetadataHeaders = []string{"Subject", "From", "Date"}
 // Client reads one Gmail account.
 type Client struct{ svc *gmail.Service }
 
-// New builds a client over a token source. Nothing here refreshes or persists
-// the token: the source does both, and it is the one owner of the token file.
-// The http client is built here rather than left to the API package's own,
-// because that one carries no timeout — see DefaultTimeout.
-func New(ctx context.Context, ts oauth2.TokenSource) (*Client, error) {
+// New builds a client over a token source, reading Gmail at endpoint — empty
+// for Gmail's own base URL, which is what production passes. Nothing here
+// refreshes or persists the token: the source does both, and it is the one
+// owner of the token file. The http client is built here rather than left to
+// the API package's own, because that one carries no timeout — see
+// DefaultTimeout.
+func New(ctx context.Context, ts oauth2.TokenSource, endpoint string) (*Client, error) {
 	hc := oauth2.NewClient(ctx, ts)
 	hc.Timeout = DefaultTimeout
-	return newService(ctx, option.WithHTTPClient(hc))
+	return newService(ctx, append(endpointOptions(endpoint), option.WithHTTPClient(hc))...)
 }
 
 // newService is the one place a gmail.Service is built: New hands it a
-// credentialed http client, and NewForTest an endpoint and a bare one.
+// credentialed http client, and NewForTest a bare one.
 func newService(ctx context.Context, opts ...option.ClientOption) (*Client, error) {
 	svc, err := gmail.NewService(ctx, opts...)
 	if err != nil {
@@ -81,16 +83,26 @@ func newService(ctx context.Context, opts ...option.ClientOption) (*Client, erro
 	return &Client{svc: svc}, nil
 }
 
-// NewForTest builds a client against an alternate endpoint with no
-// credentials, which is how the contract tests reach a fake Gmail. It is
-// exported so the plugin package's own seam test can use the same door.
-func NewForTest(ctx context.Context, endpoint string, hc *http.Client) (*Client, error) {
+// endpointOptions is the base-URL override, and the one owner of what an
+// endpoint string means: empty leaves the generated client its own Gmail.
+func endpointOptions(endpoint string) []option.ClientOption {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
 	// The generated client resolves its path RELATIVE to the base, so an
 	// endpoint with no trailing slash would lose its last segment.
 	if !strings.HasSuffix(endpoint, "/") {
 		endpoint += "/"
 	}
-	return newService(ctx, option.WithEndpoint(endpoint), option.WithHTTPClient(hc))
+	return []option.ClientOption{option.WithEndpoint(endpoint)}
+}
+
+// NewForTest builds a client against an alternate endpoint with no
+// credentials, which is how the contract tests reach a fake Gmail. It is
+// exported so the plugin package's own seam test can use the same door.
+func NewForTest(ctx context.Context, endpoint string, hc *http.Client) (*Client, error) {
+	return newService(ctx, append(endpointOptions(endpoint), option.WithHTTPClient(hc))...)
 }
 
 // Label lists the ids one label holds, newest first — Gmail's own order —

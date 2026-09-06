@@ -3,9 +3,12 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +64,53 @@ func TestFromConfigRefusesBadConfig(t *testing.T) {
 		if impl != nil || err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("cfg %v → %v, %v; want a refusal containing %q", c.cfg, impl, err, c.want)
 		}
+	}
+}
+
+// The endpoint knob is the address of the service this plugin reads, and the
+// only proof it is wired is a read that lands somewhere else: the client
+// FromConfig composed — credential and all — asking a fake Gmail for the
+// inbox, and sending the token it was configured with.
+func TestFromConfigReadsTheConfiguredEndpoint(t *testing.T) {
+	var mu sync.Mutex
+	auth := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			if strings.Join(r.URL.Query()["labelIds"], "+") == "INBOX" {
+				w.Write([]byte(`{"messages":[{"id":"a1","threadId":"a1"}]}`))
+				return
+			}
+			w.Write([]byte(`{"resultSizeEstimate":0}`))
+			return
+		}
+		w.Write([]byte(`{"id":"a1","threadId":"a1","internalDate":"1767621780000","labelIds":["INBOX"],` +
+			`"payload":{"headers":[{"name":"Subject","value":"Lunch plans"}]}}`))
+	}))
+	defer srv.Close()
+
+	impl, err := FromConfig(map[string]string{
+		"credentials": credentials(), "token": aToken(t),
+		"state_dir": t.TempDir(), "refresh": "1h", "endpoint": srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := impl.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(resp.Entries) != 1 || !strings.Contains(resp.Entries[0].Label, "Lunch plans") {
+		t.Fatalf("entries = %+v; the walk did not read the configured endpoint", resp.Entries)
+	}
+	// The credential still travels: an endpoint override changes where the
+	// plugin reads, never whether it authenticates.
+	mu.Lock()
+	defer mu.Unlock()
+	if auth != "Bearer at" {
+		t.Errorf("Authorization = %q, want the configured token", auth)
 	}
 }
 
