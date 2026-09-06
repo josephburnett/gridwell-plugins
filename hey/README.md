@@ -79,6 +79,12 @@ fields and ignores the rest:
 holding the message exactly as HEY served it. The plugin serves those bytes
 through the content door untouched; the node sandboxes them.
 
+A refusal prints on **stderr**, not stdout, and stdout stays empty. With
+`--json` the error envelope (`error`, `code`, `hint`) is there, after the
+keyring warning; with `--html` there is no envelope at all, only
+`Error: <reason>`. The plugin reads both, and drops `warning:` lines: a note
+about the host is never the reason a command refused.
+
 Exit status is the whole error vocabulary (`hey help exit-codes`): 2 not
 found, 3 auth required, 4 forbidden, 5 rate limited, 6 network, 7 server or
 local, 1 and 8 usage. 5, 6 and 7 become `Unavailable` — "not right now", and
