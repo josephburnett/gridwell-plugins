@@ -120,10 +120,10 @@ func stable(src Source, o Options) *Plugin {
 	return New(src, o)
 }
 
-// The three collections are three contexts, and the Imbox is the root: the
-// plugin's own (+) row lands there, and the other two ride beside it. An
-// empty root_context would draw that row as a broken plugin.
-func TestInfoDeclaresTheImboxRootAndTwoMenuEntries(t *testing.T) {
+// The three collections are three contexts and three (+) menu entries. There
+// is no wrapper grid above them and no landing among them: a plugin is not a
+// place, it contributes doorways, and each collection is one.
+func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	p := stable(newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
 	if err != nil {
@@ -132,8 +132,8 @@ func TestInfoDeclaresTheImboxRootAndTwoMenuEntries(t *testing.T) {
 	if info.Kind != Kind {
 		t.Errorf("kind = %q", info.Kind)
 	}
-	if info.RootContext != mail.ImboxContext {
-		t.Errorf("root_context = %q, want %q", info.RootContext, mail.ImboxContext)
+	if info.RootContext != "" {
+		t.Errorf("root_context = %q; it is retired and the collections are declared", info.RootContext)
 	}
 	if !info.HostContent {
 		t.Error("host_content not declared; these grids project a mail account")
@@ -145,11 +145,9 @@ func TestInfoDeclaresTheImboxRootAndTwoMenuEntries(t *testing.T) {
 	for _, e := range info.MenuEntries {
 		got[e.Context] = true
 	}
-	if len(info.MenuEntries) != 2 || !got[mail.ReplyLaterContext] || !got[mail.SetAsideContext] {
-		t.Fatalf("menu entries = %+v", info.MenuEntries)
-	}
-	if got[mail.ImboxContext] {
-		t.Error("the root context is offered twice")
+	if len(info.MenuEntries) != 3 || !got[mail.ImboxContext] ||
+		!got[mail.ReplyLaterContext] || !got[mail.SetAsideContext] {
+		t.Fatalf("menu entries = %+v, want one per collection", info.MenuEntries)
 	}
 }
 

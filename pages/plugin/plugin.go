@@ -52,7 +52,9 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
-		RootContext: site.RootContext,
+		// The one collection this plugin serves: the site. It declares no
+		// label, so the swatch reads as the configured instance.
+		MenuEntries: []*pluginv1.MenuEntry{{Id: site.RootContext, Context: site.RootContext}},
 		// host_content stays false, unlike fs and proc: this plugin's grid is
 		// not a window onto state that lives outside Gridwell. The pages are
 		// the plugin's own content, so the tiles wear the ordinary treatment.

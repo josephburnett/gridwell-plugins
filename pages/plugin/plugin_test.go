@@ -200,9 +200,9 @@ func TestProbeIsDefinitiveBothWays(t *testing.T) {
 	}
 }
 
-// Info declares the landing grid and, unlike fs and proc, NOT host content:
+// Info declares the one collection and, unlike fs and proc, NOT host content:
 // these pages are the plugin's own, not a window onto state outside Gridwell.
-func TestInfoDeclaresTheRootAndNotHostContent(t *testing.T) {
+func TestInfoDeclaresTheCollectionAndNotHostContent(t *testing.T) {
 	impl, err := FromConfig(map[string]string{"uuid": "p1", "kind": Kind, "state_dir": "/tmp/x"})
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestInfoDeclaresTheRootAndNotHostContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Kind != Kind || info.RootContext != site.RootContext {
+	if info.Kind != Kind || len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != site.RootContext {
 		t.Errorf("info = %v", info)
 	}
 	if info.HostContent {

@@ -70,7 +70,7 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	ctx := context.Background()
 
 	info, _ := p.Info(ctx, &pluginv1.InfoRequest{})
-	if info.Kind != Kind || info.RootContext != todos.RootContext {
+	if info.Kind != Kind || len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != todos.RootContext {
 		t.Fatalf("info = %v", info)
 	}
 	root, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})

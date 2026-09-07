@@ -39,15 +39,12 @@ func CollectionEntries(threads []Thread) []*pluginv1.Entry {
 	return out
 }
 
-// MenuEntries is the (+) menu addition for every collection that is not the
-// plugin's root context. A root grid is already the plugin's own row on that
-// menu, so declaring an entry for it too would offer the same grid twice.
-func MenuEntries(rootContext string) []*pluginv1.MenuEntry {
+// MenuEntries declares every collection this plugin serves, one (+) menu
+// entry each. There is no privileged collection and no landing grid: a plugin
+// is not a place, it contributes doorways, and each of these is one.
+func MenuEntries() []*pluginv1.MenuEntry {
 	out := make([]*pluginv1.MenuEntry, 0, len(Collections))
 	for _, c := range Collections {
-		if c.Key == rootContext {
-			continue
-		}
 		out = append(out, &pluginv1.MenuEntry{
 			Id:      c.Key,
 			Label:   c.Label,

@@ -1,5 +1,5 @@
 // Package plugin is the gitlab todos plugin: the wire half over
-// plugins/gitlab/todos. The root context, "todos", lists weeks; a week,
+// plugins/gitlab/todos. The one context, "todos", lists weeks; a week,
 // "week:<monday>", lists the todos created that week as markdown text tiles.
 // Keys are GitLab's todo ids, stable forever. Listings are non-authoritative
 // and Probe never answers GONE: a todo never disappears from the grid, it
@@ -223,7 +223,9 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
-		RootContext: todos.RootContext,
+		// The one collection this plugin serves: the todo list. It declares no
+		// label, so the swatch reads as the configured instance.
+		MenuEntries: []*pluginv1.MenuEntry{{Id: todos.RootContext, Context: todos.RootContext}},
 	}, nil
 }
 

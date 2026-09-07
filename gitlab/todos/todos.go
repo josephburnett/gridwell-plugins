@@ -135,7 +135,7 @@ func (t *Todo) Label() string {
 func (t *Todo) Key() string { return KeyPrefix + strconv.FormatInt(t.ID, 10) }
 
 // KeyPrefix namespaces todo keys; WeekPrefix namespaces week contexts;
-// RootContext is the plugin's landing grid.
+// RootContext is the plugin's one collection: the todo list.
 const (
 	KeyPrefix   = "todo:"
 	WeekPrefix  = "week:"

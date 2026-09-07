@@ -55,7 +55,7 @@ const (
 )
 
 // Collections is the projection, in the order the (+) menu offers it.
-// ImboxContext is first because it is also the plugin's root context.
+// ImboxContext is first because it is the collection to read first.
 var Collections = []Collection{
 	{Key: ImboxContext, Box: "imbox", Label: "imbox"},
 	{Key: ReplyLaterContext, Box: "laterbox", Label: "reply later"},

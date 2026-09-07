@@ -32,7 +32,7 @@ import (
 // decoded from the GRIDWELL_PLUGIN_CONFIG environment variable. An
 // unset or empty value yields an empty map. A value that is not a JSON
 // object is an error, never an empty map: a plugin that silently ran
-// unconfigured (fs rootless, proc at pid 1) would look like a plugin that
+// unconfigured (fs with no root, proc at pid 1) would look like a plugin that
 // lost its config. A plugin is configured once, at launch.
 func Config() (map[string]string, error) {
 	raw := os.Getenv(gplug.ConfigEnvVar)

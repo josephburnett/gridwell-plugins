@@ -23,8 +23,8 @@ func TestFromConfigOwnsThePidDerivation(t *testing.T) {
 			t.Fatalf("pid %q: %v", raw, err)
 		}
 		info, err := impl.(*Plugin).Info(context.Background(), &pluginv1.InfoRequest{})
-		if err != nil || info.RootContext != want {
-			t.Errorf("pid %q → root context %q, %v; want %q", raw, info.GetRootContext(), err, want)
+		if err != nil || len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != want {
+			t.Errorf("pid %q → collections %v, %v; want the one context %q", raw, info.GetMenuEntries(), err, want)
 		}
 	}
 }

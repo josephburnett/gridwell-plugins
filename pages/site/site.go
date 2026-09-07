@@ -18,7 +18,7 @@ import (
 	"image/jpeg"
 )
 
-// RootContext is the plugin's landing grid — the one context this site has.
+// RootContext is the plugin's one collection — the one context this site has.
 // Keys are flat because the site is flat; a plugin with a tree of contexts
 // gives its keys a path shape, as fs does.
 const RootContext = "."

@@ -192,8 +192,9 @@ func TestEntriesAndMenu(t *testing.T) {
 		t.Errorf("next-day hint = %+v", es[2].PlacementHint)
 	}
 
-	menu := MenuEntries(InboxContext)
-	if len(menu) != 1 || menu[0].Context != StarredContext || menu[0].Label != "starred" {
-		t.Fatalf("menu = %+v", menu)
+	menu := MenuEntries()
+	if len(menu) != len(Collections) || menu[0].Context != InboxContext ||
+		menu[1].Context != StarredContext || menu[1].Label != "starred" {
+		t.Fatalf("menu = %+v, want one entry per collection", menu)
 	}
 }

@@ -90,7 +90,13 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		Kind:        "proc",
 		DisplayName: label,
 		Glyph:       "process",
-		RootContext: strconv.FormatInt(p.rootPID, 10),
+		// The one collection this plugin serves: the process tree under the
+		// configured pid. It declares no label, so the swatch reads as the
+		// configured instance.
+		MenuEntries: []*pluginv1.MenuEntry{{
+			Id:      strconv.FormatInt(p.rootPID, 10),
+			Context: strconv.FormatInt(p.rootPID, 10),
+		}},
 		// The process table is host state, projected: declaring it is what
 		// earns these grids the host treatment on the client.
 		HostContent: true,

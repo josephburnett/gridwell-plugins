@@ -167,7 +167,7 @@ func listAll(t *testing.T, p *Plugin) {
 // The two collections are two contexts, and the inbox is the root: the
 // plugin's own (+) row lands there, and starred rides beside it. An empty
 // root_context would draw that row as a broken plugin.
-func TestInfoDeclaresTheInboxRootAndOneMenuEntry(t *testing.T) {
+func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	p := stable(newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
 	if err != nil {
@@ -176,8 +176,8 @@ func TestInfoDeclaresTheInboxRootAndOneMenuEntry(t *testing.T) {
 	if info.Kind != Kind {
 		t.Errorf("kind = %q", info.Kind)
 	}
-	if info.RootContext != mailbox.InboxContext {
-		t.Errorf("root_context = %q, want %q", info.RootContext, mailbox.InboxContext)
+	if info.RootContext != "" {
+		t.Errorf("root_context = %q; it is retired and the collections are declared", info.RootContext)
 	}
 	if !info.HostContent {
 		t.Error("host_content not declared; these grids project a mail account")
@@ -185,8 +185,9 @@ func TestInfoDeclaresTheInboxRootAndOneMenuEntry(t *testing.T) {
 	if info.Writable {
 		t.Error("a read-only projection declared itself writable")
 	}
-	if len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != mailbox.StarredContext {
-		t.Fatalf("menu entries = %+v; the root context must not be offered twice", info.MenuEntries)
+	if len(info.MenuEntries) != 2 || info.MenuEntries[0].Context != mailbox.InboxContext ||
+		info.MenuEntries[1].Context != mailbox.StarredContext {
+		t.Fatalf("menu entries = %+v, want one per collection", info.MenuEntries)
 	}
 }
 

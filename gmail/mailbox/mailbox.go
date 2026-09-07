@@ -71,7 +71,7 @@ const UnreadLabel = "UNREAD"
 const StarredLabel = "STARRED"
 
 // Collections is the projection, in the order the (+) menu offers it.
-// InboxContext is first because it is also the plugin's root context.
+// InboxContext is first because it is the collection to read first.
 var Collections = []Collection{
 	{Key: InboxContext, LabelIDs: []string{"INBOX"}, Label: "inbox"},
 	{Key: StarredContext, LabelIDs: []string{StarredLabel}, Label: "starred"},

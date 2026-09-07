@@ -7,23 +7,32 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// FromConfig is the one config→plugin derivation: root projects, and no
-// root is the rootless (listed, not enterable) plugin, not a refusal.
+// FromConfig is the one config→plugin derivation: a configured root is the
+// plugin's one collection, and no root means it declares none — listed,
+// contributing nothing to the (+) menu, which is not a refusal and not a
+// failure.
 func TestFromConfigOwnsTheRootDerivation(t *testing.T) {
 	ctx := context.Background()
 	impl, err := FromConfig(map[string]string{"root": " /srv/docs "})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := impl.(*Plugin).Info(ctx, &pluginv1.InfoRequest{}); err != nil || info.RootContext != "." || info.DisplayName != "docs" {
-		t.Errorf("rooted → %v, %v", info, err)
+	info, err := impl.(*Plugin).Info(ctx, &pluginv1.InfoRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != "." || info.DisplayName != "docs" {
+		t.Errorf("rooted → %v", info)
+	}
+	if info.RootContext != "" {
+		t.Errorf("root_context is retired; got %q", info.RootContext)
 	}
 	impl, err = FromConfig(map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := impl.(*Plugin).Info(ctx, &pluginv1.InfoRequest{}); err != nil || info.RootContext != "" {
-		t.Errorf("rootless → %v, %v; want listed with no root context", info, err)
+	if info, err := impl.(*Plugin).Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 0 {
+		t.Errorf("unconfigured → %v, %v; want listed with no collection", info, err)
 	}
 }
 
@@ -57,7 +66,7 @@ func TestAbsStillRefusesEscapes(t *testing.T) {
 
 // The host treatment a directory grid wears — the outside tint on every
 // tile, the exit border on a descent — is this DECLARATION, not the node
-// recognizing the kind "fs". A rootless fs is still a projection of the
+// recognizing the kind "fs". An fs with no root is still a projection of the
 // host, so it declares the same thing.
 func TestInfoDeclaresHostContent(t *testing.T) {
 	ctx := context.Background()

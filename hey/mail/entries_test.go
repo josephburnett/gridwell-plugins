@@ -54,22 +54,16 @@ func TestCollectionEntriesHintAsACalendar(t *testing.T) {
 	}
 }
 
-// The plugin's own (+) row already opens the root context; declaring a menu
-// entry for it too would offer the same grid twice.
-func TestMenuEntriesSkipTheRootContext(t *testing.T) {
-	got := MenuEntries(ImboxContext)
-	if len(got) != 2 {
-		t.Fatalf("got %d menu entries, want 2", len(got))
+// Every collection is a menu entry. There is no privileged one, because a
+// plugin is not a place: it contributes doorways, and each collection is one.
+func TestMenuEntriesDeclareEveryCollection(t *testing.T) {
+	got := MenuEntries()
+	if len(got) != len(Collections) {
+		t.Fatalf("got %d menu entries, want one per collection (%d)", len(got), len(Collections))
 	}
-	for _, e := range got {
-		if e.Context == ImboxContext {
-			t.Errorf("the root context %q rides the menu too", e.Context)
+	for i, e := range got {
+		if e.Context != Collections[i].Key || e.Id != Collections[i].Key || e.Label != Collections[i].Label {
+			t.Errorf("entry %d = %+v, want collection %+v", i, e, Collections[i])
 		}
-		if e.Context == "" || e.Id == "" || e.Label == "" {
-			t.Errorf("incomplete menu entry %+v", e)
-		}
-	}
-	if len(MenuEntries("")) != 3 {
-		t.Error("a rootless plugin should offer all three collections")
 	}
 }

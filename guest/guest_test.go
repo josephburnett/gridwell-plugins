@@ -37,7 +37,7 @@ func TestConfigEmptyWhenUnset(t *testing.T) {
 
 // TestConfigMalformedIsAnError: a value that is not a JSON object is an
 // error naming the variable — never an empty map, which would run the
-// plugin unconfigured (fs rootless, proc at pid 1) as if that were what
+// plugin unconfigured (fs with no root, proc at pid 1) as if that were what
 // server.yaml said.
 func TestConfigMalformedIsAnError(t *testing.T) {
 	t.Setenv(gplug.ConfigEnvVar, `{not valid json`)

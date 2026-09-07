@@ -6,7 +6,7 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// RootEntries derives the landing grid: one well per week, newest
+// RootEntries derives the collection grid: one well per week, newest
 // first, hinted as a calendar — a row per month anchored by HintEpoch
 // (this month at y=0, newer up, older down), the month's weeks left to
 // right (WeekCell). Labels carry the counts, so a week's face changes

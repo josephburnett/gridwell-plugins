@@ -44,13 +44,6 @@ const Kind = "gmail"
 // server.yaml's label; this is the fallback when none is configured.
 const displayName = "gmail"
 
-// RootContext is the plugin's landing grid: the inbox. There is no wrapper
-// grid above the two labels — the starred one rides the (+) menu as a
-// declared entry beside the plugin's own row, and the row itself lands in the
-// inbox. An empty root_context would leave that row with nothing to enter,
-// which the client draws as a broken plugin.
-const RootContext = mailbox.InboxContext
-
 // DefaultRefresh bounds how often one collection is re-walked. The node lists
 // a context on every GetGrid and GetTile, and a descent must feel instant
 // rather than cost a round trip to Google each time.
@@ -256,8 +249,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
-		RootContext: RootContext,
-		MenuEntries: mailbox.MenuEntries(RootContext),
+		MenuEntries: mailbox.MenuEntries(),
 		// These grids PROJECT a mail account that lives outside Gridwell, so
 		// their rows are summaries the node cannot re-arrange across contexts
 		// and the client draws them with the host treatment. It is a

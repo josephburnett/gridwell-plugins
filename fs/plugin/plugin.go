@@ -1,6 +1,6 @@
 // Package plugin is the fs content plugin: a stateless projection of a
 // directory tree. Keys are slash-relative paths under the configured root, and
-// "." is the root context. Every derivation and byte-level answer comes from
+// "." is the one context. Every derivation and byte-level answer comes from
 // plugins/fs/fsfile. There is no database, no ids, and no layout; the node
 // owns those.
 package plugin
@@ -46,8 +46,8 @@ type Plugin struct {
 // FromConfig builds the production plugin from the shared config vocabulary.
 // It is the one owner of the config-to-plugin derivation, so the subprocess
 // main and a bundled binary compose exactly the same plugin. The config key is
-// root, the projected directory. No root makes a rootless plugin — listed but
-// not enterable, a fixable gap the client reports as a notice — rather than a
+// root, the projected directory. No root means the plugin declares no
+// collection — listed, contributing nothing to the (+) menu — rather than a
 // refusal.
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	return New(strings.TrimSpace(cfg["root"]), nil), nil
@@ -95,12 +95,14 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		// no list of host-backed kinds to consult.
 		HostContent: true,
 	}
-	// No configured root makes the plugin rootless: it is listed but not
-	// enterable, because no context exists to descend into.
+	// No configured root means there is no context to serve, so the plugin
+	// declares no collection and contributes nothing to the (+) menu.
 	if p.root == "" || p.root == "." {
 		return resp, nil
 	}
-	resp.RootContext = "."
+	// The one collection this plugin serves: the configured tree. It
+	// declares no label, so the swatch reads as the configured instance.
+	resp.MenuEntries = []*pluginv1.MenuEntry{{Id: ".", Context: "."}}
 	if label := filepath.Base(p.root); label != "/" && label != "." {
 		resp.DisplayName = label
 	}
