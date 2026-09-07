@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"syscall"
 	"time"
 
 	hclog "github.com/hashicorp/go-hclog"
@@ -93,9 +92,11 @@ func (r refusal) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 // disconnected gRPC client while the guest keeps listening forever. The
 // host hands its pid in the environment — a spawn-time fact, so a
 // pre-watchdog race cannot capture a post-death parent — and the guest
-// probes it with signal 0, which is robust against subreaper reparenting
-// where a Getppid comparison can lie. A missing env var (a hand-launched
-// guest, a test harness) disables the watchdog rather than guessing.
+// probes it, which is robust against subreaper reparenting where a Getppid
+// comparison can lie. How you probe a pid is the one per-platform fact:
+// hostAlive lives in hostalive_unix.go and hostalive_other.go. A missing env
+// var (a hand-launched guest, a test harness) disables the watchdog rather
+// than guessing.
 func watchHost() {
 	pid, err := strconv.Atoi(os.Getenv(gplug.HostPIDEnvVar))
 	if err != nil || pid <= 0 {
@@ -104,9 +105,7 @@ func watchHost() {
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)
-			// Signal 0 probes existence; EPERM still means alive. Only
-			// ESRCH — no such process — is the host-death verdict.
-			if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
+			if !hostAlive(pid) {
 				os.Exit(0)
 			}
 		}
