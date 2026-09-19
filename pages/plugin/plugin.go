@@ -72,34 +72,34 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 	}
 	for _, d := range site.Docs() {
 		e := &pluginv1.Entry{
-			Key:   d.Key,
-			Label: d.Label,
-			// Kind is "text" for every entry, page or not. serves_page is a
-			// separate declaration on the same text row: it says the entry
-			// has web bytes to serve, not that it is a url. A url entry owns
-			// an address of its own, which is the opposite of what a page
-			// tile is — the node derives a page's address when the page is
-			// opened, so the plugin has none to declare.
-			Kind: rpc.KindText,
-			// Every doc's ReadContent body is markdown, so every entry
-			// declares the same presentation. One rule, no per-doc switch.
-			TextPresentation: rpc.TextPresentationBoth,
-			ServesPage:       d.Page != nil,
-			PlacementHint:    &pluginv1.PlacementHint{X: d.Col, Y: d.Row, W: 2, H: 2},
+			Key:           d.Key,
+			Label:         d.Label,
+			PlacementHint: &pluginv1.PlacementHint{X: d.Col, Y: d.Row, W: 2, H: 2},
 		}
 		if d.Page != nil {
+			// A doc with a page is a url entry serving from the plugin: the
+			// node derives its address at the /content/ door, so there is
+			// none to declare, and its note is not offered as a text body.
+			e.Kind = rpc.KindURL
+			e.ServesPage = true
 			// The face is the plugin's thumbnail. The site never changes, so
 			// there is one generation of it forever.
 			e.PreviewStamp = site.PreviewStamp
+		} else {
+			e.Kind = rpc.KindText
+			// Every note ReadContent answers is markdown.
+			e.TextPresentation = rpc.TextPresentationBoth
 		}
 		resp.Entries = append(resp.Entries, e)
 	}
 	return resp, nil
 }
 
-// ReadContent answers a doc's markdown body: what the tile reads as a
-// document, for a page tile as much as a text one. An unknown key is an empty
-// chunk, not an error — absence is Probe's answer to give.
+// ReadContent answers a doc's markdown note, which is the body of the text
+// entries. A doc with a page is a url entry and nothing reads its note; the
+// note stays here for the day this plugin offers it as an entry of its own. An
+// unknown key is an empty chunk, not an error — absence is Probe's answer to
+// give.
 func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {
 	d := site.Lookup(req.Key)
 	if d == nil {

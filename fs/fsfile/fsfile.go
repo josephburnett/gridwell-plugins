@@ -50,10 +50,11 @@ var pageMediaTypes = map[string]string{
 	".txt":  "text/plain; charset=utf-8",
 }
 
-// ServesPage marks which of the served types are worth a page descent: what a
-// browser presents natively as a whole document. A subresource type — css, js,
-// json, txt — serves through the door for pages that reference it but keeps
-// its own text-document descent.
+// ServesPage marks which of the served types are worth a page descent, which
+// is the same question as which files are url entries: what a browser presents
+// natively as a whole document. A subresource type — css, js, json, txt —
+// serves through the door for pages that reference it but stays a text entry
+// with its own document descent.
 func ServesPage(name string) bool {
 	mt := PageMediaType(name)
 	switch strings.SplitN(mt, "/", 2)[0] {

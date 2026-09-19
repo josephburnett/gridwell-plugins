@@ -6,14 +6,13 @@ import (
 )
 
 // CollectionEntries derives one collection's grid: every message it holds as
-// a text tile that serves a page, hinted as a calendar — a row per day,
+// a url tile serving its own page, hinted as a calendar — a row per day,
 // newest at the top, the day's messages left to right in arrival order.
 // views must be oldest first, which is what Memory.Collection answers.
 //
-// Kind is "text" for every entry and serves_page rides beside it. A page tile
-// is not a url tile: a url entry owns an address of its own, and the node
-// derives a page's address when the page is opened, so there is none to
-// declare here.
+// A message is a page, so it is a url entry that serves one: the node derives
+// the address at its /content/ door, so there is none to declare here, and a
+// url entry offers no text body beside the page.
 func CollectionEntries(views []View) []*pluginv1.Entry {
 	perDay := map[int64]int{}
 	out := make([]*pluginv1.Entry, 0, len(views))
@@ -23,16 +22,12 @@ func CollectionEntries(views []View) []*pluginv1.Entry {
 		perDay[day] = index + 1
 		x, y := Cell(v.Date, index)
 		out = append(out, &pluginv1.Entry{
-			Key:   v.Key(),
-			Kind:  rpc.KindText,
-			Label: v.Label(),
-			// The body ReadContent answers is markdown, and the page
-			// ServeContent answers is the email itself. One presentation for
-			// every entry, no per-message switch.
-			TextPresentation: rpc.TextPresentationBoth,
-			ServesPage:       true,
-			StatusDetail:     v.StatusDetail(),
-			PlacementHint:    &pluginv1.PlacementHint{X: x, Y: y, W: MessageTileW, H: 1},
+			Key:           v.Key(),
+			Kind:          rpc.KindURL,
+			Label:         v.Label(),
+			ServesPage:    true,
+			StatusDetail:  v.StatusDetail(),
+			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: MessageTileW, H: 1},
 		})
 	}
 	return out

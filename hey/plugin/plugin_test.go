@@ -586,7 +586,7 @@ func TestOverTheRealCLIContract(t *testing.T) {
 		t.Fatalf("entries = %+v", resp.Entries)
 	}
 	e := resp.Entries[0]
-	if e.Key != "thread:101" || !e.ServesPage || e.Kind != rpc.KindText {
+	if e.Key != "thread:101" || !e.ServesPage || e.Kind != rpc.KindURL {
 		t.Fatalf("entry = %+v", e)
 	}
 	if !strings.Contains(e.Label, "Alice") || !strings.Contains(e.Label, "Lunch plans") {

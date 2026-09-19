@@ -6,14 +6,13 @@ import (
 )
 
 // CollectionEntries derives one collection's grid: every thread it holds as a
-// text tile that serves a page, hinted as a calendar — a row per day, newest
+// url tile serving its own page, hinted as a calendar — a row per day, newest
 // at the top, the day's threads left to right in arrival order. threads must
 // be oldest first, which is what Memory.Collection answers.
 //
-// Kind is "text" for every entry and serves_page rides beside it. A page tile
-// is not a url tile: a url entry owns an address of its own, and the node
-// derives a page's address when the page is opened, so there is none to
-// declare here.
+// A thread is a page, so it is a url entry that serves one: the node derives
+// the address at its /content/ door, so there is none to declare here, and a
+// url entry offers no text body beside the page.
 func CollectionEntries(threads []Thread) []*pluginv1.Entry {
 	perDay := map[int64]int{}
 	out := make([]*pluginv1.Entry, 0, len(threads))
@@ -24,16 +23,12 @@ func CollectionEntries(threads []Thread) []*pluginv1.Entry {
 		perDay[day] = index + 1
 		x, y := Cell(t.CreatedAt, index)
 		out = append(out, &pluginv1.Entry{
-			Key:   t.Key(),
-			Kind:  rpc.KindText,
-			Label: t.Label(),
-			// The body ReadContent answers is markdown, and the page
-			// ServeContent answers is the email itself. One presentation for
-			// every entry, no per-thread switch.
-			TextPresentation: rpc.TextPresentationBoth,
-			ServesPage:       true,
-			StatusDetail:     t.StatusDetail(),
-			PlacementHint:    &pluginv1.PlacementHint{X: x, Y: y, W: ThreadTileW, H: 1},
+			Key:           t.Key(),
+			Kind:          rpc.KindURL,
+			Label:         t.Label(),
+			ServesPage:    true,
+			StatusDetail:  t.StatusDetail(),
+			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: ThreadTileW, H: 1},
 		})
 	}
 	return out

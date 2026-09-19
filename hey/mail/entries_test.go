@@ -6,7 +6,9 @@ import (
 	"github.com/josephburnett/gridwell/api/rpc"
 )
 
-func TestCollectionEntriesAreTextPagesNeverURLs(t *testing.T) {
+// A thread is a page, and a page is a url entry the plugin serves from: the
+// address is the node's to derive, and no text body rides beside it.
+func TestCollectionEntriesAreURLsThatServeTheirPage(t *testing.T) {
 	entries := CollectionEntries([]Thread{
 		{TopicID: 1, Subject: "a", CreatedAt: at("2026-01-02T09:00:00Z")},
 	})
@@ -14,23 +16,20 @@ func TestCollectionEntriesAreTextPagesNeverURLs(t *testing.T) {
 		t.Fatalf("got %d entries", len(entries))
 	}
 	e := entries[0]
-	if e.Kind != rpc.KindText {
-		t.Errorf("kind = %q, want %q", e.Kind, rpc.KindText)
-	}
-	if e.Kind == rpc.KindURL {
-		t.Error("a page tile must never be a url entry")
+	if e.Kind != rpc.KindURL {
+		t.Errorf("kind = %q, want %q", e.Kind, rpc.KindURL)
 	}
 	if !e.ServesPage {
 		t.Error("serves_page not declared")
 	}
 	if e.UrlString != "" {
-		t.Errorf("url_string = %q; the node derives a page's address", e.UrlString)
+		t.Errorf("url_string = %q; the node derives a served page's address", e.UrlString)
 	}
 	if e.Key != "thread:1" {
 		t.Errorf("key = %q", e.Key)
 	}
-	if e.TextPresentation != rpc.TextPresentationBoth {
-		t.Errorf("text_presentation = %q", e.TextPresentation)
+	if e.TextPresentation != "" {
+		t.Errorf("text_presentation = %q; a url entry has no text body", e.TextPresentation)
 	}
 }
 

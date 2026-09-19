@@ -72,7 +72,7 @@ func TestOverTheRealGmailContract(t *testing.T) {
 		t.Fatalf("entries = %+v", resp.Entries)
 	}
 	e := resp.Entries[0]
-	if !strings.HasPrefix(e.Key, mailbox.KeyPrefix) || !e.ServesPage || e.Kind != rpc.KindText {
+	if !strings.HasPrefix(e.Key, mailbox.KeyPrefix) || !e.ServesPage || e.Kind != rpc.KindURL {
 		t.Fatalf("entry = %+v", e)
 	}
 	if !strings.Contains(e.Label, "Alice Example") || !strings.Contains(e.Label, "Lunch plans") {

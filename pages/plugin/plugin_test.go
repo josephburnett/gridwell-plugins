@@ -48,14 +48,11 @@ func serve(t *testing.T, p *Plugin, key, subpath string) *pluginv1.ServeContentC
 	return s.chunks[0]
 }
 
-// This plugin serves web content but declares no url. A page entry is a TEXT
-// row carrying serves_page: the two are different facts, and only one of them
-// is the plugin's to hold. A url entry owns an address; a page tile's address
-// is derived by the node when the page is opened, so declaring kind "url" here
-// would hand the node an address the plugin does not have and cannot keep
-// stable — and a url tile's own address wins over serves_page anyway, so the
-// page would never be served.
-func TestPagesAreTextRowsThatDeclareServesPage(t *testing.T) {
+// A doc with a page is a URL row that serves it; a doc without one is a text
+// row with its note. The address is still not the plugin's to hold: the node
+// derives it at the /content/ door when the page is opened, which is what
+// serves_page beside an empty url_string says.
+func TestAPageDocIsAURLRowAndANoteATextRow(t *testing.T) {
 	p := New()
 	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: site.RootContext})
 	if err != nil {
@@ -70,25 +67,33 @@ func TestPagesAreTextRowsThatDeclareServesPage(t *testing.T) {
 		if e.Key != d.Key {
 			t.Fatalf("entry %d is %q, want %q: the listing order is the site's", i, e.Key, d.Key)
 		}
-		if e.Kind != rpc.KindText {
-			t.Errorf("%s declares kind %q; a page is a text row, never a url", e.Key, e.Kind)
-		}
 		if e.UrlString != "" {
-			t.Errorf("%s declares a url %q; a page tile has no address of its own", e.Key, e.UrlString)
+			t.Errorf("%s declares a url %q; the node derives a served page's address", e.Key, e.UrlString)
 		}
 		if want := d.Page != nil; e.ServesPage != want {
 			t.Errorf("%s serves_page = %v, want %v", e.Key, e.ServesPage, want)
 		}
 		if e.ServesPage {
 			pages++
+			if e.Kind != rpc.KindURL {
+				t.Errorf("%s declares kind %q; a page is served from a url row", e.Key, e.Kind)
+			}
+			if e.TextPresentation != "" {
+				t.Errorf("%s declares text presentation %q; a url row has no text body", e.Key, e.TextPresentation)
+			}
 			if e.PreviewStamp != site.PreviewStamp {
 				t.Errorf("%s preview stamp = %d, want %d", e.Key, e.PreviewStamp, site.PreviewStamp)
 			}
-		} else if e.PreviewStamp != 0 {
-			t.Errorf("%s declares a preview stamp with no page", e.Key)
+			continue
+		}
+		if e.Kind != rpc.KindText {
+			t.Errorf("%s declares kind %q; a doc with no page is its note", e.Key, e.Kind)
 		}
 		if e.TextPresentation != rpc.TextPresentationBoth {
 			t.Errorf("%s text presentation = %q; every note is markdown", e.Key, e.TextPresentation)
+		}
+		if e.PreviewStamp != 0 {
+			t.Errorf("%s declares a preview stamp with no page", e.Key)
 		}
 	}
 	if pages < 2 {

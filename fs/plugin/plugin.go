@@ -135,11 +135,20 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 		if e.Kind == fssource.KindDir {
 			out.Kind = "well"
 			out.ChildContext = key
+			resp.Entries = append(resp.Entries, out)
+			continue
+		}
+		out.PreviewStamp = fsfile.PreviewStamp(dir, e.Name)
+		if fsfile.ServesPage(e.Name) {
+			// A file the browser presents whole is a url entry, and the node
+			// derives its address at the /content/ door, so there is none to
+			// declare. It carries no text body: a url entry has no document
+			// face beside the page.
+			out.Kind = "url"
+			out.ServesPage = true
 		} else {
 			out.Kind = "text"
-			out.ServesPage = fsfile.ServesPage(e.Name)
 			out.TextPresentation = fsfile.TextPresentation(e.Name)
-			out.PreviewStamp = fsfile.PreviewStamp(dir, e.Name)
 		}
 		resp.Entries = append(resp.Entries, out)
 	}

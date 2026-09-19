@@ -180,7 +180,7 @@ func TestEntriesAndMenu(t *testing.T) {
 		t.Fatalf("entries = %d", len(es))
 	}
 	for _, e := range es {
-		if e.Kind != "text" || !e.ServesPage || e.TextPresentation != "both" {
+		if e.Kind != "url" || !e.ServesPage || e.UrlString != "" || e.TextPresentation != "" {
 			t.Fatalf("entry = %+v", e)
 		}
 	}
