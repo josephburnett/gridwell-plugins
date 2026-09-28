@@ -377,11 +377,13 @@ func (p *Plugin) catchUpOrSweep(ctx context.Context) (swept bool, err error) {
 
 // sweep is the full walk: every collection, from the history id Gmail stood
 // at before the first listing. A change that lands during the walk is read
-// again by the next catch-up, and reading a change twice is harmless.
+// again by the next catch-up, and reading a change twice is harmless. A
+// history id Gmail would not give costs the next refresh a walk, not this one
+// its answer: the id is how memory keeps up cheaply, never what it shows.
 func (p *Plugin) sweep(ctx context.Context) error {
 	id, err := p.src.HistoryID(ctx)
 	if err != nil {
-		return err
+		p.logf("gmail plugin: history id: %v (the next refresh walks again)", err)
 	}
 	for _, c := range mailbox.Collections {
 		if _, err := p.walk(ctx, c); err != nil {

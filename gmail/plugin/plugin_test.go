@@ -47,8 +47,10 @@ type fakeGmail struct {
 	headerErr error
 	// failLabel fails the listing of that one label intersection.
 	failLabel string
-	calls     map[string]int
-	block     chan struct{} // when non-nil, Label waits on it
+	// profileErr fails HistoryID only.
+	profileErr error
+	calls      map[string]int
+	block      chan struct{} // when non-nil, Label waits on it
 	// history is Gmail's change log: off, every catch-up is told its id
 	// expired, so every refresh is a full walk. On, hid is the current id
 	// and log every change recorded after floor, which is the oldest id
@@ -146,6 +148,9 @@ func (f *fakeGmail) HistoryID(context.Context) (uint64, error) {
 	f.calls["profile"]++
 	if f.err != nil {
 		return 0, f.err
+	}
+	if f.profileErr != nil {
+		return 0, f.profileErr
 	}
 	return f.hid, nil
 }
@@ -1228,5 +1233,39 @@ func TestASlowWatcherNeverBlocksARefresh(t *testing.T) {
 			t.Errorf("a slow watcher holds %d marks", len(s.pending))
 		}
 		s.mu.Unlock()
+	}
+}
+
+// The history id is how memory keeps up cheaply, never what it shows: a
+// Gmail that will not give one still gets its grids walked, the failure is
+// said, and the next refresh walks again rather than catching up from
+// nothing.
+func TestAMissingHistoryIDCostsAWalkNotTheGrid(t *testing.T) {
+	f := newFake()
+	f.history = true
+	f.profileErr = status.Error(codes.NotFound, "no profile")
+	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
+	var mu sync.Mutex
+	var lines []string
+	clock := at("2026-01-06T12:00:00Z")
+	p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock },
+		Logf: func(format string, args ...any) {
+			mu.Lock()
+			lines = append(lines, fmt.Sprintf(format, args...))
+			mu.Unlock()
+		}})
+	listAll(t, p)
+	if got := keys(t, p, mailbox.InboxContext); got != "msg:a" {
+		t.Fatalf("inbox = %q", got)
+	}
+	mu.Lock()
+	said := strings.Contains(strings.Join(lines, "\n"), "no profile")
+	mu.Unlock()
+	if !said {
+		t.Error("a failed history id read was swallowed")
+	}
+	refreshed(t, p, &clock, 2*time.Minute)
+	if f.count("history") != 0 || f.count("INBOX") != 2 {
+		t.Errorf("with no id the next refresh did not walk: calls = %v", f.calls)
 	}
 }
