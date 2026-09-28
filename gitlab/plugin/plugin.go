@@ -86,6 +86,8 @@ type Plugin struct {
 	// failed is the last walk's error, by context, until a walk covering that
 	// context lands. A warm read answers it, having not waited to hear it.
 	failed map[string]error
+
+	watch watchers
 }
 
 // flight is one walk in progress; done closes when err is final.
@@ -334,6 +336,9 @@ func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
 	if err == nil {
 		p.saveCache(rootWalk)
 	}
+	// A failed walk announces too: the pages it absorbed are what reads now
+	// answer.
+	p.announce()
 	f.err = err
 	close(f.done)
 }
@@ -423,6 +428,7 @@ func (p *Plugin) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*plug
 		return nil, err
 	}
 	p.mem.MarkDone(id)
+	p.announce()
 	// The flip is worth a restart: save under the standing walk stamp, not a
 	// fresh one — marking done is not a walk and must not extend the window.
 	p.mu.Lock()

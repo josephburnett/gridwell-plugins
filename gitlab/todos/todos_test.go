@@ -718,3 +718,50 @@ func (g *growing) Page(ctx context.Context, state string, page int) (Reply, erro
 	}
 	return r, err
 }
+
+// A memory answers what a walk changed, context by context, and nothing for a
+// walk that changed nothing: that diff is what the plugin announces to the
+// node, so a change it misses never repaints and a change it invents
+// repaints for nothing.
+func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
+	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(2, "2026-08-18T10:00:00Z", StatePending)}}
+	m := NewMemory()
+	sync := func() []string {
+		t.Helper()
+		if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+		return m.TakeChanges().Contexts()
+	}
+	if got := sync(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-17", "week:2026-08-10"}) {
+		t.Errorf("first walk changed %v", got)
+	}
+	if got := sync(); got != nil {
+		t.Errorf("an unchanged walk changed %v", got)
+	}
+	// Todo 1 leaves pending: its week and the root's counts move.
+	src.pending = src.pending[1:]
+	if got := sync(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-10"}) {
+		t.Errorf("a derived done changed %v", got)
+	}
+	// A retitled todo moves its week's listing and not the root's counts.
+	src.pending[0].Target.Title = "renamed"
+	if got := sync(); !reflect.DeepEqual(got, []string{"week:2026-08-17"}) {
+		t.Errorf("a retitle changed %v", got)
+	}
+	// Mark-done is a change like any other; a second one is none.
+	m.MarkDone(2)
+	if got := m.TakeChanges().Contexts(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-17"}) {
+		t.Errorf("mark-done changed %v", got)
+	}
+	m.MarkDone(2)
+	if got := m.TakeChanges().Contexts(); got != nil {
+		t.Errorf("a repeated mark-done changed %v", got)
+	}
+	// A restore is what was already answered: nothing to announce.
+	fresh := NewMemory()
+	fresh.Restore(m.Snapshot())
+	if got := fresh.TakeChanges().Contexts(); got != nil {
+		t.Errorf("a restore changed %v", got)
+	}
+}

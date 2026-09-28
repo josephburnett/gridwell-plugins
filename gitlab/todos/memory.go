@@ -54,6 +54,10 @@ type Memory struct {
 	// resumes is where a failed walk stopped, by the window it was walking.
 	// A walk that succeeds leaves none.
 	resumes map[string]*resumePoint
+	// changedWeeks and rootChanged are what the memory changed since the last
+	// TakeChanges; see note.
+	changedWeeks map[time.Time]bool
+	rootChanged  bool
 }
 
 // resumePoint is a failed walk's mark: the phase that failed, and the page the
@@ -67,7 +71,73 @@ type resumePoint struct {
 
 // NewMemory builds an empty memory.
 func NewMemory() *Memory {
-	return &Memory{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}}
+	return &Memory{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}, changedWeeks: map[time.Time]bool{}}
+}
+
+// Changes is what the memory changed since it was last asked: the weeks whose
+// listing moved, newest first, and whether the root's did.
+type Changes struct {
+	Root  bool
+	Weeks []time.Time
+}
+
+// Contexts names the contexts whose listings moved: the root first, then each
+// week, newest first.
+func (c Changes) Contexts() []string {
+	var out []string
+	if c.Root {
+		out = append(out, RootContext)
+	}
+	for _, w := range c.Weeks {
+		out = append(out, WeekKey(w))
+	}
+	return out
+}
+
+// TakeChanges answers what the memory changed since the last call and forgets
+// it, so each change is answered once.
+func (m *Memory) TakeChanges() Changes {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := Changes{Root: m.rootChanged}
+	for w := range m.changedWeeks {
+		c.Weeks = append(c.Weeks, w)
+	}
+	sort.Slice(c.Weeks, func(i, j int) bool { return c.Weeks[i].After(c.Weeks[j]) })
+	m.changedWeeks, m.rootChanged = map[time.Time]bool{}, false
+	return c
+}
+
+// noteLocked records that a todo's record went from was (nil when new) to now.
+// A week's listing shows every field of its todos; the root's shows only the
+// weeks and their open and done counts, so it moves when a todo arrives, flips
+// state, or changes week. The caller holds m.mu.
+func (m *Memory) noteLocked(was *Todo, now *Todo) {
+	if was != nil && sameRecord(*was, *now) {
+		return
+	}
+	week := WeekStart(now.CreatedAt)
+	m.changedWeeks[week] = true
+	if was == nil || was.State != now.State {
+		m.rootChanged = true
+	}
+	if was != nil {
+		if old := WeekStart(was.CreatedAt); !old.Equal(week) {
+			m.changedWeeks[old] = true
+			m.rootChanged = true
+		}
+	}
+}
+
+// sameRecord compares two records field by field, instants by Equal: a
+// time.Time's == also compares its location and monotonic reading, which
+// differ between a decoded cache file and a decoded page for the same instant.
+func sameRecord(a, b Todo) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) || !a.UpdatedAt.Equal(b.UpdatedAt) {
+		return false
+	}
+	a.CreatedAt, a.UpdatedAt, b.CreatedAt, b.UpdatedAt = time.Time{}, time.Time{}, time.Time{}, time.Time{}
+	return a == b
 }
 
 // Sync refreshes the memory from src. A zero since walks everything: every
@@ -287,7 +357,9 @@ func (m *Memory) deriveDone(seenPending map[int64]bool, coverage time.Time) {
 			continue
 		}
 		if coverage.IsZero() || !t.CreatedAt.Before(coverage) {
+			was := *t
 			t.State = StateDone
+			m.noteLocked(&was, t)
 		}
 	}
 }
@@ -332,9 +404,11 @@ func (m *Memory) absorb(todos []Todo) (unknown int) {
 	defer m.mu.Unlock()
 	for i := range todos {
 		t := todos[i]
-		if _, ok := m.todos[t.ID]; !ok {
+		was, ok := m.todos[t.ID]
+		if !ok {
 			unknown++
 		}
+		m.noteLocked(was, &t)
 		m.todos[t.ID] = &t
 	}
 	return unknown
@@ -372,7 +446,9 @@ func (m *Memory) MarkDone(id int64) bool {
 	if !ok {
 		return false
 	}
+	was := *t
 	t.State = StateDone
+	m.noteLocked(&was, t)
 	return true
 }
 
