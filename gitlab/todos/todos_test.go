@@ -153,12 +153,10 @@ func (f *fakeSource) Page(_ context.Context, state string, page int) (Reply, err
 	return Reply{Todos: ordered[start:end], More: end < len(ordered), Pages: pages}, nil
 }
 
-func itoa(i int) string { return strings.TrimSpace(strings.Repeat(" ", 0) + string(rune('0'+i))) }
-
 func mk(id int64, created string, state string) Todo {
 	var t Todo
 	t.ID, t.CreatedAt, t.State = id, at(created), state
-	t.TargetType, t.Target.IID, t.Target.Title = "Issue", id, "t"+itoa(int(id))
+	t.TargetType, t.Target.IID, t.Target.Title = "Issue", id, "t"+strconv.FormatInt(id, 10)
 	return t
 }
 
