@@ -3,7 +3,11 @@ package todos
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -80,7 +84,8 @@ func TestLabelAndRef(t *testing.T) {
 }
 
 // fakeSource is a paged GitLab: pages of at most per, newest first
-// unless ascending, recording every page it served.
+// unless ascending, recording every page it served. It is safe for a walk's
+// concurrent fetches.
 type fakeSource struct {
 	pending, done []Todo
 	per           int
@@ -90,17 +95,34 @@ type fakeSource struct {
 	// failOn is one page — "pending/3" — that fails once, the way a lid
 	// closing mid-walk does.
 	failOn string
+	// totals has every reply name the list's length in pages, as GitLab's
+	// X-Total-Pages does; without it the walk pages serially.
+	totals bool
+	// delay is how long each page takes; inFlight and maxInFlight count the
+	// pages being served at once.
+	delay                 time.Duration
+	inFlight, maxInFlight int
+
+	mu sync.Mutex
 }
 
-func (f *fakeSource) Page(_ context.Context, state string, page int) ([]Todo, bool, error) {
-	key := state + "/" + itoa(page)
+func (f *fakeSource) Page(_ context.Context, state string, page int) (Reply, error) {
+	key := state + "/" + strconv.Itoa(page)
+	f.mu.Lock()
 	f.calls = append(f.calls, key)
+	f.inFlight++
+	f.maxInFlight = max(f.maxInFlight, f.inFlight)
+	f.mu.Unlock()
+	time.Sleep(f.delay)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inFlight--
 	if f.err != nil {
-		return nil, false, f.err
+		return Reply{}, f.err
 	}
 	if f.failOn == key {
 		f.failOn = ""
-		return nil, false, errors.New("connection reset")
+		return Reply{}, errors.New("connection reset")
 	}
 	src := f.pending
 	if state == StateDone {
@@ -116,15 +138,19 @@ func (f *fakeSource) Page(_ context.Context, state string, page int) ([]Todo, bo
 			}
 		}
 	}
+	var pages int
+	if f.totals {
+		pages = (len(ordered) + f.per - 1) / f.per
+	}
 	start := (page - 1) * f.per
 	if start >= len(ordered) {
-		return nil, false, nil
+		return Reply{Pages: pages}, nil
 	}
 	end := start + f.per
 	if end > len(ordered) {
 		end = len(ordered)
 	}
-	return ordered[start:end], end < len(ordered), nil
+	return Reply{Todos: ordered[start:end], More: end < len(ordered), Pages: pages}, nil
 }
 
 func itoa(i int) string { return strings.TrimSpace(strings.Repeat(" ", 0) + string(rune('0'+i))) }
@@ -513,4 +539,184 @@ func TestAResumeBelongsToItsWindow(t *testing.T) {
 	if got := src.calls[0]; got != "pending/2" {
 		t.Errorf("the root's walk started at %s, want pending/2", got)
 	}
+}
+
+// history is n pending todos, one a day back from 2026-08-25 — n pages at
+// per 1 — and one done todo.
+func history(n int) (pending, done []Todo) {
+	day := at("2026-08-25T10:00:00Z")
+	for i := 0; i < n; i++ {
+		pending = append(pending, mk(int64(100+i), day.AddDate(0, 0, -i).Format(time.RFC3339), StatePending))
+	}
+	return pending, []Todo{mk(1, "2026-01-05T10:00:00Z", StateDone)}
+}
+
+// sortedCalls is the pages a walk asked for, in an order that does not depend
+// on which concurrent fetch reached the source first.
+func sortedCalls(src *fakeSource) string {
+	c := append([]string(nil), src.calls...)
+	sort.Strings(c)
+	return strings.Join(c, " ")
+}
+
+// A walk whose first page names the list's length fetches the rest
+// walkConcurrency at a time: GitLab answers a page in seconds, and a real
+// history of a dozen pages walked one after another outlasted the refresh
+// window. What it remembers is exactly what the serial walk remembers.
+func TestAConcurrentWalkTakesRoundTripsNotPages(t *testing.T) {
+	const pages, delay = 24, 50 * time.Millisecond
+	pending, done := history(pages)
+	serial := &fakeSource{per: 1, pending: pending, done: done}
+	want := NewMemory()
+	if err := want.Sync(context.Background(), serial, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+
+	src := &fakeSource{per: 1, pending: pending, done: done, totals: true, delay: delay}
+	m := NewMemory()
+	start := time.Now()
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	// Serially: 24 pending pages and a done page, 25 delays. Concurrently:
+	// the first page, then 23 more four at a time, then the done page.
+	if limit := (pages + 1) * delay / 2; took > limit {
+		t.Errorf("a %d-page walk took %v, want under %v", pages, took, limit)
+	}
+	if src.maxInFlight > walkConcurrency || src.maxInFlight < 2 {
+		t.Errorf("at most %d pages in flight, want 2..%d", src.maxInFlight, walkConcurrency)
+	}
+	if got := len(src.calls); got != pages+1 {
+		t.Errorf("the walk asked for %d pages, want %d", got, pages+1)
+	}
+	if !reflect.DeepEqual(m.Snapshot(), want.Snapshot()) || !m.Walked() {
+		t.Error("the concurrent walk remembers something other than the serial one")
+	}
+}
+
+// A page that fails mid-walk leaves the same mark a serial walk does — one
+// page before the lowest page that failed — and nothing past it is absorbed,
+// so the next walk resumes there and completes.
+func TestAConcurrentWalkFailureResumesOnePageBack(t *testing.T) {
+	pending, done := history(8)
+	src := &fakeSource{per: 1, pending: pending, done: done, totals: true, failOn: "pending/5"}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
+		t.Fatal("expected the page failure to fail the walk")
+	}
+	if n := len(m.All()); n != 4 {
+		t.Errorf("the failed walk absorbed %d todos, want pages 1-4's 4", n)
+	}
+	src.calls = nil
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if src.calls[0] != "pending/4" {
+		t.Errorf("the resumed walk started at %s, want pending/4", src.calls[0])
+	}
+	if got := sortedCalls(src); got != "done/1 pending/4 pending/5 pending/6 pending/7 pending/8" {
+		t.Errorf("resumed walk = %s", got)
+	}
+	if n := len(m.All()); n != 9 {
+		t.Errorf("after the resume remembered %d, want 9", n)
+	}
+}
+
+// Only a walk that started at the first pending page and saw every page
+// judges absence, however its pages were fetched.
+func TestAConcurrentWalkJudgesAbsenceOnlyWhenComplete(t *testing.T) {
+	all, _ := history(6)
+	src := &fakeSource{per: 1, pending: all, totals: true}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	// The next walk dies on page 5; by the resumed walk, the newest todo
+	// (page 1) has left GitLab's pending list.
+	src.failOn = "pending/5"
+	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
+		t.Fatal("expected the page failure")
+	}
+	src.pending = all[1:]
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if gone, _ := m.Get(all[0].ID); gone.Done() {
+		t.Error("the resumed walk judged a todo it never walked past")
+	}
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if gone, _ := m.Get(all[0].ID); !gone.Done() {
+		t.Error("the complete walk after it must judge absence")
+	}
+	for _, td := range all[1:] {
+		if got, _ := m.Get(td.ID); got.Done() {
+			t.Errorf("todo %d, still pending in GitLab, was flipped", td.ID)
+		}
+	}
+}
+
+// A week walk still stops at the week, judges only within the coverage it
+// reached, and fetches at most walkConcurrency pages past the stop.
+func TestAConcurrentWeekWalkStopsAtTheWeek(t *testing.T) {
+	all, _ := history(16) // 2026-08-25 back to 2026-08-10
+	week := at("2026-08-17T00:00:00Z")
+	src := &fakeSource{per: 1, pending: all, totals: true}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	// One todo inside the week and one before it leave pending.
+	inWeek, before := all[5], all[12] // 08-20, 08-13
+	src.pending = nil
+	for _, td := range all {
+		if td.ID != inWeek.ID && td.ID != before.ID {
+			src.pending = append(src.pending, td)
+		}
+	}
+	src.calls = nil
+	if err := m.Sync(context.Background(), src, week); err != nil {
+		t.Fatal(err)
+	}
+	// Page 9 (08-16) is the first before the week.
+	if n := len(src.calls); n > 9+walkConcurrency+1 {
+		t.Errorf("the week walk asked for %d pages: %s", n, sortedCalls(src))
+	}
+	if got, _ := m.Get(inWeek.ID); !got.Done() {
+		t.Error("a todo inside the walked window, absent from pending, must be done")
+	}
+	if got, _ := m.Get(before.ID); got.Done() {
+		t.Error("a todo outside the walk's coverage must not be judged")
+	}
+}
+
+// A list that grows mid-walk runs past the length its first page named: the
+// walk pages on, one at a time, until a page says it is the last.
+func TestAListLongerThanItsFirstPageSaidIsWalkedToTheEnd(t *testing.T) {
+	pending, done := history(6)
+	src := &growing{fakeSource: fakeSource{per: 1, pending: pending, done: done, totals: true}, said: 3}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(m.All()); n != 7 {
+		t.Errorf("remembered %d, want all 7", n)
+	}
+}
+
+// growing is a fakeSource whose replies name a length of said pages, as a
+// list that grew after the walk began would.
+type growing struct {
+	fakeSource
+	said int
+}
+
+func (g *growing) Page(ctx context.Context, state string, page int) (Reply, error) {
+	r, err := g.fakeSource.Page(ctx, state, page)
+	if r.Pages > 0 {
+		r.Pages = g.said
+	}
+	return r, err
 }

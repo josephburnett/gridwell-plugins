@@ -39,19 +39,19 @@ type retrying struct {
 // done, or the failure is a verdict rather than weather. A verdict — a token
 // without the read_api scope, a malformed request — will not read differently
 // the second time, and retrying it only delays the reason reaching the user.
-func (r retrying) Page(ctx context.Context, state string, page int) ([]todos.Todo, bool, error) {
+func (r retrying) Page(ctx context.Context, state string, page int) (todos.Reply, error) {
 	wait := r.backoff
 	for attempt := 1; ; attempt++ {
-		out, more, err := r.src.Page(ctx, state, page)
+		out, err := r.src.Page(ctx, state, page)
 		if err == nil {
-			return out, more, nil
+			return out, nil
 		}
 		if attempt >= r.attempts || !transient(err) || ctx.Err() != nil {
-			return nil, false, err
+			return todos.Reply{}, err
 		}
 		select {
 		case <-ctx.Done():
-			return nil, false, err
+			return todos.Reply{}, err
 		case <-time.After(wait):
 		}
 		wait *= 2

@@ -40,15 +40,15 @@ type oneShot struct {
 	calls         atomic.Int32
 }
 
-func (f *oneShot) Page(_ context.Context, state string, page int) ([]todos.Todo, bool, error) {
+func (f *oneShot) Page(_ context.Context, state string, page int) (todos.Reply, error) {
 	f.calls.Add(1)
 	if page > 1 {
-		return nil, false, nil
+		return todos.Reply{}, nil
 	}
 	if state == todos.StateDone {
-		return f.done, false, nil
+		return todos.Reply{Todos: f.done}, nil
 	}
-	return f.pending, false, nil
+	return todos.Reply{Todos: f.pending}, nil
 }
 
 // reader collects a ReadContent stream.
@@ -412,13 +412,13 @@ type gated struct {
 	calls atomic.Int32
 }
 
-func (g *gated) Page(_ context.Context, state string, page int) ([]todos.Todo, bool, error) {
+func (g *gated) Page(_ context.Context, state string, page int) (todos.Reply, error) {
 	g.calls.Add(1)
 	<-g.gate
 	if page > 1 || state == todos.StateDone {
-		return nil, false, nil
+		return todos.Reply{}, nil
 	}
-	return []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}, false, nil
+	return todos.Reply{Todos: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, nil
 }
 
 // A burst of concurrent Lists on one cold context shares ONE walk: the
@@ -465,22 +465,22 @@ type paged struct {
 	calls atomic.Int32
 }
 
-func (s *paged) Page(ctx context.Context, state string, page int) ([]todos.Todo, bool, error) {
+func (s *paged) Page(ctx context.Context, state string, page int) (todos.Reply, error) {
 	s.calls.Add(1)
 	if state == todos.StatePending {
 		switch page {
 		case 1:
-			return []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}, true, nil
+			return todos.Reply{Todos: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}, More: true}, nil
 		case 2:
 			select {
 			case <-s.gate:
 			case <-ctx.Done():
-				return nil, false, ctx.Err()
+				return todos.Reply{}, ctx.Err()
 			}
-			return []todos.Todo{mk(2, "2026-08-11T10:00:00Z", "pending")}, false, nil
+			return todos.Reply{Todos: []todos.Todo{mk(2, "2026-08-11T10:00:00Z", "pending")}}, nil
 		}
 	}
-	return nil, false, nil
+	return todos.Reply{}, nil
 }
 
 // TestListStreamsWhileTheWalkRuns: a cold walk over a real history runs
@@ -639,13 +639,13 @@ type failing struct {
 	err error
 }
 
-func (f *failing) Page(context.Context, string, int) ([]todos.Todo, bool, error) {
+func (f *failing) Page(context.Context, string, int) (todos.Reply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return nil, false, f.err
+		return todos.Reply{}, f.err
 	}
-	return []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}, false, nil
+	return todos.Reply{Todos: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, nil
 }
 
 // A warm read does not hide a failed walk: the walk it could not wait for has

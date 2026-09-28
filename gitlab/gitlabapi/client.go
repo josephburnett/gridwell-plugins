@@ -1,6 +1,7 @@
 // Package gitlabapi is the thin HTTP half of the gitlab todos plugin:
 // one pager over GET /api/v4/todos. It knows the wire (token header,
-// per_page, X-Next-Page) and nothing about weeks, memory, or tiles.
+// per_page, X-Next-Page, X-Total-Pages) and nothing about weeks, memory, or
+// tiles.
 package gitlabapi
 
 import (
@@ -51,38 +52,40 @@ func New(base, token string, httpClient *http.Client) *Client {
 // understands: a network failure, a 5xx, or a 429 is Unavailable, meaning "not
 // right now", so the node serves its remembered listing stamped stale; a 401
 // or 403 is PermissionDenied, a verdict, and it surfaces.
-func (c *Client) Page(ctx context.Context, state string, page int) ([]todos.Todo, bool, error) {
+func (c *Client) Page(ctx context.Context, state string, page int) (todos.Reply, error) {
 	q := url.Values{}
 	q.Set("state", state)
 	q.Set("per_page", strconv.Itoa(PerPage))
 	q.Set("page", strconv.Itoa(page))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/v4/todos?"+q.Encode(), nil)
 	if err != nil {
-		return nil, false, status.Errorf(codes.InvalidArgument, "gitlab: %v", err)
+		return todos.Reply{}, status.Errorf(codes.InvalidArgument, "gitlab: %v", err)
 	}
 	req.Header.Set("PRIVATE-TOKEN", c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, false, status.Errorf(codes.Unavailable, "gitlab: %v", err)
+		return todos.Reply{}, status.Errorf(codes.Unavailable, "gitlab: %v", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return nil, false, status.Errorf(codes.Unavailable, "gitlab: read: %v", err)
+		return todos.Reply{}, status.Errorf(codes.Unavailable, "gitlab: read: %v", err)
 	}
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return nil, false, status.Errorf(codes.PermissionDenied, "gitlab: %s (check the token's read_api scope)", resp.Status)
+		return todos.Reply{}, status.Errorf(codes.PermissionDenied, "gitlab: %s (check the token's read_api scope)", resp.Status)
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
-		return nil, false, status.Errorf(codes.Unavailable, "gitlab: %s", resp.Status)
+		return todos.Reply{}, status.Errorf(codes.Unavailable, "gitlab: %s", resp.Status)
 	case resp.StatusCode != http.StatusOK:
-		return nil, false, status.Errorf(codes.Internal, "gitlab: %s: %s", resp.Status, trim(body))
+		return todos.Reply{}, status.Errorf(codes.Internal, "gitlab: %s: %s", resp.Status, trim(body))
 	}
 	var out []todos.Todo
 	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, false, status.Errorf(codes.Internal, "gitlab: decode todos: %v", err)
+		return todos.Reply{}, status.Errorf(codes.Internal, "gitlab: decode todos: %v", err)
 	}
-	return out, resp.Header.Get("X-Next-Page") != "", nil
+	// A missing or malformed X-Total-Pages is zero; see todos.Reply.Pages.
+	pages, _ := strconv.Atoi(resp.Header.Get("X-Total-Pages"))
+	return todos.Reply{Todos: out, More: resp.Header.Get("X-Next-Page") != "", Pages: pages}, nil
 }
 
 // MarkDone marks one todo done: POST /api/v4/todos/:id/mark_as_done, the

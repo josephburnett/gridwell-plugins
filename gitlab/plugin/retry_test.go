@@ -20,20 +20,20 @@ type flaky struct {
 	calls    int
 }
 
-func (f *flaky) Page(_ context.Context, _ string, _ int) ([]todos.Todo, bool, error) {
+func (f *flaky) Page(_ context.Context, _ string, _ int) (todos.Reply, error) {
 	f.calls++
 	if f.calls <= f.failures {
-		return nil, false, f.err
+		return todos.Reply{}, f.err
 	}
-	return []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}, false, nil
+	return todos.Reply{Todos: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, nil
 }
 
 // A page that fails on weather is retried in place: the walk sees one
 // answer, not one failure, and a lid closing mid-walk costs a page.
 func TestAPageRetriesInPlace(t *testing.T) {
 	src := &flaky{err: status.Error(codes.Unavailable, "connection reset"), failures: 2}
-	got, _, err := retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}.Page(context.Background(), todos.StatePending, 1)
-	if err != nil || len(got) != 1 {
+	got, err := retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}.Page(context.Background(), todos.StatePending, 1)
+	if err != nil || len(got.Todos) != 1 {
 		t.Fatalf("page = (%v, %v), want the answer after the retries", got, err)
 	}
 	if src.calls != 3 {
@@ -45,7 +45,7 @@ func TestAPageRetriesInPlace(t *testing.T) {
 // hanging on a GitLab that is down.
 func TestRetriesRunOutAndTheReasonSurvives(t *testing.T) {
 	src := &flaky{err: status.Error(codes.Unavailable, "connection reset"), failures: 99}
-	_, _, err := retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}.Page(context.Background(), todos.StatePending, 1)
+	_, err := retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}.Page(context.Background(), todos.StatePending, 1)
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v, want the source's Unavailable", err)
 	}
@@ -59,7 +59,7 @@ func TestRetriesRunOutAndTheReasonSurvives(t *testing.T) {
 func TestAVerdictIsNotRetried(t *testing.T) {
 	for _, code := range []codes.Code{codes.PermissionDenied, codes.Unauthenticated, codes.InvalidArgument} {
 		src := &flaky{err: status.Error(code, "no"), failures: 99}
-		if _, _, err := (retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}).Page(context.Background(), todos.StatePending, 1); status.Code(err) != code {
+		if _, err := (retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}).Page(context.Background(), todos.StatePending, 1); status.Code(err) != code {
 			t.Fatalf("%v = %v", code, err)
 		}
 		if src.calls != 1 {
@@ -68,7 +68,7 @@ func TestAVerdictIsNotRetried(t *testing.T) {
 	}
 	// An error carrying no status is weather: nothing says it is a verdict.
 	plain := &flaky{err: errors.New("boom"), failures: 1}
-	if _, _, err := (retrying{src: plain, attempts: pageAttempts, backoff: time.Millisecond}).Page(context.Background(), todos.StatePending, 1); err != nil {
+	if _, err := (retrying{src: plain, attempts: pageAttempts, backoff: time.Millisecond}).Page(context.Background(), todos.StatePending, 1); err != nil {
 		t.Fatalf("plain error = %v", err)
 	}
 }
@@ -80,7 +80,7 @@ func TestACancelledContextStopsRetrying(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	if _, _, err := (retrying{src: src, attempts: pageAttempts, backoff: time.Hour}).Page(ctx, todos.StatePending, 1); status.Code(err) != codes.Unavailable {
+	if _, err := (retrying{src: src, attempts: pageAttempts, backoff: time.Hour}).Page(ctx, todos.StatePending, 1); status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v", err)
 	}
 	if src.calls != 1 || time.Since(start) > time.Second {

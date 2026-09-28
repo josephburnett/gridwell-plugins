@@ -10,11 +10,29 @@ import (
 
 // Source pages GitLab's todo list for one state, NEWEST FIRST (GitLab
 // orders /todos by id descending, and ids rise with creation). Page
-// numbers start at 1; more is false on the last page. The ordering is
-// verified per page, never assumed — see Sync.
+// numbers start at 1. The ordering is verified per page, never assumed — see
+// Sync.
 type Source interface {
-	Page(ctx context.Context, state string, page int) (todos []Todo, more bool, err error)
+	Page(ctx context.Context, state string, page int) (Reply, error)
 }
+
+// Reply is one page of a Source's list.
+type Reply struct {
+	Todos []Todo
+	// More is false on the last page.
+	More bool
+	// Pages is how many pages the list held when this page was served, zero
+	// when the source does not say — GitLab omits it on very large lists. A
+	// walk that knows it fetches pages concurrently; one that does not pages
+	// serially.
+	Pages int
+}
+
+// walkConcurrency is how many pages a walk fetches at once: GitLab answers
+// one page in seconds, and pages are independent, so the walk is bound by
+// round trips rather than bandwidth — while a handful keeps one walk from
+// crowding the API's rate limit.
+const walkConcurrency = 4
 
 // Memory is everything the plugin has seen, keyed by todo id. A todo that
 // vanishes from GitLab keeps its record here and shows as done; nothing is
@@ -68,6 +86,10 @@ func NewMemory() *Memory {
 // disables the early stop, and the walk runs to the end, rather than risk
 // marking live todos done.
 //
+// Pages are fetched concurrently when GitLab names the list's length, but
+// absorbed in page order (see walkPages), so everything below reads as for a
+// serial walk: "the failure" is the first page that failed.
+//
 // A walk that fails keeps everything it absorbed and leaves a mark: the next
 // walk over the same window starts one page before the failure instead of at
 // the first page again, so a lid closing mid-walk costs a page rather than
@@ -94,67 +116,151 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 		// coverage is the oldest creation time the pending walk provably
 		// enumerated past; zero means everything.
 		coverage := since
-		fullWalk := false
-		for page := pendingFrom; ; page++ {
-			pageStart := time.Now()
-			todos, more, err := src.Page(ctx, StatePending, page)
-			logPage(StatePending, page, len(todos), more, time.Since(pageStart), err)
-			if err != nil {
-				m.keepResume(since, &resumePoint{state: StatePending, page: rewind(page)})
-				return err
+		failed, err := walkPages(ctx, src, StatePending, pendingFrom, func(r Reply) bool {
+			m.absorb(r.Todos)
+			for i := range r.Todos {
+				seenPending[r.Todos[i].ID] = true
 			}
-			m.absorb(todos)
-			for i := range todos {
-				seenPending[todos[i].ID] = true
+			if !r.More {
+				coverage = time.Time{}
+				return true
 			}
-			if !more {
-				fullWalk = true
-				break
-			}
-			if since.IsZero() || !descending(todos) {
-				continue
-			}
-			if len(todos) > 0 && todos[len(todos)-1].CreatedAt.Before(since) {
-				break
-			}
-		}
-		if fullWalk {
-			coverage = time.Time{}
+			return pastSince(r.Todos, since)
+		})
+		if err != nil {
+			m.keepResume(since, &resumePoint{state: StatePending, page: rewind(failed)})
+			return err
 		}
 		if pendingFrom == 1 {
 			m.deriveDone(seenPending, coverage)
 		}
 	}
 
-	for page := doneFrom; ; page++ {
-		pageStart := time.Now()
-		todos, more, err := src.Page(ctx, StateDone, page)
-		logPage(StateDone, page, len(todos), more, time.Since(pageStart), err)
-		if err != nil {
-			m.keepResume(since, &resumePoint{state: StateDone, page: rewind(page)})
-			return err
-		}
-		unknown := m.absorb(todos)
-		if !more {
-			m.mu.Lock()
-			m.doneComplete = true
-			m.mu.Unlock()
-			break
-		}
+	failed, err := walkPages(ctx, src, StateDone, doneFrom, func(r Reply) bool {
+		unknown := m.absorb(r.Todos)
 		m.mu.Lock()
-		complete := m.doneComplete
-		m.mu.Unlock()
-		if complete && unknown == 0 {
-			break
+		defer m.mu.Unlock()
+		if !r.More {
+			m.doneComplete = true
+			return true
 		}
-		if since.IsZero() || !descending(todos) {
-			continue
+		if m.doneComplete && unknown == 0 {
+			return true
 		}
-		if len(todos) > 0 && todos[len(todos)-1].CreatedAt.Before(since) {
-			break
-		}
+		return pastSince(r.Todos, since)
+	})
+	if err != nil {
+		m.keepResume(since, &resumePoint{state: StateDone, page: rewind(failed)})
+		return err
 	}
 	return nil
+}
+
+// pastSince reports whether a week walk may stop after this page: it reached
+// todos created before since, on a page proven newest-first.
+func pastSince(todos []Todo, since time.Time) bool {
+	if since.IsZero() || len(todos) == 0 || !descending(todos) {
+		return false
+	}
+	return todos[len(todos)-1].CreatedAt.Before(since)
+}
+
+// walkPages pages one state from page from, handing each page to visit IN
+// PAGE ORDER until visit says stop or a page fails, which it answers with the
+// page number. The first page names the list's length; the pages after it,
+// up to that length, are fetched walkConcurrency at a time, at most that many
+// ahead of the page visit has reached, so an early stop wastes little. Pages
+// past the named length — the list grew mid-walk — or a list of unknown length
+// are paged one after another.
+func walkPages(ctx context.Context, src Source, state string, from int, visit func(Reply) (stop bool)) (failed int, err error) {
+	fetch := func(ctx context.Context, page int) (Reply, error) {
+		start := time.Now()
+		r, err := src.Page(ctx, state, page)
+		if ctx.Err() == nil || err == nil {
+			// A page the walk abandoned is not news; one it asked for is.
+			logPage(state, page, len(r.Todos), r.More, time.Since(start), err)
+		}
+		return r, err
+	}
+	r, err := fetch(ctx, from)
+	if err != nil {
+		return from, err
+	}
+	if visit(r) || !r.More {
+		return 0, nil
+	}
+	next := from + 1
+	if last := r.Pages; last >= next {
+		stop, failed, err := walkAhead(ctx, fetch, next, last, visit)
+		if err != nil || stop {
+			return failed, err
+		}
+		next = last + 1
+	}
+	for page := next; ; page++ {
+		r, err := fetch(ctx, page)
+		if err != nil {
+			return page, err
+		}
+		if visit(r) || !r.More {
+			return 0, nil
+		}
+	}
+}
+
+// walkAhead is walkPages over pages first..last with the fetches running
+// ahead of the visits. It returns once every fetch it started has returned,
+// so no request outlives the walk. stop is false only when every page was
+// visited and the last one said there is more.
+func walkAhead(ctx context.Context, fetch func(context.Context, int) (Reply, error), first, last int,
+	visit func(Reply) bool) (stop bool, failed int, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel()
+
+	type answer struct {
+		r   Reply
+		err error
+	}
+	answers := make([]chan answer, last-first+1)
+	for i := range answers {
+		answers[i] = make(chan answer, 1)
+	}
+	// slots holds one token per page fetched and not yet visited.
+	slots := make(chan struct{}, walkConcurrency)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range answers {
+			select {
+			case slots <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				r, err := fetch(ctx, first+i)
+				answers[i] <- answer{r, err}
+			}(i)
+		}
+	}()
+
+	for i := range answers {
+		a := <-answers[i]
+		<-slots
+		if a.err != nil {
+			return true, first + i, a.err
+		}
+		if visit(a.r) || !a.r.More {
+			return true, 0, nil
+		}
+	}
+	return false, 0, nil
 }
 
 // logPage narrates one page of a walk: which list, how far in, what it
