@@ -311,6 +311,19 @@ func (m *Memory) Week(start time.Time) []Todo {
 	return out
 }
 
+// Shows reports whether the memory has anything to answer a listing with: any
+// todo at all for a zero week, else any todo created in the week starting
+// there. It is the line between a warm read, answered at once, and a cold one,
+// which waits on the walk.
+func (m *Memory) Shows(week time.Time) bool {
+	if week.IsZero() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(m.todos) > 0
+	}
+	return len(m.Week(week)) > 0
+}
+
 // WeekSummary is one week of the root listing.
 type WeekSummary struct {
 	Start      time.Time

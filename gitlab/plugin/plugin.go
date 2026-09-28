@@ -42,11 +42,12 @@ const displayName = "gitlab todos"
 // rather than cost a round of API pages each time.
 const DefaultRefresh = 30 * time.Second
 
-// DefaultFirstAnswer bounds how long a List waits on a walk in flight before
-// answering what memory holds so far. GitLab pages newest-first, so the first
-// answer is the most recent weeks; the walk streams on behind, and the node's
-// refresh paints the rest in as pages land. A real cold walk runs minutes —
-// waiting for all of it showed the user "loading" the whole time.
+// DefaultFirstAnswer bounds how long a cold List — one the memory has nothing
+// to answer with — waits on a walk in flight before answering what memory
+// holds so far. GitLab pages newest-first, so the first answer is the most
+// recent weeks; the walk streams on behind, and the node's refresh paints the
+// rest in as pages land. A real cold walk runs minutes — waiting for all of
+// it showed the user "loading" the whole time.
 const DefaultFirstAnswer = time.Second
 
 // Marker is the write half of the source: marking one todo done at GitLab.
@@ -78,10 +79,13 @@ type Plugin struct {
 	mu       sync.Mutex
 	syncedAt map[string]time.Time // context → last successful walk
 	// flights are the walks in progress, by context. A List that finds one
-	// waits for it instead of starting its own, because the node lists a
+	// joins it instead of starting its own, because the node lists a
 	// context on every GetGrid and GetTile and a burst of reads must cost
 	// GitLab one walk, not one per reader.
 	flights map[string]*flight
+	// failed is the last walk's error, by context, until a walk covering that
+	// context lands. A warm read answers it, having not waited to hear it.
+	failed map[string]error
 }
 
 // flight is one walk in progress; done closes when err is final.
@@ -125,6 +129,7 @@ func New(src todos.Source, o Options) *Plugin {
 		logf:        o.Logf,
 		syncedAt:    map[string]time.Time{},
 		flights:     map[string]*flight{},
+		failed:      map[string]error{},
 	}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
@@ -212,8 +217,8 @@ func (p *Plugin) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			// No verdict to read: the walk logs its own start and finish, and
-			// sync answers the first-answer bound rather than the walk's end.
-			// The refresher's whole job is to make sure a walk happens.
+			// sync answers before the walk ends. The refresher's whole job is
+			// to make sure a walk happens.
 			_ = p.sync(ctx, todos.RootContext, time.Time{})
 		}
 	}
@@ -251,10 +256,15 @@ func (p *Plugin) freshLocked(ctxKey string) bool {
 // already in flight for the context, or for the root, which covers every
 // week, is shared — one walk per burst of readers — and no walk belongs to
 // its starter: it runs detached, so no reader's patience or hangup can kill
-// or restart it. The caller waits at most firstAnswer, then answers what
-// memory holds so far: pages land newest-first, so a partial answer is the
-// most recent weeks, and the node's refresh paints in the rest.
+// or restart it. A read the memory already Shows something for answers at
+// once, with the last failed walk's error if there is one: on a real history
+// a walk outlasts the refresh window, so the refresher is nearly always
+// walking, and waiting on it would tax every read. Only a cold read waits, at
+// most firstAnswer, then answers what memory holds so far: pages land
+// newest-first, so a partial answer is the most recent weeks, and the node's
+// refresh paints in the rest.
 func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error {
+	warm := p.mem.Shows(since)
 	p.mu.Lock()
 	if p.freshLocked(ctxKey) {
 		p.mu.Unlock()
@@ -272,7 +282,16 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 		p.flights[ctxKey] = f
 		go p.walk(ctxKey, since, f)
 	}
+	var last error
+	for _, k := range []string{ctxKey, todos.RootContext} {
+		if last = p.failed[k]; last != nil {
+			break
+		}
+	}
 	p.mu.Unlock()
+	if warm {
+		return last
+	}
 
 	select {
 	case <-f.done:
@@ -298,14 +317,20 @@ func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
 	p.mu.Lock()
 	if err == nil {
 		p.syncedAt[ctxKey] = p.now()
+		if ctxKey == todos.RootContext {
+			clear(p.failed) // a root walk covers every week
+		} else {
+			delete(p.failed, ctxKey)
+		}
+	} else {
+		p.failed[ctxKey] = err
 	}
 	rootWalk := p.syncedAt[todos.RootContext]
 	delete(p.flights, ctxKey)
 	p.mu.Unlock()
 	// The cache lands before the flight closes: a listing that waited for the
-	// walk is one a restart can repeat, and a listing answered early on the
-	// firstAnswer bound becomes repeatable as soon as the walk behind it
-	// lands.
+	// walk is one a restart can repeat, and a listing answered without
+	// waiting becomes repeatable as soon as the walk behind it lands.
 	if err == nil {
 		p.saveCache(rootWalk)
 	}
@@ -418,7 +443,7 @@ func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
 	}
 	if start, ok := todos.ParseWeekKey(req.Key); ok {
-		if len(p.mem.Week(start)) > 0 {
+		if p.mem.Shows(start) {
 			return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
 		}
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil

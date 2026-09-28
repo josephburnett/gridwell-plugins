@@ -37,11 +37,11 @@ func mk(id int64, created, state string) todos.Todo {
 // oneShot serves whole lists in one page and counts calls.
 type oneShot struct {
 	pending, done []todos.Todo
-	calls         int
+	calls         atomic.Int32
 }
 
 func (f *oneShot) Page(_ context.Context, state string, page int) ([]todos.Todo, bool, error) {
-	f.calls++
+	f.calls.Add(1)
 	if page > 1 {
 		return nil, false, nil
 	}
@@ -80,8 +80,8 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	if root.Authoritative || len(root.Entries) != 2 || root.Entries[0].Key != "week:2026-08-24" || root.Entries[1].Label != "2026-08-17 · 1 open · 1 done" {
 		t.Fatalf("root = %v", root.Entries)
 	}
-	if src.calls != 2 {
-		t.Fatalf("outset walk made %d calls, want 2 (pending + done)", src.calls)
+	if src.calls.Load() != 2 {
+		t.Fatalf("outset walk made %d calls, want 2 (pending + done)", src.calls.Load())
 	}
 	// The root walk covered every week: a descent inside the window is
 	// answered from memory, no GitLab round trip.
@@ -89,8 +89,8 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if src.calls != 2 {
-		t.Errorf("a fresh week re-walked GitLab (%d calls)", src.calls)
+	if src.calls.Load() != 2 {
+		t.Errorf("a fresh week re-walked GitLab (%d calls)", src.calls.Load())
 	}
 	if len(wk.Entries) != 2 || wk.Entries[0].ServesPage || wk.Entries[0].Kind != "text" || wk.Entries[0].Key != "todo:1" {
 		t.Fatalf("week = %v", wk.Entries)
@@ -99,16 +99,19 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 		t.Errorf("Tuesday hint = %v", wk.Entries[0].PlacementHint)
 	}
 	// Todo 1 is marked done in GitLab. Inside the window nothing moves;
-	// past it, the descent's targeted walk flips the label.
+	// past it, a read starts the descent's targeted walk, and the label flips
+	// when that walk lands.
 	src.pending = src.pending[1:]
 	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
 	if strings.HasPrefix(wk.Entries[0].Label, todos.DoneMark) {
 		t.Error("state changed inside the refresh window")
 	}
 	clock = clock.Add(DefaultRefresh + time.Second)
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
+	landed(t, p)
 	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
-	if src.calls != 4 || !strings.HasPrefix(wk.Entries[0].Label, todos.DoneMark+" !1 ") || wk.Entries[0].StatusDetail != todos.StateDone {
-		t.Errorf("after the window: calls=%d entry=%v", src.calls, wk.Entries[0])
+	if src.calls.Load() != 4 || !strings.HasPrefix(wk.Entries[0].Label, todos.DoneMark+" !1 ") || wk.Entries[0].StatusDetail != todos.StateDone {
+		t.Errorf("after the window: calls=%d entry=%v", src.calls.Load(), wk.Entries[0])
 	}
 	// The todo did not go away.
 	if len(wk.Entries) != 2 {
@@ -214,8 +217,8 @@ func TestRestartAnswersFromTheCacheFileWithoutWalking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cold.calls != 0 {
-		t.Errorf("the restart walked GitLab %d times; the last walk is still inside the refresh window", cold.calls)
+	if n := cold.calls.Load(); n != 0 {
+		t.Errorf("the restart walked GitLab %d times; the last walk is still inside the refresh window", n)
 	}
 	if len(root.Entries) != 2 || root.Entries[1].Label != "2026-08-17 · 1 open · 1 done" {
 		t.Fatalf("root after restart = %v", root.Entries)
@@ -262,7 +265,8 @@ func TestARestoredWalkTimeStillExpires(t *testing.T) {
 		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
 			t.Fatal(err)
 		}
-		if next.calls == 0 {
+		landed(t, p)
+		if next.calls.Load() == 0 {
 			t.Errorf("%s: the restart served a stale memory instead of walking", tc.name)
 		}
 	}
@@ -387,8 +391,9 @@ func TestTheRefresherNeverRunsHotterThanItsFloor(t *testing.T) {
 		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
 			t.Fatal(err)
 		}
+		landed(t, p)
 	}
-	if n := p.src.(retrying).src.(*oneShot).calls; n != 4 {
+	if n := p.src.(retrying).src.(*oneShot).calls.Load(); n != 4 {
 		t.Errorf("two reads on a 1ns window made %d page calls, want 4 (both walked)", n)
 	}
 }
@@ -519,5 +524,153 @@ func TestListStreamsWhileTheWalkRuns(t *testing.T) {
 	}
 	if n := src.calls.Load(); n != 3 {
 		t.Fatalf("source paged %d times, want 3 (pending 1, pending 2, done 1 — one walk)", n)
+	}
+}
+
+// landed waits out every walk in flight, its cache write included: a warm
+// read answers before the walk it started has landed.
+func landed(t *testing.T, p *Plugin) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		p.mu.Lock()
+		var f *flight
+		for _, ex := range p.flights {
+			f = ex
+			break
+		}
+		p.mu.Unlock()
+		if f == nil {
+			return
+		}
+		select {
+		case <-f.done:
+		case <-deadline:
+			t.Fatal("a walk never landed")
+		}
+	}
+}
+
+// warmOver builds a plugin over src whose memory holds the last process's
+// walk of pending todos 1 and 2, stamped past the refresh window: warm, and
+// not fresh.
+func warmOver(t *testing.T, src todos.Source, firstAnswer time.Duration) *Plugin {
+	t.Helper()
+	dir := t.TempDir()
+	clock := at("2026-08-25T12:00:00Z")
+	seed := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending"), mk(2, "2026-08-25T10:00:00Z", "pending")}}
+	first := New(seed, Options{StateDir: dir, Now: func() time.Time { return clock }})
+	if _, err := first.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatal(err)
+	}
+	later := clock.Add(DefaultRefresh + time.Second)
+	return New(src, Options{StateDir: dir, FirstAnswer: firstAnswer, Now: func() time.Time { return later }})
+}
+
+// A read over a memory that has anything to show answers it at once, however
+// slow the walk behind it: the refresher walks for longer than its window on
+// a real history, so a read that waited on the walk paid the first-answer
+// bound on nearly every listing. The walk still runs and lands.
+func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
+	src := &gated{gate: make(chan struct{})}
+	p := warmOver(t, src, time.Hour)
+	ctx := context.Background()
+	for _, key := range []string{todos.RootContext, "week:2026-08-17"} {
+		answered := make(chan *pluginv1.ListResponse, 1)
+		go func() {
+			resp, err := p.List(ctx, &pluginv1.ListRequest{Context: key})
+			if err != nil {
+				t.Error(err)
+			}
+			answered <- resp
+		}()
+		select {
+		case resp := <-answered:
+			if len(resp.GetEntries()) == 0 {
+				t.Errorf("%s: a warm read answered nothing", key)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s: a warm read waited on a blocked walk", key)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for src.calls.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the warm read started no walk")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// gated serves only todo 1, so a landed walk judges todo 2 done.
+	close(src.gate)
+	landed(t, p)
+	root, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := root.SourceLabel; got != displayName+" · 1 open · 1 done" {
+		t.Errorf("after the walk landed the root says %q", got)
+	}
+}
+
+// A week the memory holds nothing for is cold, whatever else it holds: the
+// read waits up to the first-answer bound, as a cold start does.
+func TestAColdReadStillWaitsForTheFirstAnswer(t *testing.T) {
+	src := &gated{gate: make(chan struct{})}
+	const bound = 50 * time.Millisecond
+	ps := []*Plugin{New(src, Options{FirstAnswer: bound}), warmOver(t, src, bound)}
+	for _, p := range ps {
+		start := time.Now()
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "week:2026-01-05"}); err != nil {
+			t.Fatal(err)
+		}
+		if took := time.Since(start); took < bound {
+			t.Errorf("a cold read answered in %v, before the first-answer bound", took)
+		}
+	}
+	close(src.gate)
+	for _, p := range ps {
+		landed(t, p)
+	}
+}
+
+// failing answers every page with err until err is cleared.
+type failing struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (f *failing) Page(context.Context, string, int) ([]todos.Todo, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, false, f.err
+	}
+	return []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}, false, nil
+}
+
+// A warm read does not hide a failed walk: the walk it could not wait for has
+// its say on the next read, so a revoked token still surfaces and an outage
+// still reaches the node as "not right now". A walk that lands clears it.
+func TestAWarmReadAnswersTheLastWalksFailure(t *testing.T) {
+	src := &failing{err: status.Error(codes.PermissionDenied, "no read_api")}
+	p := warmOver(t, src, time.Hour)
+	ctx := context.Background()
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatalf("the first warm read = %v; it answers before its walk fails", err)
+	}
+	landed(t, p)
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("the read after a refused walk = %v, want PermissionDenied", err)
+	}
+	// That read started another walk, refused too; the one after the
+	// source recovers lands.
+	src.mu.Lock()
+	src.err = nil
+	src.mu.Unlock()
+	landed(t, p)
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	landed(t, p)
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Errorf("the read after a landed walk = %v", err)
 	}
 }
