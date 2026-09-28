@@ -99,6 +99,11 @@ func (p *Plugin) changedSince(before map[string][]mailbox.View) []string {
 func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	s, cancel := p.watchers.subscribe()
 	defer cancel()
+	// The node counts the stream open when its header arrives, and only then
+	// clears a refusal or catches up after a drop (docs/plugin-authoring.md).
+	if err := stream.SendHeader(nil); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-stream.Context().Done():

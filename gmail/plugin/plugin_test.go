@@ -2,12 +2,15 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"google.golang.org/grpc/metadata"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1116,18 +1119,39 @@ func TestTheConsistencyPassWalksAgain(t *testing.T) {
 // the test hangs up. A non-nil gate holds every Send until it closes.
 type watchStream struct {
 	pluginv1.Plugin_WatchServer
-	ctx  context.Context
-	sent chan string
-	gate chan struct{}
+	ctx    context.Context
+	sent   chan string
+	gate   chan struct{}
+	header atomic.Bool
 }
 
-func (w *watchStream) Context() context.Context { return w.ctx }
+func (w *watchStream) Context() context.Context     { return w.ctx }
+func (w *watchStream) SendHeader(metadata.MD) error { w.header.Store(true); return nil }
 func (w *watchStream) Send(c *pluginv1.Change) error {
+	if !w.header.Load() {
+		return errors.New("a Change before the header")
+	}
 	if w.gate != nil {
 		<-w.gate
 	}
 	w.sent <- c.GetContextChanged().GetContext()
 	return nil
+}
+
+// The node counts a Watch stream open at its header, so a plugin that only
+// speaks at its first change leaves a refusal standing and a dropped stream
+// uncaught-up until something happens to change.
+func TestWatchSendsItsHeaderOnAccept(t *testing.T) {
+	f := newFake()
+	p, _ := warmHistory(t, f, Options{})
+	w := watch(t, p, nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for !w.header.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("Watch accepted the stream and sent no header")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // watch opens Watch and waits until it is subscribed.

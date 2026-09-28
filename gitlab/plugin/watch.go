@@ -105,6 +105,11 @@ func (s *watcher) next() (string, bool) {
 func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	s := p.watch.subscribe()
 	defer p.watch.unsubscribe(s)
+	// The node counts the stream open when its header arrives, and only then
+	// clears a refusal or catches up after a drop (docs/plugin-authoring.md).
+	if err := stream.SendHeader(nil); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-stream.Context().Done():

@@ -2,11 +2,14 @@ package plugin
 
 import (
 	"context"
+	"errors"
+	"google.golang.org/grpc/metadata"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,17 +54,39 @@ func fixture(t *testing.T) []mail.Event {
 // got. A non-nil block holds each Send until closed.
 type watcher struct {
 	pluginv1.Plugin_WatchServer
-	ctx   context.Context
-	got   chan string
-	block chan struct{}
+	ctx    context.Context
+	got    chan string
+	block  chan struct{}
+	header atomic.Bool
 }
 
+func (w *watcher) SendHeader(metadata.MD) error { w.header.Store(true); return nil }
 func (w *watcher) Send(c *pluginv1.Change) error {
+	if !w.header.Load() {
+		return errors.New("a Change before the header")
+	}
 	if w.block != nil {
 		<-w.block
 	}
 	w.got <- c.GetContextChanged().GetContext()
 	return nil
+}
+
+// The node counts a Watch stream open at its header, so a plugin that only
+// speaks at its first change leaves a refusal standing and a dropped stream
+// uncaught-up until something happens to change.
+func TestWatchSendsItsHeaderOnAccept(t *testing.T) {
+	f := newFake()
+	f.feed = newFeed()
+	p := stable(f, Options{Refresh: time.Hour})
+	w := watchFrom(t, p, nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for !w.header.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("Watch accepted the stream and sent no header")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 func (w *watcher) Context() context.Context { return w.ctx }
 

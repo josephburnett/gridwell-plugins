@@ -2,9 +2,12 @@ package plugin
 
 import (
 	"context"
+	"errors"
+	"google.golang.org/grpc/metadata"
 	"reflect"
 	"slices"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,18 +19,38 @@ import (
 // sent, and Send parks on block when it is non-nil — a slow node.
 type watchStream struct {
 	pluginv1.Plugin_WatchServer
-	ctx   context.Context
-	sent  chan *pluginv1.Change
-	block chan struct{}
+	ctx    context.Context
+	sent   chan *pluginv1.Change
+	block  chan struct{}
+	header atomic.Bool
 }
 
-func (w *watchStream) Context() context.Context { return w.ctx }
+func (w *watchStream) Context() context.Context     { return w.ctx }
+func (w *watchStream) SendHeader(metadata.MD) error { w.header.Store(true); return nil }
 func (w *watchStream) Send(c *pluginv1.Change) error {
+	if !w.header.Load() {
+		return errors.New("a Change before the header")
+	}
 	if w.block != nil {
 		<-w.block
 	}
 	w.sent <- c
 	return nil
+}
+
+// The node counts a Watch stream open at its header, so a plugin that only
+// speaks at its first change leaves a refusal standing and a dropped stream
+// uncaught-up until something happens to change.
+func TestWatchSendsItsHeaderOnAccept(t *testing.T) {
+	p := New(&oneShot{}, Options{})
+	w := watching(t, p, nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for !w.header.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("Watch accepted the stream and sent no header")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // watching subscribes a Watch stream to p and returns it once subscribed.

@@ -155,6 +155,11 @@ func (p *Plugin) setLive(live bool) {
 func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	s := p.changes.subscribe()
 	defer p.changes.unsubscribe(s)
+	// The node counts the stream open when its header arrives, and only then
+	// clears a refusal or catches up after a drop (docs/plugin-authoring.md).
+	if err := stream.SendHeader(nil); err != nil {
+		return err
+	}
 	send := func(key string) error {
 		return stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{
 			ContextChanged: &pluginv1.ContextChanged{Context: key},
