@@ -92,6 +92,12 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+func isLive(p *Plugin) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.live
+}
+
 // idle waits until no walk is in flight or owed.
 func idle(t *testing.T, p *Plugin) {
 	t.Helper()
@@ -410,4 +416,85 @@ func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 		}
 		return got[mail.ImboxContext] && got[mail.ReplyLaterContext] && got[mail.SetAsideContext]
 	})
+}
+
+// While the feed is live, memory is current: no read and no clock walks a
+// box. Once it disconnects, the refresh window rules again.
+func TestALiveFeedKeepsReadsFromWalking(t *testing.T) {
+	var mu sync.Mutex
+	clock := at("2026-01-06T12:00:00Z")
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	p, f, _, evs := live(t, Options{Refresh: time.Minute, Now: now})
+	mu.Lock()
+	clock = clock.Add(time.Hour)
+	mu.Unlock()
+	for _, c := range mail.Collections {
+		listed(t, p, c.Key)
+	}
+	idle(t, p)
+	if n := f.count("imbox"); n != 1 {
+		t.Fatalf("a read under a live feed walked (%d walks)", n)
+	}
+
+	send(t, f.feed, evs[lineDisconnected])
+	eventually(t, "the feed is down", func() bool { return !isLive(p) })
+	listed(t, p, mail.ImboxContext)
+	idle(t, p)
+	if n := f.count("imbox"); n != 2 {
+		t.Fatalf("a stale read with the feed down walked %d times, want 2", n)
+	}
+}
+
+// A catch-up walk that failed leaves its box not current, though the feed is
+// live: the next read walks it.
+func TestAFailedCatchUpIsWalkedByTheNextRead(t *testing.T) {
+	p, f, _, evs := live(t, Options{})
+	f.mu.Lock()
+	f.err = status.Error(codes.Unavailable, "network")
+	f.mu.Unlock()
+	send(t, f.feed, evs[lineReadyAgain])
+	eventually(t, "the catch-up runs", func() bool { return f.count("imbox") == 2 })
+	idle(t, p)
+	f.mu.Lock()
+	f.err = nil
+	f.mu.Unlock()
+	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+	idle(t, p)
+	if n := f.count("imbox"); n != 3 {
+		t.Fatalf("imbox walked %d times, want the first, the failed catch-up and the read's", n)
+	}
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+		t.Fatalf("a landed walk left the failure standing: %v", err)
+	}
+}
+
+// A feed that ends on a verdict — not signed in — is every read's answer, not
+// only the log's, until a feed reaches ready again. The memory it leaves is
+// still there to answer from; the error says it is no longer current.
+func TestAFeedVerdictSurfacesOnTheNextRead(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	p, f, _, evs := live(t, Options{WatchBackoff: 20 * time.Millisecond, Logf: func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, format)
+	}})
+	f.feed.exit <- status.Error(codes.PermissionDenied, "hey plugin: watch: Not logged in (Run: hey auth login)")
+	eventually(t, "the verdict reaches a read", func() bool {
+		_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+		return status.Code(err) == codes.PermissionDenied && strings.Contains(err.Error(), "Not logged in")
+	})
+	mu.Lock()
+	if !slices.ContainsFunc(logs, func(l string) bool { return strings.Contains(l, "watch ended") }) {
+		t.Errorf("the verdict was not logged: %v", logs)
+	}
+	mu.Unlock()
+
+	<-f.feed.starts
+	send(t, f.feed, evs[lineReady])
+	eventually(t, "the feed is live", func() bool { return isLive(p) })
+	idle(t, p)
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+		t.Fatalf("a feed that is live again left the verdict standing: %v", err)
+	}
 }

@@ -34,17 +34,25 @@ const SubscriberBuffer = 64
 // watch keeps one `hey watch` running until ctx ends, restarting it with
 // backoff when it stops. A feed the CLI refuses as usage (1 or 8: a CLI with
 // no watch) is not restarted: the refresher's walks keep memory instead, and
-// the log says so once.
+// the log says so once. Any other verdict is also every read's answer
+// (watchErr) until a feed reaches ready.
 func (p *Plugin) watch(ctx context.Context) {
 	backoff := p.watchBackoff
 	for {
 		live, err := p.watchOnce(ctx)
+		p.setLive(false)
 		if ctx.Err() != nil {
 			return
 		}
-		if status.Code(err) == codes.InvalidArgument {
+		switch status.Code(err) {
+		case codes.InvalidArgument:
 			p.logf("hey plugin: this CLI cannot watch (%v); collections are re-walked every %s instead", err, p.refresh)
 			return
+		case codes.Unavailable:
+		default:
+			p.mu.Lock()
+			p.watchErr = err
+			p.mu.Unlock()
 		}
 		if live {
 			backoff = p.watchBackoff
@@ -104,9 +112,16 @@ func (p *Plugin) watchOnce(ctx context.Context) (live bool, err error) {
 func (p *Plugin) apply(ev mail.Event) {
 	switch ev.Change {
 	case mail.ChangeReady:
+		p.mu.Lock()
+		p.live = true
+		p.liveGen++
+		p.watchErr = nil
+		p.mu.Unlock()
 		for _, c := range mail.Collections {
 			p.rewalk(c)
 		}
+	case mail.ChangeDisconnected:
+		p.setLive(false)
 	case mail.ChangeResync:
 		if c, ok := mail.LookupBox(ev.Box); ok {
 			p.rewalk(c)
@@ -125,6 +140,12 @@ func (p *Plugin) apply(ev mail.Event) {
 			p.rewalk(c)
 		}
 	}
+}
+
+func (p *Plugin) setLive(live bool) {
+	p.mu.Lock()
+	p.live = live
+	p.mu.Unlock()
 }
 
 // Watch streams a ContextChanged for every collection whose listing changes

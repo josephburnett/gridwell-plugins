@@ -42,13 +42,14 @@ const Kind = "hey"
 // server.yaml's label; this is the fallback when none is configured.
 const displayName = "hey"
 
-// DefaultRefresh bounds how often one collection is re-walked. The node lists
-// a context on every GetGrid and GetTile, and a descent must feel instant
-// rather than cost a CLI run each time.
+// DefaultRefresh bounds how often one collection is re-walked while the live
+// feed is not live; while it is, the feed keeps memory and nothing is walked
+// on a clock (freshLocked).
 const DefaultRefresh = time.Minute
 
-// DefaultFirstAnswer bounds how long a List waits on a walk in flight before
-// answering what memory holds so far. A cold walk is a whole box read through
+// DefaultFirstAnswer bounds how long a cold List — one the memory has no
+// listing for — waits on a walk in flight before answering what memory holds
+// so far. A cold walk is a whole box read through
 // a subprocess; waiting for all of it would show the user "loading" the whole
 // time, and the node's refresh paints the rest in when it lands.
 const DefaultFirstAnswer = 2 * time.Second
@@ -82,6 +83,19 @@ type Plugin struct {
 
 	mu       sync.Mutex
 	walkedAt map[string]time.Time // collection key → last successful walk
+	// live is true from the feed's ready until it disconnects or ends.
+	// liveGen counts readies, and caughtUp holds, per collection, the ready
+	// whose catch-up walk landed: memory is current while both agree.
+	live     bool
+	liveGen  int
+	caughtUp map[string]int
+	// failed is the last walk's error, by collection, until one lands; a
+	// warm read answers it, having not waited to hear it.
+	failed map[string]error
+	// watchErr is the verdict the feed last ended on — not signed in, no
+	// CLI — until a feed reaches ready. Every read answers it: with the feed
+	// down, memory is only as current as the walks.
+	watchErr error
 	// flights are the walks in progress, by collection. A List that finds one
 	// waits for it instead of starting its own, because the node lists a
 	// context on every GetGrid and GetTile and a burst of reads must cost HEY
@@ -136,6 +150,8 @@ func New(src Source, o Options) *Plugin {
 		now:          o.Now,
 		logf:         o.Logf,
 		walkedAt:     map[string]time.Time{},
+		caughtUp:     map[string]int{},
+		failed:       map[string]error{},
 		flights:      map[string]*flight{},
 		again:        map[string]bool{},
 		watchBackoff: o.WatchBackoff,
@@ -169,8 +185,8 @@ func New(src Source, o Options) *Plugin {
 
 // loadCache folds the last process's sweep into memory, each collection's
 // landing time included: a walk is fresh for the refresh window whichever
-// process ran it, so a restart inside that window answers every listing from
-// the file without running the CLI. A missing file is the first boot, which
+// process ran it, so until the feed is live a restart inside that window
+// answers every listing from the file without running the CLI. A missing file is the first boot, which
 // is not news; anything else is reported and the plugin starts cold, because
 // a cache is disposable and a sweep rebuilds it, but a cache that cannot be
 // read must not vanish in silence.
@@ -266,11 +282,17 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	}, nil
 }
 
-// freshLocked reports whether the collection was walked within the refresh
-// window. A walk stamped in the FUTURE is not fresh: the stamp can come from
-// the cache file, and a clock that has since stepped back would otherwise
-// freeze the plugin on a stale memory. The caller holds p.mu.
+// freshLocked reports whether memory is current for the collection. While the
+// feed is live, that is whether the collection's catch-up walk landed: the
+// feed keeps it from there, and no clock re-walks it. Otherwise it is whether
+// the collection was walked within the refresh window. A walk stamped in the
+// FUTURE is not fresh: the stamp can come from the cache file, and a clock
+// that has since stepped back would otherwise freeze the plugin on a stale
+// memory. The caller holds p.mu.
 func (p *Plugin) freshLocked(key string) bool {
+	if p.live {
+		return p.caughtUp[key] == p.liveGen
+	}
 	t, ok := p.walkedAt[key]
 	if !ok {
 		return false
@@ -282,19 +304,29 @@ func (p *Plugin) freshLocked(key string) bool {
 // sync makes one collection answerable: fresh memory as-is, else a walk. A
 // walk already in flight for it is shared — one CLI run per burst of readers
 // — and no walk belongs to its starter: it runs detached, so no reader's
-// patience or hangup can kill or restart it. The caller waits at most
-// firstAnswer, then answers what memory holds so far.
+// patience or hangup can kill or restart it. A read the memory already Shows
+// a listing for answers at once, with the last failure if there is one; only
+// a cold read waits, at most firstAnswer, then answers what memory holds so
+// far.
 func (p *Plugin) sync(ctx context.Context, c mail.Collection) error {
+	warm := p.mem.Shows(c.Key)
 	p.mu.Lock()
+	last := p.failed[c.Key]
+	if last == nil {
+		last = p.watchErr
+	}
 	if p.freshLocked(c.Key) {
 		p.mu.Unlock()
-		return nil
+		return last
 	}
 	f, running := p.flights[c.Key]
 	if !running {
 		f = p.startLocked(c)
 	}
 	p.mu.Unlock()
+	if warm {
+		return last
+	}
 
 	select {
 	case <-f.done:
@@ -325,7 +357,7 @@ func (p *Plugin) rewalk(c mail.Collection) {
 func (p *Plugin) startLocked(c mail.Collection) *flight {
 	f := &flight{done: make(chan struct{})}
 	p.flights[c.Key] = f
-	go p.walk(c, f)
+	go p.walk(c, f, p.liveGen)
 	return f
 }
 
@@ -334,7 +366,10 @@ func (p *Plugin) startLocked(c mail.Collection) *flight {
 // runner's own timeout, so a dead source ends the walk with its error rather
 // than hanging it. A walk that changed the listing says so to every Watch
 // subscriber, whichever door asked for it.
-func (p *Plugin) walk(c mail.Collection, f *flight) {
+//
+// gen is the feed's ready count when the walk started: a walk that began
+// after a ready is that ready's catch-up.
+func (p *Plugin) walk(c mail.Collection, f *flight, gen int) {
 	p.logf("hey plugin: walk %q starting", c.Key)
 	start := time.Now()
 	p.mem.BeginWalk(c.Key)
@@ -350,6 +385,10 @@ func (p *Plugin) walk(c mail.Collection, f *flight) {
 	p.mu.Lock()
 	if err == nil {
 		p.walkedAt[c.Key] = p.now()
+		p.caughtUp[c.Key] = gen
+		delete(p.failed, c.Key)
+	} else {
+		p.failed[c.Key] = err
 	}
 	delete(p.flights, c.Key)
 	if p.again[c.Key] {

@@ -20,7 +20,8 @@ import (
 // keys are
 //
 //	binary   the hey CLI to run (default: "hey" on PATH)
-//	refresh  how often a collection is re-walked (default: 1m)
+//	refresh  how often a collection is re-walked while the live feed is
+//	         down (default: 1m)
 //
 // A missing or unusable CLI is not refused here. It is a fact about the host
 // that can change while the node runs — the user installs it, or signs in —

@@ -226,11 +226,12 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	if got := f.count("imbox"); got != 1 {
 		t.Fatalf("a fresh listing walked again (%d)", got)
 	}
-	// Past it: one more walk.
+	// Past it: one more walk, behind a read that answers from memory.
 	clock = clock.Add(2 * time.Minute)
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
 		t.Fatal(err)
 	}
+	idle(t, p)
 	if got := f.count("imbox"); got != 2 {
 		t.Fatalf("a stale listing walked %d times", got)
 	}
@@ -455,6 +456,7 @@ func TestAThreadKeepsItsKeyAcrossCollections(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	idle(t, p)
 	later, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ReplyLaterContext})
 	if err != nil {
 		t.Fatal(err)
@@ -661,5 +663,95 @@ func TestOverTheRealCLIContract(t *testing.T) {
 	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "thread:999"})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED {
 		t.Fatalf("a capped sweep probed %v", got.Presence)
+	}
+}
+
+// A read the memory has a listing for never waits on the walk behind it,
+// however slow: the walk outlives the read, and the node's refresh paints
+// its answer in.
+func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
+	f := newFake()
+	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
+	var mu sync.Mutex
+	clock := at("2026-01-06T12:00:00Z")
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	p := stable(f, Options{Refresh: time.Minute, FirstAnswer: time.Hour, Now: now})
+	ctx := context.Background()
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	clock = clock.Add(2 * time.Minute)
+	mu.Unlock()
+	f.block = make(chan struct{})
+	done := make(chan *pluginv1.ListResponse, 1)
+	go func() {
+		resp, _ := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+		done <- resp
+	}()
+	select {
+	case resp := <-done:
+		if resp == nil || len(resp.Entries) != 1 {
+			t.Fatalf("warm read = %+v", resp)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a warm read waited on the walk")
+	}
+	close(f.block)
+	idle(t, p)
+	if got := f.count("imbox"); got != 2 {
+		t.Errorf("the stale read started %d walks in all, want 2", got)
+	}
+}
+
+// A read the memory has nothing for waits for the walk, up to the first-answer
+// bound.
+func TestAColdReadWaitsTheFirstAnswer(t *testing.T) {
+	f := newFake()
+	f.block = make(chan struct{})
+	defer close(f.block)
+	const bound = 50 * time.Millisecond
+	p := stable(f, Options{FirstAnswer: bound})
+	start := time.Now()
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d < bound {
+		t.Fatalf("a cold read answered after %s, before the %s bound", d, bound)
+	}
+}
+
+// A warm read does not wait to hear a walk fail, so it answers the last
+// failure instead: an outage still reaches the node as Unavailable.
+func TestAWarmReadAnswersTheLastFailedWalk(t *testing.T) {
+	f := newFake()
+	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
+	var mu sync.Mutex
+	clock := at("2026-01-06T12:00:00Z")
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	p := stable(f, Options{Refresh: time.Minute, Now: now})
+	ctx := context.Background()
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	clock = clock.Add(2 * time.Minute)
+	mu.Unlock()
+	f.mu.Lock()
+	f.err = status.Error(codes.Unavailable, "network")
+	f.mu.Unlock()
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+	idle(t, p)
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("err = %v, want the failed walk's Unavailable", err)
+	}
+	f.mu.Lock()
+	f.err = nil
+	f.mu.Unlock()
+	idle(t, p)
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+	idle(t, p)
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+		t.Fatalf("a walk that landed left the failure standing: %v", err)
 	}
 }

@@ -30,7 +30,7 @@ Two optional keys:
 | key | default | meaning |
 |---|---|---|
 | `binary` | `hey` on PATH | the CLI to run |
-| `refresh` | `1m` | how often one collection is re-walked |
+| `refresh` | `1m` | how often one collection is re-walked while the live feed is down |
 
 ## The CLI contract
 
@@ -148,6 +148,17 @@ by itself — but one that has not said `ready` within 2m is restarted. A CLI
 that refuses `watch` as usage (exit 1 or 8: it has no such command) is not
 restarted; the log says so and the plugin keeps memory by walking instead.
 
+While the feed is live, and a collection's catch-up walk has landed, nothing
+walks that collection on a clock: the feed keeps it. While the feed is down —
+not started, disconnected, restarting, or refused — `refresh` rules again:
+each collection is re-walked when its last walk is older than that.
+
+A read answers from memory at once whenever memory has a listing of the
+collection, even while a walk it started runs behind it; it carries the last
+failed walk's error until a walk lands, and the verdict the feed ended on
+(not signed in, no CLI) until the feed is live again. Only a read with no listing to
+answer — the first ever — waits for the walk, at most 2s.
+
 `Watch` sends only `ContextChanged`, one per collection whose listing changed,
 whether the feed or a walk changed it. It never sends `EntryRemoved`: the
 listings are not authoritative, and a thread that leaves one box is usually
@@ -158,8 +169,9 @@ it reads again it is told all three collections changed.
 ## State
 
 `state_dir` holds one file, `mail.json`: the threads the plugin has seen and
-each collection's membership, so a restart answers instantly and does not
-re-run the CLI inside the refresh window. It is disposable — delete it any
+each collection's membership, so a restart answers instantly. The feed's
+first `ready` then walks every box behind that answer, because nothing says
+what changed while no plugin was running. It is disposable — delete it any
 time; the next sweep rewarms it. No credential is ever written there.
 
 Email bodies are not cached. A listing is small; a mailbox's bodies are not.
