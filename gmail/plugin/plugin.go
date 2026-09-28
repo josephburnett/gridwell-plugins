@@ -49,8 +49,9 @@ const displayName = "gmail"
 // rather than cost a round trip to Google each time.
 const DefaultRefresh = time.Minute
 
-// DefaultFirstAnswer bounds how long a List waits on a walk in flight before
-// answering what memory holds so far. A cold walk is a label listing plus a
+// DefaultFirstAnswer bounds how long a cold List — one the memory has no
+// answer for — waits on a walk in flight before answering what memory holds
+// so far. A cold walk is a label listing plus a
 // metadata read per new message; waiting for all of it would show the user
 // "loading" the whole time, and the node's refresh paints the rest in when it
 // lands.
@@ -98,10 +99,13 @@ type Plugin struct {
 	mu       sync.Mutex
 	walkedAt map[string]time.Time // collection key → last successful walk
 	// flights are the walks in progress, by collection. A List that finds one
-	// waits for it instead of starting its own, because the node lists a
-	// context on every GetGrid and GetTile and a burst of reads must cost
-	// Gmail one walk, not one per reader.
+	// joins it instead of starting its own, because the node lists a context
+	// on every GetGrid and GetTile and a burst of reads must cost Gmail one
+	// walk, not one per reader.
 	flights map[string]*flight
+	// failed is the last walk's error, by collection, until a walk of that
+	// collection lands. A warm read answers it, having not waited to hear it.
+	failed map[string]error
 }
 
 // flight is one walk in progress; done closes when err is final.
@@ -139,6 +143,7 @@ func New(src Source, o Options) *Plugin {
 		logf:        o.Logf,
 		walkedAt:    map[string]time.Time{},
 		flights:     map[string]*flight{},
+		failed:      map[string]error{},
 	}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
@@ -236,8 +241,7 @@ func (p *Plugin) Run(ctx context.Context) {
 		case <-t.C:
 			for _, c := range mailbox.Collections {
 				// No verdict to read: the walk logs its own start and finish,
-				// and sync answers the first-answer bound rather than the
-				// walk's end. The refresher's whole job is to make sure a walk
+				// and sync answers before the walk ends. The refresher's whole job is to make sure a walk
 				// happens.
 				_ = p.sync(ctx, c)
 			}
@@ -275,9 +279,13 @@ func (p *Plugin) freshLocked(key string) bool {
 // sync makes one collection answerable: fresh memory as-is, else a walk. A
 // walk already in flight for it is shared — one pass per burst of readers —
 // and no walk belongs to its starter: it runs detached, so no reader's
-// patience or hangup can kill or restart it. The caller waits at most
+// patience or hangup can kill or restart it. A read the memory already Shows
+// something for answers at once, with the last failed walk's error if there
+// is one: waiting on the walk would tax every read past the refresh window
+// for an answer memory already has. Only a cold read waits, at most
 // firstAnswer, then answers what memory holds so far.
 func (p *Plugin) sync(ctx context.Context, c mailbox.Collection) error {
+	warm := p.mem.Shows(c.Key)
 	p.mu.Lock()
 	if p.freshLocked(c.Key) {
 		p.mu.Unlock()
@@ -289,7 +297,11 @@ func (p *Plugin) sync(ctx context.Context, c mailbox.Collection) error {
 		p.flights[c.Key] = f
 		go p.walkFlight(c, f)
 	}
+	last := p.failed[c.Key]
 	p.mu.Unlock()
+	if warm {
+		return last
+	}
 
 	select {
 	case <-f.done:
@@ -315,11 +327,15 @@ func (p *Plugin) walkFlight(c mailbox.Collection, f *flight) {
 	p.mu.Lock()
 	if err == nil {
 		p.walkedAt[c.Key] = p.now()
+		delete(p.failed, c.Key)
+	} else {
+		p.failed[c.Key] = err
 	}
 	delete(p.flights, c.Key)
 	p.mu.Unlock()
 	// The cache lands before the flight closes: a listing that waited for the
-	// walk is one a restart can repeat.
+	// walk is one a restart can repeat, and a listing answered without
+	// waiting becomes repeatable as soon as the walk behind it lands.
 	if err == nil {
 		p.saveCache()
 	}

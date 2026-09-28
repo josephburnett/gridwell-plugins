@@ -212,6 +212,16 @@ func (m *Memory) memberLocked(collection, id string) bool {
 	return false
 }
 
+// Shows reports whether the memory has an answer for the collection: some
+// walk produced a usable membership, or it holds a member. It is the line
+// between a warm read, answered at once, and a cold one, which waits on the
+// walk.
+func (m *Memory) Shows(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.complete[key] || len(m.members[key]) > 0
+}
+
 // Swept reports whether every collection has produced a usable membership at
 // least once. It is the one gate on answering GONE: only a pass over all of
 // them can say a message is in none.

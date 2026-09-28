@@ -64,8 +64,11 @@ func (f *fakeGmail) hold(collection string, ms ...mailbox.Message) {
 }
 
 func (f *fakeGmail) Label(_ context.Context, labelIDs []string, limit int) ([]string, bool, error) {
-	if f.block != nil {
-		<-f.block
+	f.mu.Lock()
+	block := f.block
+	f.mu.Unlock()
+	if block != nil {
+		<-block
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -162,6 +165,7 @@ func listAll(t *testing.T, p *Plugin) {
 			t.Fatalf("%s: %v", c.Key, err)
 		}
 	}
+	landed(t, p)
 }
 
 // The two collections are two contexts, and the inbox is the root: the
@@ -229,6 +233,7 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
 		t.Fatal(err)
 	}
+	landed(t, p)
 	if got := f.count("INBOX"); got != 2 {
 		t.Fatalf("a stale listing walked %d times", got)
 	}
@@ -253,6 +258,8 @@ func TestASecondWalkOnlyFetchesWhatIsNew(t *testing.T) {
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"), msg("b", "two", "2026-01-05T10:00:00Z"),
 		msg("c", "three", "2026-01-05T11:00:00Z"))
 	clock = clock.Add(2 * time.Minute)
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	landed(t, p)
 	resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
 	if err != nil {
 		t.Fatal(err)
@@ -291,6 +298,8 @@ func TestUnreadComesFromASecondListing(t *testing.T) {
 	f.labels["INBOX+UNREAD"] = nil
 	f.mu.Unlock()
 	clock = clock.Add(2 * time.Minute)
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	landed(t, p)
 	resp, err = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
 	if err != nil {
 		t.Fatal(err)
@@ -769,5 +778,75 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 	empty, _ := p.Search(ctx, &pluginv1.SearchRequest{Query: "  "})
 	if len(empty.Results) != 0 {
 		t.Error("an empty query matched")
+	}
+}
+
+// landed waits out every walk in flight, its cache write included: a warm
+// read answers before the walk it started has landed.
+func landed(t *testing.T, p *Plugin) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		p.mu.Lock()
+		var f *flight
+		for _, ex := range p.flights {
+			f = ex
+			break
+		}
+		p.mu.Unlock()
+		if f == nil {
+			return
+		}
+		select {
+		case <-f.done:
+		case <-deadline:
+			t.Fatal("a walk never landed")
+		}
+	}
+}
+
+// A read over a memory that has an answer gives it at once, however slow the
+// walk behind it: past the refresh window every read would otherwise pay the
+// first-answer bound for an answer memory already had. The walk still runs
+// and lands, and a walk that failed is answered by the next warm read.
+func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
+	f := newFake()
+	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
+	clock := at("2026-01-06T12:00:00Z")
+	p := stable(f, Options{Refresh: time.Minute, FirstAnswer: time.Hour, Now: func() time.Time { return clock }})
+	ctx := context.Background()
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
+		t.Fatal(err)
+	}
+
+	f.mu.Lock()
+	f.block = make(chan struct{})
+	f.mu.Unlock()
+	clock = clock.Add(2 * time.Minute)
+	answered := make(chan *pluginv1.ListResponse, 1)
+	go func() {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+		if err != nil {
+			t.Error(err)
+		}
+		answered <- resp
+	}()
+	select {
+	case resp := <-answered:
+		if len(resp.GetEntries()) != 1 {
+			t.Errorf("a warm read answered %d entries", len(resp.GetEntries()))
+		}
+	case <-time.After(time.Second):
+		close(f.block)
+		t.Fatal("a warm read waited on a blocked walk")
+	}
+
+	f.mu.Lock()
+	f.err = status.Error(codes.PermissionDenied, "the stored token was refused")
+	f.mu.Unlock()
+	close(f.block)
+	landed(t, p)
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("after a failed walk a warm read answered %v, want the walk's verdict", err)
 	}
 }
