@@ -151,7 +151,7 @@ func TestDeleteRefusals(t *testing.T) {
 		t.Fatalf("a refusal must not write: calls = %v", m.calls)
 	}
 
-	unwalked := New(&oneShot{}, Options{Marker: m, Refresh: time.Hour, Now: func() time.Time { return at("2026-08-18T10:00:00Z") }})
+	unwalked := New(&oneShot{}, Options{Marker: m, FullRefresh: time.Hour, Now: func() time.Time { return at("2026-08-18T10:00:00Z") }})
 	unwalked.syncedAt[todos.RootContext] = at("2026-08-18T10:00:00Z") // fresh, so Delete never waits on a walk
 	if _, err := unwalked.Delete(ctx, &pluginv1.DeleteRequest{Key: "todo:999"}); status.Code(err) != codes.Unavailable {
 		t.Errorf("unknown todo before the first walk = %v, want Unavailable", err)

@@ -105,7 +105,7 @@ func TestAWalkAnnouncesExactlyTheContextsItMoved(t *testing.T) {
 	w := watching(t, p, nil)
 	walk := func() {
 		t.Helper()
-		clock = clock.Add(DefaultRefresh + time.Second)
+		clock = clock.Add(DefaultFullRefresh + time.Second)
 		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +148,7 @@ func TestASlowWatcherNeverBlocksAWalk(t *testing.T) {
 	monday := at("2026-08-24T10:00:00Z")
 	for i := 0; i < watchBuffer+5; i++ {
 		src.pending = append(src.pending, mk(int64(i+1), monday.AddDate(0, 0, -7*i).Format(time.RFC3339), "pending"))
-		clock = clock.Add(DefaultRefresh + time.Second)
+		clock = clock.Add(DefaultFullRefresh + time.Second)
 		walked := make(chan struct{})
 		go func() {
 			_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})

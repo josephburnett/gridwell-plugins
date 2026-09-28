@@ -31,12 +31,16 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	// node that hands none — an older one, or a hand-launched binary — is no
 	// error: the plugin then keeps its memory for its process lifetime.
 	opts := Options{StateDir: cfg["state_dir"]}
-	if r := strings.TrimSpace(cfg["refresh"]); r != "" {
+	for key, into := range map[string]*time.Duration{"refresh": &opts.Refresh, "full_refresh": &opts.FullRefresh} {
+		r := strings.TrimSpace(cfg[key])
+		if r == "" {
+			continue
+		}
 		d, err := time.ParseDuration(r)
 		if err != nil || d <= 0 {
-			return nil, fmt.Errorf("gitlab plugin: refresh %q is not a duration (e.g. 30s, 5m)", r)
+			return nil, fmt.Errorf("gitlab plugin: %s %q is not a duration (e.g. 30s, 10m)", key, r)
 		}
-		opts.Refresh = d
+		*into = d
 	}
 	tokenFile := strings.TrimSpace(cfg["token_file"])
 	if tokenFile == "" {

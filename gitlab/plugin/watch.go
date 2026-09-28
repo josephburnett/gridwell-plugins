@@ -84,7 +84,8 @@ func (s *watcher) take() []string {
 }
 
 // Watch streams a ContextChanged for every listing a change to memory moved:
-// a walk landing, or failing having absorbed pages, and a mark-done. A todo
+// a walk landing, or failing having absorbed pages, a glance, and a
+// mark-done. A todo
 // that leaves pending is a ContextChanged for its week, never an
 // EntryRemoved: it stays listed, done-marked (see the package comment), and an
 // EntryRemoved would have the node drop a tile the next listing returns.
@@ -106,10 +107,13 @@ func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchSer
 	}
 }
 
-// announce hands every watcher the listings memory's latest changes moved.
-// Everything that changes memory calls it once its change has landed.
-func (p *Plugin) announce() {
-	if cs := p.mem.TakeChanges().Contexts(); len(cs) > 0 {
+// announce hands every watcher the listings memory's latest changes moved,
+// and reports whether there were any. Everything that changes memory calls it
+// once its change has landed.
+func (p *Plugin) announce() bool {
+	cs := p.mem.TakeChanges().Contexts()
+	if len(cs) > 0 {
 		p.watch.publish(cs)
 	}
+	return len(cs) > 0
 }

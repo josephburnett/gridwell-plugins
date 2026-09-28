@@ -37,10 +37,18 @@ const Kind = "gitlab"
 // configured, and the root grid's source label.
 const displayName = "gitlab todos"
 
-// DefaultRefresh bounds how often one context re-walks GitLab. The node lists
-// a context on every GetGrid and GetTile, and a descent must feel instant
-// rather than cost a round of API pages each time.
+// DefaultRefresh is how often the refresher glances at GitLab's newest
+// pending page (config `refresh`): the delay before a new todo shows. GitLab
+// pushes nothing about a user's todos, so the plugin polls, and a glance is
+// one request.
 const DefaultRefresh = 30 * time.Second
+
+// DefaultFullRefresh is how long a full walk stays fresh (config
+// `full_refresh`): the delay before a todo done or deleted at GitLab shows
+// done, since only a full walk sees absence. The node lists a context on
+// every GetGrid and GetTile, and inside the window those reads cost GitLab
+// nothing.
+const DefaultFullRefresh = 10 * time.Minute
 
 // DefaultFirstAnswer bounds how long a cold List — one the memory has nothing
 // to answer with — waits on a walk in flight before answering what memory
@@ -65,6 +73,7 @@ type Plugin struct {
 	marker      Marker
 	mem         *todos.Memory
 	refresh     time.Duration
+	fullRefresh time.Duration
 	firstAnswer time.Duration
 	now         func() time.Time
 	// cache is the memory's file in the state directory, "" when the node
@@ -99,6 +108,7 @@ type flight struct {
 // Options tunes a plugin. Zero values take the defaults.
 type Options struct {
 	Refresh     time.Duration
+	FullRefresh time.Duration
 	FirstAnswer time.Duration
 	Now         func() time.Time
 	// Marker is the mark-as-done writer. Nil means read-only: Delete answers
@@ -126,6 +136,7 @@ func New(src todos.Source, o Options) *Plugin {
 		marker:      o.Marker,
 		mem:         todos.NewMemory(),
 		refresh:     o.Refresh,
+		fullRefresh: o.FullRefresh,
 		firstAnswer: o.FirstAnswer,
 		now:         o.Now,
 		logf:        o.Logf,
@@ -135,6 +146,9 @@ func New(src todos.Source, o Options) *Plugin {
 	}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
+	}
+	if p.fullRefresh <= 0 {
+		p.fullRefresh = DefaultFullRefresh
 	}
 	if p.firstAnswer <= 0 {
 		p.firstAnswer = DefaultFirstAnswer
@@ -153,7 +167,7 @@ func New(src todos.Source, o Options) *Plugin {
 }
 
 // loadCache folds the last process's walk into memory, its landing time
-// included: a walk is fresh for the refresh window whichever process ran it,
+// included: a walk is fresh for the full-refresh window whichever process ran it,
 // so a restart inside that window answers every listing from the file without
 // touching GitLab. A missing file is the first boot, which is not news;
 // anything else is reported and the plugin starts cold, because a cache is
@@ -188,15 +202,14 @@ func (p *Plugin) saveCache(walkedAt time.Time) {
 	}
 }
 
-// MinRefresherInterval is the fastest the background refresher runs, whatever
-// the refresh window says. The refresher is a warmer, not a poller: a window
-// shorter than a walk would leave it always walking, hammering GitLab and
-// answering every read from a walk that started before the read arrived.
-// Reads still walk on the configured window — a tiny one is how a test says
-// "walk on every read", and that keeps working.
+// MinRefresherInterval is the fastest the background refresher ticks, whatever
+// `refresh` says: a tick is a request to GitLab, and a tick faster than the
+// request would leave the refresher always asking. Reads still walk on the
+// full-refresh window — a tiny one is how a test says "walk on every read",
+// and that keeps working.
 const MinRefresherInterval = time.Second
 
-// refresherInterval is how often the warmer walks: the refresh window, floored.
+// refresherInterval is how often the refresher ticks: `refresh`, floored.
 func (p *Plugin) refresherInterval() time.Duration {
 	if p.refresh < MinRefresherInterval {
 		return MinRefresherInterval
@@ -204,12 +217,9 @@ func (p *Plugin) refresherInterval() time.Duration {
 	return p.refresh
 }
 
-// Run keeps the memory warm until ctx is done: one goroutine walking the root
-// context on the refresher's interval, so the walk has happened before a read
-// asks rather than because one did. It shares the flights and the freshness
-// window with the reads, so a tick that lands on a memory a read has just
-// refreshed costs GitLab nothing. FromConfig starts it; a walk that fails is
-// reported and the next tick tries again, one page back.
+// Run keeps the memory current until ctx is done: one goroutine ticking on
+// the refresher's interval, so a change has been read before a read asks
+// rather than because one did. FromConfig starts it.
 func (p *Plugin) Run(ctx context.Context) {
 	t := time.NewTicker(p.refresherInterval())
 	defer t.Stop()
@@ -218,11 +228,50 @@ func (p *Plugin) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			// No verdict to read: the walk logs its own start and finish, and
-			// sync answers before the walk ends. The refresher's whole job is
-			// to make sure a walk happens.
-			_ = p.sync(ctx, todos.RootContext, time.Time{})
+			p.tick(ctx)
 		}
+	}
+}
+
+// tick is the refresher's one rule: a full walk of the root once the last one
+// has aged out of the full-refresh window, else a glance at the newest
+// pending page. It shares the flights and the window with the reads, so a
+// tick after a read's walk only glances, and a tick while a root walk runs
+// does nothing, since that walk reads everything a glance would.
+func (p *Plugin) tick(ctx context.Context) {
+	p.mu.Lock()
+	_, walking := p.flights[todos.RootContext]
+	fresh := p.freshLocked(todos.RootContext)
+	p.mu.Unlock()
+	switch {
+	case walking:
+	case !fresh:
+		// No verdict to read: the walk logs and records its own, and sync
+		// answers before the walk ends.
+		_ = p.sync(ctx, todos.RootContext, time.Time{})
+	default:
+		p.glance(ctx)
+	}
+}
+
+// glance absorbs what is new at the top of GitLab's pending list and announces
+// it. Its failure is the root's, as a walk's is, so the next read answers it;
+// its success clears that, and only that — a glance runs only while the last
+// root walk is fresh, which is to say it landed. It does not stamp the walk
+// window: it proved nothing about absence.
+func (p *Plugin) glance(ctx context.Context) {
+	err := p.mem.Glance(ctx, p.src)
+	p.mu.Lock()
+	if err != nil {
+		p.logf("gitlab plugin: glance: %v", err)
+		p.failed[todos.RootContext] = err
+	} else {
+		delete(p.failed, todos.RootContext)
+	}
+	walked := p.syncedAt[todos.RootContext]
+	p.mu.Unlock()
+	if p.announce() {
+		p.saveCache(walked)
 	}
 }
 
@@ -236,7 +285,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	}, nil
 }
 
-// freshLocked reports whether ctxKey was walked within the refresh window. A
+// freshLocked reports whether ctxKey was walked within the full-refresh window. A
 // root walk covers every week, so a week is fresh under either. A walk stamped
 // in the FUTURE is not fresh: the root stamp can come from the cache file, and
 // a clock that has since stepped back would otherwise freeze the plugin on a
@@ -245,7 +294,7 @@ func (p *Plugin) freshLocked(ctxKey string) bool {
 	now := p.now()
 	for _, k := range []string{ctxKey, todos.RootContext} {
 		if t, ok := p.syncedAt[k]; ok {
-			if d := now.Sub(t); d >= 0 && d < p.refresh {
+			if d := now.Sub(t); d >= 0 && d < p.fullRefresh {
 				return true
 			}
 		}
@@ -259,9 +308,9 @@ func (p *Plugin) freshLocked(ctxKey string) bool {
 // week, is shared — one walk per burst of readers — and no walk belongs to
 // its starter: it runs detached, so no reader's patience or hangup can kill
 // or restart it. A read the memory already Shows something for answers at
-// once, with the last failed walk's error if there is one: on a real history
-// a walk outlasts the refresh window, so the refresher is nearly always
-// walking, and waiting on it would tax every read. Only a cold read waits, at
+// once, with the last failed read of GitLab's error if there is one: on a
+// real history a walk runs for tens of seconds, and waiting on it would tax
+// every read. Only a cold read waits, at
 // most firstAnswer, then answers what memory holds so far: pages land
 // newest-first, so a partial answer is the most recent weeks, and the node's
 // refresh paints in the rest.

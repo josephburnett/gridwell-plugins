@@ -226,6 +226,20 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 	return nil
 }
 
+// Glance is the light read: pending pages from the newest until one carries a
+// todo the memory knows, each absorbed. A todo enters GitLab's pending list at
+// the top, so above the first known one everything is new; on a quiet list
+// that is one page. It never judges absence — only Sync, which saw the whole
+// list, may — and leaves no resume mark, since the next glance starts at the
+// top anyway. A page not newest-first ends it: its top proves nothing.
+func (m *Memory) Glance(ctx context.Context, src Source) error {
+	_, err := walkPages(ctx, src, StatePending, 1, func(r Reply) bool {
+		unknown := m.absorb(r.Todos)
+		return len(r.Todos) == 0 || unknown < len(r.Todos) || !descending(r.Todos)
+	})
+	return err
+}
+
 // pastSince reports whether a week walk may stop after this page: it reached
 // todos created before since, on a page proven newest-first.
 func pastSince(todos []Todo, since time.Time) bool {

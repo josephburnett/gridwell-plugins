@@ -106,7 +106,7 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	if strings.HasPrefix(wk.Entries[0].Label, todos.DoneMark) {
 		t.Error("state changed inside the refresh window")
 	}
-	clock = clock.Add(DefaultRefresh + time.Second)
+	clock = clock.Add(DefaultFullRefresh + time.Second)
 	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
 	landed(t, p)
 	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
@@ -257,7 +257,7 @@ func TestARestoredWalkTimeStillExpires(t *testing.T) {
 		name string
 		now  time.Time
 	}{
-		{"past the window", clock.Add(DefaultRefresh + time.Second)},
+		{"past the window", clock.Add(DefaultFullRefresh + time.Second)},
 		{"a clock stepped back", clock.Add(-time.Hour)},
 	} {
 		next := &oneShot{pending: src.pending}
@@ -374,10 +374,9 @@ func TestRunWalksOnTheIntervalAndWritesTheCache(t *testing.T) {
 	}
 }
 
-// The warmer never spins. A refresh window shorter than a walk — a test's way
-// of saying "walk on every read" — would otherwise leave the refresher always
-// walking, hammering GitLab and answering every read from a walk that started
-// before the read arrived.
+// The refresher never spins: a `refresh` shorter than a request would leave
+// it always asking GitLab. A tiny full-refresh window is a test's way of
+// saying "walk on every read", and reads still honour it.
 func TestTheRefresherNeverRunsHotterThanItsFloor(t *testing.T) {
 	if got := New(&oneShot{}, Options{Refresh: time.Nanosecond}).refresherInterval(); got != MinRefresherInterval {
 		t.Errorf("a 1ns window refreshes every %v, want the floor %v", got, MinRefresherInterval)
@@ -385,8 +384,9 @@ func TestTheRefresherNeverRunsHotterThanItsFloor(t *testing.T) {
 	if got := New(&oneShot{}, Options{Refresh: time.Hour}).refresherInterval(); got != time.Hour {
 		t.Errorf("a 1h window refreshes every %v", got)
 	}
-	// The floor is the refresher's alone: a read on a tiny window still walks.
-	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{Refresh: time.Nanosecond})
+	// The floor is the refresher's alone: a read on a tiny full-refresh
+	// window still walks.
+	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{FullRefresh: time.Nanosecond})
 	for i := 0; i < 2; i++ {
 		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
 			t.Fatal(err)
@@ -563,7 +563,7 @@ func warmOver(t *testing.T, src todos.Source, firstAnswer time.Duration) *Plugin
 	if _, err := first.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
 		t.Fatal(err)
 	}
-	later := clock.Add(DefaultRefresh + time.Second)
+	later := clock.Add(DefaultFullRefresh + time.Second)
 	return New(src, Options{StateDir: dir, FirstAnswer: firstAnswer, Now: func() time.Time { return later }})
 }
 

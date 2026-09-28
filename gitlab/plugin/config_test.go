@@ -17,10 +17,11 @@ import (
 // launch that stops with the reason.
 func TestFromConfigRefusesBadConfig(t *testing.T) {
 	cases := map[string]map[string]string{
-		"token_file not configured": {},
-		"token_file: open":          {"token_file": filepath.Join(t.TempDir(), "missing")},
-		"is empty":                  {"token_file": writeTemp(t, "  \n")},
-		"not a duration":            {"token_file": writeTemp(t, "tok"), "refresh": "soon"},
+		"token_file not configured":              {},
+		"token_file: open":                       {"token_file": filepath.Join(t.TempDir(), "missing")},
+		"is empty":                               {"token_file": writeTemp(t, "  \n")},
+		"refresh \"soon\" is not a duration":     {"token_file": writeTemp(t, "tok"), "refresh": "soon"},
+		"full_refresh \"-1m\" is not a duration": {"token_file": writeTemp(t, "tok"), "full_refresh": "-1m"},
 	}
 	for want, cfg := range cases {
 		impl, err := FromConfig(cfg)
@@ -31,13 +32,13 @@ func TestFromConfigRefusesBadConfig(t *testing.T) {
 }
 
 func TestFromConfigComposesTheClient(t *testing.T) {
-	impl, err := FromConfig(map[string]string{"token_file": writeTemp(t, "tok\n"), "refresh": "5m", "url": "https://gl.example/"})
+	impl, err := FromConfig(map[string]string{"token_file": writeTemp(t, "tok\n"), "refresh": "5m", "full_refresh": "2h", "url": "https://gl.example/"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := impl.(*Plugin)
-	if p.src == nil || p.refresh != 5*time.Minute {
-		t.Errorf("plugin = src %v refresh %v", p.src, p.refresh)
+	if p.src == nil || p.refresh != 5*time.Minute || p.fullRefresh != 2*time.Hour {
+		t.Errorf("plugin = src %v refresh %v full_refresh %v", p.src, p.refresh, p.fullRefresh)
 	}
 	// state_dir is the node's key, beside uuid and kind. A node that hands
 	// none is no error: the plugin then keeps its memory in process.

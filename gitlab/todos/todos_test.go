@@ -765,3 +765,40 @@ func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
 		t.Errorf("a restore changed %v", got)
 	}
 }
+
+// A glance pages newest-first until a page carries a todo memory knows:
+// above it everything is new. It never judges absence.
+func TestAGlancePagesOnlyToTheFirstKnownTodo(t *testing.T) {
+	src := &fakeSource{per: 2, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(2, "2026-08-11T10:00:00Z", StatePending)}}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	m.TakeChanges()
+	src.calls = nil
+	if err := m.Glance(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(src.calls, " "); got != "pending/1" {
+		t.Errorf("a quiet glance asked %s", got)
+	}
+	// Three new todos push the known ones to page 2; todo 1 is gone.
+	src.pending = []Todo{mk(2, "2026-08-11T10:00:00Z", StatePending),
+		mk(3, "2026-08-24T10:00:00Z", StatePending), mk(4, "2026-08-25T10:00:00Z", StatePending), mk(5, "2026-08-26T10:00:00Z", StatePending)}
+	src.calls = nil
+	if err := m.Glance(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(src.calls, " "); got != "pending/1 pending/2" {
+		t.Errorf("a glance over a page of news asked %s", got)
+	}
+	if len(m.All()) != 5 {
+		t.Errorf("remembered %d, want 5", len(m.All()))
+	}
+	if one, _ := m.Get(1); one.Done() {
+		t.Error("a glance judged absence")
+	}
+	if got := m.TakeChanges().Contexts(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-24"}) {
+		t.Errorf("the glance changed %v", got)
+	}
+}
