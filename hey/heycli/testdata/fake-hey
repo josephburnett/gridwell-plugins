@@ -7,6 +7,8 @@
 # It answers exactly what hey 1.4.1 answers:
 #   box view <box> --json --all   the response envelope, data.postings
 #   thread read <id> --html       a bare HTML5 document, no envelope
+#   watch --events …              watch.jsonl, one line per change, then
+#                                 runs until killed, as the real feed does
 #
 # A REFUSAL goes to stderr, not stdout, and stdout stays empty — verified
 # against hey 1.4.1. `--json` puts the error envelope there, after the
@@ -58,6 +60,14 @@ JSON
         exit 2
         ;;
     esac
+    ;;
+  "watch --events")
+    if [ "$3" != "added,updated,deleted,resync" ]; then
+      echo "Error: unexpected events $3" >&2
+      exit 1
+    fi
+    cat "$(dirname "$0")/watch.jsonl"
+    exec sleep 3600
     ;;
   "thread read")
     if [ "$3" = "404" ]; then

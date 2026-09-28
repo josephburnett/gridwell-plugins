@@ -34,11 +34,12 @@ Two optional keys:
 
 ## The CLI contract
 
-Built against **hey 1.4.1**. Two commands, and nothing else:
+Built against **hey 1.4.1**. Three commands, and nothing else:
 
 ```
-hey box view <box> --json --all      one collection's threads
-hey thread read <topic-id> --html    one thread as an HTML5 document
+hey box view <box> --json --all                   one collection's threads
+hey thread read <topic-id> --html                 one thread as an HTML5 document
+hey watch --events added,updated,deleted,resync   the live feed of mail changes
 ```
 
 `<box>` is one of the CLI's own named box selectors, which `resolveBox` in
@@ -131,6 +132,28 @@ to read it would hang the sweep, and signing in is the user's own gesture.
 
 `heycli/testdata/fake-hey` is this contract, executable. If a CLI release
 changes any shape above, that script and its test are where it shows.
+
+## Live changes
+
+The plugin runs one `hey watch` for its whole life. Every line lands in
+memory at once, and a line that changes a collection's listing tells the node
+through the plugin's `Watch` stream, so new mail reaches the grid in seconds.
+`resync` re-reads its box. `ready` re-reads all three: the feed says nothing
+about the time before it was live, so the first `ready` and every one after a
+reconnect is a catch-up.
+
+A feed that ends is started again after 1s, doubling to 5m, and starting over
+once one reaches `ready`. `disconnected` is not an error — the CLI reconnects
+by itself — but one that has not said `ready` within 2m is restarted. A CLI
+that refuses `watch` as usage (exit 1 or 8: it has no such command) is not
+restarted; the log says so and the plugin keeps memory by walking instead.
+
+`Watch` sends only `ContextChanged`, one per collection whose listing changed,
+whether the feed or a walk changed it. It never sends `EntryRemoved`: the
+listings are not authoritative, and a thread that leaves one box is usually
+in another, so whether it is gone is `Probe`'s to say. A subscriber that falls
+64 changes behind never holds the feed up: its changes are dropped, and when
+it reads again it is told all three collections changed.
 
 ## State
 

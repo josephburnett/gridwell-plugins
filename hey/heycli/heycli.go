@@ -8,10 +8,11 @@
 //
 //	hey box view <box> --json --all     one box's threads, as a JSON envelope
 //	hey thread read <topic-id> --html   one thread as an HTML5 document
+//	hey watch --events <mail changes>   the live feed, one JSON line per change
 //
 // where <box> is one of the CLI's own named box selectors: imbox, laterbox
 // (Reply Later) and asidebox (Set Aside). README.md records the shapes those
-// two commands answer with, so a CLI change is diagnosable from this
+// three commands answer with, so a CLI change is diagnosable from this
 // repository alone.
 //
 // Everything that runs a process goes through Runner, so the parsing above it
@@ -20,6 +21,7 @@
 package heycli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -54,6 +56,9 @@ const DefaultTimeout = 2 * time.Minute
 // command that ran and refused: that is a non-zero code with output to read.
 type Runner interface {
 	Run(ctx context.Context, args ...string) (stdout []byte, stderr string, code int, err error)
+	// Stream runs the CLI until it exits or ctx ends, handing onLine each
+	// stdout line as it arrives. err is Run's.
+	Stream(ctx context.Context, onLine func([]byte), args ...string) (stderr string, code int, err error)
 }
 
 // Exec is the production Runner: one subprocess per call.
@@ -94,6 +99,60 @@ func (e Exec) Run(ctx context.Context, args ...string) ([]byte, string, int, err
 		return out, errBuf.String(), 0, err
 	}
 	return out, errBuf.String(), 0, nil
+}
+
+// maxLine bounds one line of the live feed. A line is one posting, a few
+// kilobytes with its contacts and avatars; a longer one is not a line the
+// contract describes.
+const maxLine = 16 << 20
+
+// Stream spawns the CLI as Run does, with no timeout: the live feed runs
+// until ctx ends. The child is tied to this process (dieWithParent), because
+// a plugin is stopped by being killed and a feed nothing reads must not
+// outlive it.
+func (e Exec) Stream(ctx context.Context, onLine func([]byte), args ...string) (string, int, error) {
+	bin := strings.TrimSpace(e.Binary)
+	if bin == "" {
+		bin = DefaultBinary
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = append(os.Environ(), "HEY_NONINTERACTIVE=1")
+	cmd.Stdin = nil
+	cmd.WaitDelay = time.Second
+	dieWithParent(cmd)
+	var errBuf strings.Builder
+	cmd.Stderr = &errBuf
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", 0, err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", 0, err
+	}
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 64<<10), maxLine)
+	for sc.Scan() {
+		onLine(sc.Bytes())
+	}
+	scanErr := sc.Err()
+	if scanErr != nil {
+		cancel()
+	}
+	err = cmd.Wait()
+	if scanErr != nil {
+		return errBuf.String(), 0, scanErr
+	}
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && ctx.Err() == nil {
+			return errBuf.String(), exit.ExitCode(), nil
+		}
+		return errBuf.String(), 0, err
+	}
+	return errBuf.String(), 0, nil
 }
 
 // Client reads one HEY account through the CLI.
@@ -230,6 +289,34 @@ func ParseWatchLine(line []byte) (mail.Event, error) {
 func (c *Client) ThreadHTML(ctx context.Context, topicID int64) ([]byte, error) {
 	id := strconv.FormatInt(topicID, 10)
 	return c.read(ctx, "thread read "+id, "thread", "read", id, "--html")
+}
+
+// WatchArgs is the live feed's argv. The events are the mail changes only,
+// which also switches the calendars off; every box is followed whatever the
+// list says.
+var WatchArgs = []string{"watch", "--events", "added,updated,deleted,resync"}
+
+// Watch runs the live feed until ctx ends or the CLI exits, handing on every
+// line it prints; a line it cannot read arrives as an error and the feed runs
+// on. It answers the reason the feed stopped, coded as a read's refusal: a
+// feed has no success, so an exit the CLI chose on its own is Unavailable,
+// and so is ctx ending.
+func (c *Client) Watch(ctx context.Context, on func(mail.Event, error)) error {
+	errText, code, err := c.run.Stream(ctx, func(line []byte) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			return
+		}
+		on(ParseWatchLine(line))
+	}, WatchArgs...)
+	switch {
+	case ctx.Err() != nil:
+		return status.Errorf(codes.Unavailable, "hey plugin: watch: %v", ctx.Err())
+	case err != nil:
+		return status.Errorf(codes.FailedPrecondition, "hey plugin: watch: %v", err)
+	case code == 0:
+		return status.Error(codes.Unavailable, "hey plugin: watch: the CLI ended the feed")
+	}
+	return refusal("watch", nil, errText, code)
 }
 
 // read runs one command and turns a refusal into a coded error. what names

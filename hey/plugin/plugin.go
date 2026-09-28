@@ -1,7 +1,8 @@
 // Package plugin is the hey plugin: the wire half over
 // gridwell-plugins/hey/mail. It projects three of HEY's stacks — the Imbox,
 // Reply Later and Set Aside — as three grids, one context each, walked
-// through the official HEY CLI. A thread is a text tile that serves a page:
+// through the official HEY CLI and kept current by its live feed (watch.go).
+// A thread is a text tile that serves a page:
 // its face and document are a markdown card about the email, and descending
 // into it opens the email itself, as HEY's own HTML, through the node's
 // content door.
@@ -52,12 +53,15 @@ const DefaultRefresh = time.Minute
 // time, and the node's refresh paints the rest in when it lands.
 const DefaultFirstAnswer = 2 * time.Second
 
-// Source is HEY, as much of it as this plugin reads: one box's threads, and
-// one thread's HTML. *heycli.Client is the production implementation; a test
-// fakes it without spawning anything.
+// Source is HEY, as much of it as this plugin reads: one box's threads, one
+// thread's HTML, and the live feed of changes. *heycli.Client is the
+// production implementation; a test fakes it without spawning anything.
 type Source interface {
 	Box(ctx context.Context, box string) (threads []mail.Thread, whole bool, err error)
 	ThreadHTML(ctx context.Context, topicID int64) ([]byte, error)
+	// Watch runs the feed until ctx ends, handing on each line, and answers
+	// why it stopped.
+	Watch(ctx context.Context, on func(mail.Event, error)) error
 }
 
 // Plugin implements pluginv1.PluginServer.
@@ -83,6 +87,15 @@ type Plugin struct {
 	// context on every GetGrid and GetTile and a burst of reads must cost HEY
 	// one CLI run, not one per reader.
 	flights map[string]*flight
+	// again marks a collection whose box must be read once more after the
+	// walk in flight: the feed asked for a read, and the one running may have
+	// begun before what it asked about.
+	again map[string]bool
+
+	watchBackoff time.Duration
+	recoverAfter time.Duration
+	// changes is where every listing change goes out to Watch subscribers.
+	changes fanout
 }
 
 // flight is one walk in progress; done closes when err is final.
@@ -103,6 +116,12 @@ type Options struct {
 	// Logf takes every line the plugin writes. It defaults to the standard
 	// logger, which the node captures from the subprocess's stderr.
 	Logf func(format string, args ...any)
+	// WatchBackoff is the first wait before restarting a feed that ended; it
+	// doubles to MaxWatchBackoff. Zero means DefaultWatchBackoff.
+	WatchBackoff time.Duration
+	// RecoverAfter is how long a disconnected feed may take to say ready
+	// again before it is restarted. Zero means DefaultRecoverAfter.
+	RecoverAfter time.Duration
 }
 
 // New builds a plugin over src. A state directory holding a cache file is
@@ -110,14 +129,24 @@ type Options struct {
 // listing is answered from what the last process walked.
 func New(src Source, o Options) *Plugin {
 	p := &Plugin{
-		src:         src,
-		mem:         mail.NewMemory(),
-		refresh:     o.Refresh,
-		firstAnswer: o.FirstAnswer,
-		now:         o.Now,
-		logf:        o.Logf,
-		walkedAt:    map[string]time.Time{},
-		flights:     map[string]*flight{},
+		src:          src,
+		mem:          mail.NewMemory(),
+		refresh:      o.Refresh,
+		firstAnswer:  o.FirstAnswer,
+		now:          o.Now,
+		logf:         o.Logf,
+		walkedAt:     map[string]time.Time{},
+		flights:      map[string]*flight{},
+		again:        map[string]bool{},
+		watchBackoff: o.WatchBackoff,
+		recoverAfter: o.RecoverAfter,
+		changes:      fanout{subs: map[*subscriber]struct{}{}},
+	}
+	if p.watchBackoff <= 0 {
+		p.watchBackoff = DefaultWatchBackoff
+	}
+	if p.recoverAfter <= 0 {
+		p.recoverAfter = DefaultRecoverAfter
 	}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
@@ -195,14 +224,15 @@ func (p *Plugin) refresherInterval() time.Duration {
 	return p.refresh
 }
 
-// Run keeps the memory warm until ctx is done: one goroutine sweeping all
-// three collections on the refresher's interval, so the walk has happened
-// before a read asks rather than because one did. It shares the flights and
+// Run keeps the memory warm until ctx is done: the live feed (watch.go), and
+// one goroutine sweeping all three collections on the refresher's interval,
+// so the walk has happened before a read asks rather than because one did. It shares the flights and
 // the freshness window with the reads, so a tick that lands on a memory a
 // read has just refreshed costs HEY nothing. Sweeping all three together is
 // also what lets Probe ever answer GONE: a thread is archived only when no
 // collection holds it, and that takes a complete pass over every one.
 func (p *Plugin) Run(ctx context.Context) {
+	go p.watch(ctx)
 	t := time.NewTicker(p.refresherInterval())
 	defer t.Stop()
 	for {
@@ -232,6 +262,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		// declaration, never inferred: the node has no list of which kinds
 		// are host-backed.
 		HostContent: true,
+		Watch:       true,
 	}, nil
 }
 
@@ -261,9 +292,7 @@ func (p *Plugin) sync(ctx context.Context, c mail.Collection) error {
 	}
 	f, running := p.flights[c.Key]
 	if !running {
-		f = &flight{done: make(chan struct{})}
-		p.flights[c.Key] = f
-		go p.walk(c, f)
+		f = p.startLocked(c)
 	}
 	p.mu.Unlock()
 
@@ -278,29 +307,63 @@ func (p *Plugin) sync(ctx context.Context, c mail.Collection) error {
 	}
 }
 
+// rewalk reads one collection's box whatever its freshness: the feed said
+// memory cannot know it without a read. A walk already in flight may have
+// begun before the change, so it is followed by one more.
+func (p *Plugin) rewalk(c mail.Collection) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, running := p.flights[c.Key]; running {
+		p.again[c.Key] = true
+		return
+	}
+	p.startLocked(c)
+}
+
+// startLocked starts a detached walk of c under a new flight. The caller
+// holds p.mu.
+func (p *Plugin) startLocked(c mail.Collection) *flight {
+	f := &flight{done: make(chan struct{})}
+	p.flights[c.Key] = f
+	go p.walk(c, f)
+	return f
+}
+
 // walk is one detached walk: it owns its flight and outlives every reader.
 // Its context is the plugin's lifetime — the CLI run is bounded by the
 // runner's own timeout, so a dead source ends the walk with its error rather
-// than hanging it.
+// than hanging it. A walk that changed the listing says so to every Watch
+// subscriber, whichever door asked for it.
 func (p *Plugin) walk(c mail.Collection, f *flight) {
 	p.logf("hey plugin: walk %q starting", c.Key)
 	start := time.Now()
+	p.mem.BeginWalk(c.Key)
 	threads, whole, err := p.src.Box(context.Background(), c.Box)
 	p.logf("hey plugin: walk %q finished in %s: %d threads, whole=%v, err=%v",
 		c.Key, time.Since(start).Round(time.Millisecond), len(threads), whole, err)
+	changed := false
 	if err == nil {
-		p.mem.Absorb(c.Key, threads, whole)
+		changed = p.mem.Absorb(c.Key, threads, whole)
+	} else {
+		p.mem.EndWalk(c.Key)
 	}
 	p.mu.Lock()
 	if err == nil {
 		p.walkedAt[c.Key] = p.now()
 	}
 	delete(p.flights, c.Key)
+	if p.again[c.Key] {
+		delete(p.again, c.Key)
+		p.startLocked(c)
+	}
 	p.mu.Unlock()
 	// The cache lands before the flight closes: a listing that waited for the
 	// walk is one a restart can repeat.
 	if err == nil {
 		p.saveCache()
+	}
+	if changed {
+		p.changes.publish(c.Key)
 	}
 	f.err = err
 	close(f.done)

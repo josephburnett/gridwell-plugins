@@ -43,6 +43,7 @@ type fakeHEY struct {
 	err   error
 	calls map[string]int
 	block chan struct{} // when non-nil, Box waits on it
+	feed  *feed         // when nil, Watch runs silent until cancelled
 }
 
 func newFake() *fakeHEY {
@@ -75,6 +76,43 @@ func (f *fakeHEY) ThreadHTML(_ context.Context, id int64) ([]byte, error) {
 		return nil, f.err
 	}
 	return []byte(f.html[id]), nil
+}
+
+// feed scripts the live feed: each run of Watch announces itself on starts,
+// hands on what the test sends on lines, and ends with what it sends on exit.
+type feed struct {
+	starts chan struct{}
+	stops  chan struct{}
+	lines  chan mail.Event
+	exit   chan error
+}
+
+func newFeed() *feed {
+	return &feed{starts: make(chan struct{}, 16), stops: make(chan struct{}, 16),
+		lines: make(chan mail.Event), exit: make(chan error)}
+}
+
+func (f *fakeHEY) Watch(ctx context.Context, on func(mail.Event, error)) error {
+	f.mu.Lock()
+	f.calls["watch"]++
+	fd := f.feed
+	f.mu.Unlock()
+	if fd == nil {
+		<-ctx.Done()
+		return status.Error(codes.Unavailable, "cancelled")
+	}
+	fd.starts <- struct{}{}
+	defer func() { fd.stops <- struct{}{} }()
+	for {
+		select {
+		case <-ctx.Done():
+			return status.Error(codes.Unavailable, "cancelled")
+		case ev := <-fd.lines:
+			on(ev, nil)
+		case err := <-fd.exit:
+			return err
+		}
+	}
 }
 
 func (f *fakeHEY) count(k string) int {
@@ -140,6 +178,9 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	}
 	if info.Writable {
 		t.Error("a read-only projection declared itself writable")
+	}
+	if !info.Watch {
+		t.Error("the live feed is not declared")
 	}
 	got := map[string]bool{}
 	for _, e := range info.MenuEntries {
@@ -550,6 +591,9 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 }
 
 func TestFromConfigTakesNoRequiredKeysAndRefusesABadRefresh(t *testing.T) {
+	// FromConfig starts the live feed, and the default binary is `hey` on
+	// PATH: a test must never reach the account of whoever runs it.
+	t.Setenv("PATH", t.TempDir())
 	if _, err := FromConfig(map[string]string{}); err != nil {
 		t.Fatalf("a zero-config launch was refused: %v", err)
 	}

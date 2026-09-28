@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,6 +27,15 @@ type fake struct {
 func (f *fake) Run(_ context.Context, args ...string) ([]byte, string, int, error) {
 	f.args = append(f.args, args)
 	return []byte(f.out), f.errOut, f.code, f.err
+}
+
+// Stream hands out's lines one at a time, then exits as Run would.
+func (f *fake) Stream(_ context.Context, onLine func([]byte), args ...string) (string, int, error) {
+	f.args = append(f.args, args)
+	for _, l := range strings.Split(f.out, "\n") {
+		onLine([]byte(l))
+	}
+	return f.errOut, f.code, f.err
 }
 
 const imboxJSON = `{"ok":true,"data":{"id":1,"kind":"imbox","name":"Imbox","postings":[
@@ -320,5 +330,88 @@ func TestParseWatchLineRefusesWhatIsNotALine(t *testing.T) {
 	ev, err := ParseWatchLine([]byte(`{"change":"recording_added","at":"2026-09-28T18:56:33Z"}`))
 	if err != nil || ev.Change != "recording_added" {
 		t.Errorf("unknown word = %+v, %v", ev, err)
+	}
+}
+
+func TestWatchPinsTheCommandAndCarriesABadLine(t *testing.T) {
+	f := &fake{out: `{"change":"ready","at":"2026-09-28T18:56:33Z"}` + "\n\nnot json\n", code: 3,
+		errOut: "warning: keyring\n" + `{"ok":false,"error":"Not logged in","code":"auth","hint":"Run: hey auth login"}`}
+	var evs []mail.Event
+	var bad []error
+	err := New(f).Watch(context.Background(), func(ev mail.Event, err error) {
+		if err != nil {
+			bad = append(bad, err)
+			return
+		}
+		evs = append(evs, ev)
+	})
+	if want := "watch --events added,updated,deleted,resync"; len(f.args) != 1 || strings.Join(f.args[0], " ") != want {
+		t.Fatalf("ran %v, want %s", f.args, want)
+	}
+	if len(evs) != 1 || evs[0].Change != mail.ChangeReady {
+		t.Errorf("events = %+v", evs)
+	}
+	if len(bad) != 1 {
+		t.Errorf("an unreadable line was not carried: %v", bad)
+	}
+	// The feed's refusal is a read's refusal: not signed in is a verdict.
+	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "Not logged in") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestAFeedTheCLIEndsIsWeather(t *testing.T) {
+	err := New(&fake{}).Watch(context.Background(), func(mail.Event, error) {})
+	if status.Code(err) != codes.Unavailable {
+		t.Errorf("err = %v, want Unavailable", err)
+	}
+}
+
+// The live feed through a real process: every line of the contract arrives
+// as it is printed, the feed runs on after them, and ending ctx ends it.
+func TestExecStreamsTheFeedUntilCancelled(t *testing.T) {
+	c := New(fakeCLI(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan mail.Event, 16)
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Watch(ctx, func(ev mail.Event, err error) {
+			if err != nil {
+				t.Errorf("line: %v", err)
+				return
+			}
+			got <- ev
+		})
+	}()
+	for i := range watchFixture(t) {
+		select {
+		case <-got:
+		case err := <-done:
+			t.Fatalf("the feed ended after %d lines: %v", i, err)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("line %d never arrived", i)
+		}
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("the feed ended by itself: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.Unavailable {
+			t.Errorf("a cancelled feed = %v, want Unavailable", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelling did not end the feed")
+	}
+}
+
+func TestAFeedWithNoCLIIsAVerdict(t *testing.T) {
+	err := New(Exec{Binary: filepath.Join(t.TempDir(), "no-such-hey")}).Watch(context.Background(), func(mail.Event, error) {})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("err = %v, want FailedPrecondition", err)
 	}
 }
