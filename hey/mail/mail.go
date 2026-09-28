@@ -72,6 +72,18 @@ func LookupCollection(key string) (Collection, bool) {
 	return Collection{}, false
 }
 
+// LookupBox resolves a box kind, as the CLI's live feed names a box, to the
+// collection that projects it. The selectors `box view` takes are HEY's box
+// kinds, so one table answers both.
+func LookupBox(kind string) (Collection, bool) {
+	for _, c := range Collections {
+		if c.Box == kind {
+			return c, true
+		}
+	}
+	return Collection{}, false
+}
+
 // KeyPrefix namespaces thread keys. A key names the same email thread for the
 // life of the plugin, whichever collection holds it: a thread moved from the
 // Imbox to Reply Later keeps its key, so the node keeps its id and every link

@@ -79,6 +79,41 @@ fields and ignores the rest:
 holding the message exactly as HEY served it. The plugin serves those bytes
 through the content door untouched; the node sandboxes them.
 
+`watch` answers no envelope: one JSON object per line, until interrupted.
+The plugin reads exactly these fields:
+
+```json
+{"change": "added", "at": "2026-09-28T19:01:04.695Z",
+ "box": {"id": 1, "kind": "imbox", "name": "Imbox"},
+ "posting_id": 930, "thread_id": 103, "new": true,
+ "posting": {"id": 930, "kind": "topic", "name": "Board games",
+             "summary": "Thursday at mine?", "seen": true,
+             "created_at": "2026-09-28T19:01:04.695683Z",
+             "creator": {"name": "Erin", "email_address": "erin@example.com"}}}
+{"change": "deleted", "at": "…", "box": {"id": 1, "kind": "imbox", "name": "Imbox"}, "posting_id": 930}
+{"change": "resync", "at": "…", "box": {"id": 2, "kind": "laterbox", "name": "Reply Later"}}
+{"change": "ready", "at": "…"}
+{"change": "disconnected", "at": "…"}
+```
+
+- `added` and `updated` carry the posting — the same object a `box view` row
+  is, minus `topic_id`: the thread is the line's `thread_id`. `seen` is absent
+  while the thread is unseen.
+- `deleted` names only the posting and its box. The plugin remembers which
+  posting holds each thread in each box, so it knows which thread left.
+- Every thread line names its box, so a change maps to its collection without
+  a read. `box.kind` is the selector `box view` takes (`imbox`, `laterbox`,
+  `asidebox`); every other box (the Feed, the Paper Trail, …) is ignored.
+- `resync` means the box changed more than the feed could list: re-read it.
+- `ready` comes once every box is caught up and the subscription is live, and
+  again after every reconnect; `disconnected` when the connection drops.
+  Neither names a box. Without `--since` the feed prints nothing about the
+  past, so the first line of a healthy watch is `ready`.
+
+`added`, `updated`, `deleted` and `ready` are as observed from hey 1.4.1;
+`resync` and `disconnected` are as its own help documents them.
+`heycli/testdata/watch.jsonl` holds one of each.
+
 A refusal prints on **stderr**, not stdout, and stdout stays empty. With
 `--json` the error envelope (`error`, `code`, `hint`) is there, after the
 keyring warning; with `--html` there is no envelope at all, only

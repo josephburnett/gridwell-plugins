@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/josephburnett/gridwell-plugins/hey/mail"
 )
 
 // fake is a Runner that answers canned output, and remembers the argv it was
@@ -245,5 +247,78 @@ func TestExecRunsTheRealCLI(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Thread not found") || strings.Contains(err.Error(), "keyring") {
 		t.Errorf("an envelope-less refusal read as %v", err)
+	}
+}
+
+// watchFixture is the live feed's contract: every line shape `hey watch`
+// prints, as hey 1.4.1 prints it.
+func watchFixture(t *testing.T) [][]byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "watch.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines [][]byte
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		lines = append(lines, []byte(l))
+	}
+	return lines
+}
+
+func TestParseWatchLinesPinsTheFeed(t *testing.T) {
+	var got []mail.Event
+	for _, l := range watchFixture(t) {
+		ev, err := ParseWatchLine(l)
+		if err != nil {
+			t.Fatalf("%s: %v", l, err)
+		}
+		got = append(got, ev)
+	}
+	if len(got) != 8 {
+		t.Fatalf("parsed %d lines", len(got))
+	}
+	if got[0].Change != mail.ChangeReady || got[0].Box != "" {
+		t.Errorf("ready = %+v", got[0])
+	}
+	// The thread is the line's thread_id: the posting inside carries no
+	// topic_id, unlike a `box view` row.
+	added := got[1]
+	if added.Change != mail.ChangeAdded || added.Box != "imbox" || added.PostingID != 930 {
+		t.Errorf("added = %+v", added)
+	}
+	if th := added.Thread; th.TopicID != 103 || th.PostingID != 930 || th.Subject != "Board games" ||
+		th.Summary != "Thursday at mine?" || th.FromName != "Erin" || th.FromEmail != "erin@example.com" ||
+		th.Seen || th.CreatedAt.IsZero() {
+		t.Errorf("added thread = %+v", th)
+	}
+	if !got[2].Thread.Seen || got[2].Change != mail.ChangeUpdated {
+		t.Errorf("updated = %+v", got[2])
+	}
+	if got[3].Box != "feedbox" {
+		t.Errorf("a box outside the projection = %+v", got[3])
+	}
+	// A deleted line names only the posting and its box.
+	if d := got[4]; d.Change != mail.ChangeDeleted || d.Box != "imbox" || d.PostingID != 930 || d.Thread.TopicID != 0 {
+		t.Errorf("deleted = %+v", d)
+	}
+	if r := got[5]; r.Change != mail.ChangeResync || r.Box != "laterbox" {
+		t.Errorf("resync = %+v", r)
+	}
+	if got[6].Change != mail.ChangeDisconnected || got[7].Change != mail.ChangeReady {
+		t.Errorf("feed words = %+v, %+v", got[6], got[7])
+	}
+}
+
+func TestParseWatchLineRefusesWhatIsNotALine(t *testing.T) {
+	for _, l := range []string{"", "warning: keyring", `{"at":"2026-09-28T18:56:33Z"}`} {
+		if _, err := ParseWatchLine([]byte(l)); err == nil {
+			t.Errorf("%q parsed", l)
+		}
+	}
+	// A word this plugin does not know is carried, not refused: a newer CLI
+	// adding one must not break the feed.
+	ev, err := ParseWatchLine([]byte(`{"change":"recording_added","at":"2026-09-28T18:56:33Z"}`))
+	if err != nil || ev.Change != "recording_added" {
+		t.Errorf("unknown word = %+v, %v", ev, err)
 	}
 }

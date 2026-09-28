@@ -172,18 +172,54 @@ func (c *Client) Box(ctx context.Context, box string) (threads []mail.Thread, wh
 		if p.TopicID == 0 {
 			continue
 		}
-		threads = append(threads, mail.Thread{
-			TopicID:   p.TopicID,
-			PostingID: p.ID,
-			Subject:   p.Name,
-			Summary:   p.Summary,
-			FromName:  p.Creator.Name,
-			FromEmail: p.Creator.EmailAddress,
-			CreatedAt: p.CreatedAt,
-			Seen:      p.Seen,
-		})
+		threads = append(threads, p.thread(p.TopicID))
 	}
 	return threads, data.NextPage == "", nil
+}
+
+// thread is the posting as the thread it opens. topicID is passed in because
+// the two commands name it in different places: `box view` beside HEY's
+// fields, `watch` on the line around the posting.
+func (p *posting) thread(topicID int64) mail.Thread {
+	return mail.Thread{
+		TopicID:   topicID,
+		PostingID: p.ID,
+		Subject:   p.Name,
+		Summary:   p.Summary,
+		FromName:  p.Creator.Name,
+		FromEmail: p.Creator.EmailAddress,
+		CreatedAt: p.CreatedAt,
+		Seen:      p.Seen,
+	}
+}
+
+// watchLine is one line of `hey watch`: no envelope, one object per line. A
+// deleted line carries no posting and no thread_id; ready and disconnected
+// carry no box.
+type watchLine struct {
+	Change string `json:"change"`
+	Box    struct {
+		Kind string `json:"kind"`
+	} `json:"box"`
+	PostingID int64    `json:"posting_id"`
+	ThreadID  int64    `json:"thread_id"`
+	Posting   *posting `json:"posting"`
+}
+
+// ParseWatchLine reads one line of the live feed.
+func ParseWatchLine(line []byte) (mail.Event, error) {
+	var w watchLine
+	if err := json.Unmarshal(line, &w); err != nil {
+		return mail.Event{}, fmt.Errorf("hey plugin: watch line: %v", err)
+	}
+	if w.Change == "" {
+		return mail.Event{}, fmt.Errorf("hey plugin: watch line names no change: %.80q", line)
+	}
+	ev := mail.Event{Change: w.Change, Box: w.Box.Kind, PostingID: w.PostingID}
+	if w.Posting != nil {
+		ev.Thread = w.Posting.thread(w.ThreadID)
+	}
+	return ev, nil
 }
 
 // ThreadHTML reads one thread as HEY's own HTML: a whole HTML5 document, one

@@ -3,6 +3,7 @@ package mail
 import (
 	"sort"
 	"sync"
+	"time"
 )
 
 // Memory is everything the plugin has seen: the record of every thread, and
@@ -13,18 +14,28 @@ import (
 // A collection's membership is REPLACED by a walk that read the whole box,
 // and only merged into by one that did not: a box listing is a live
 // membership, so a thread archived at HEY must leave the grid, but a walk
-// that stopped short proves nothing about what it did not reach. The thread
-// record itself is never removed, so a tile whose thread has left still reads
+// that stopped short proves nothing about what it did not reach. Between
+// walks, the CLI's live feed moves it one posting at a time (Apply). The
+// thread record itself is never removed, so a tile whose thread has left still reads
 // as the email it was.
 type Memory struct {
 	mu      sync.Mutex
 	threads map[int64]*Thread
 	members map[string][]int64 // collection key → topic ids
+	// postings maps each member of a collection to the box item that holds it
+	// there, because a deleted line on the live feed names only the posting.
+	// A member a restored snapshot brought back has no entry until the next
+	// walk of its box.
+	postings map[string]map[int64]int64 // collection key → topic id → posting id
 	// complete records that some walk of that collection — this process's, or
 	// one whose snapshot Restore folded back in — read the box to its end.
 	// Until every collection has had one, nothing is ever GONE: a thread
 	// missing from a partial sweep is unseen, not archived.
 	complete map[string]bool
+	// journal holds, per collection with a walk open, every event applied
+	// since the walk began. The walk's answer predates them, so Absorb
+	// replays them over it.
+	journal map[string][]Event
 }
 
 // NewMemory builds an empty memory.
@@ -32,31 +43,162 @@ func NewMemory() *Memory {
 	return &Memory{
 		threads:  map[int64]*Thread{},
 		members:  map[string][]int64{},
+		postings: map[string]map[int64]int64{},
 		complete: map[string]bool{},
+		journal:  map[string][]Event{},
 	}
 }
 
-// Absorb folds one walk of one collection in. read is what the walk saw,
-// whole is whether it reached the end of the box. A whole walk replaces the
-// collection's membership; a partial one adds to it, because absence in a
-// partial read is not evidence.
-func (m *Memory) Absorb(collection string, read []Thread, whole bool) {
+// BeginWalk opens a read of one collection's box: from here until its Absorb
+// or EndWalk, every event applied to the collection is kept and replayed over
+// the read's answer. One walk per collection at a time.
+func (m *Memory) BeginWalk(collection string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.journal[collection] = []Event{}
+}
+
+// EndWalk closes a read that brought no answer.
+func (m *Memory) EndWalk(collection string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.journal, collection)
+}
+
+// Absorb folds one walk of one collection in and closes it. read is what the
+// walk saw, whole is whether it reached the end of the box. A whole walk
+// replaces the collection's membership; a partial one adds to it, because
+// absence in a partial read is not evidence. The events applied while the
+// walk was open are then replayed in order, so the feed's word stands over a
+// read that began before it. It reports whether the listing changed.
+func (m *Memory) Absorb(collection string, read []Thread, whole bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	before := m.collectionLocked(collection)
 
 	seen := make([]int64, 0, len(read))
+	posts := m.postings[collection]
+	if whole || posts == nil {
+		posts = map[int64]int64{}
+	}
 	for i := range read {
 		t := read[i]
 		t.Collection = collection
 		m.threads[t.TopicID] = &t
 		seen = append(seen, t.TopicID)
+		posts[t.TopicID] = t.PostingID
 	}
+	m.postings[collection] = posts
 	if whole {
 		m.members[collection] = seen
 		m.complete[collection] = true
-		return
+	} else {
+		m.members[collection] = union(m.members[collection], seen)
 	}
-	m.members[collection] = union(m.members[collection], seen)
+	for _, ev := range m.journal[collection] {
+		m.applyLocked(collection, ev)
+	}
+	delete(m.journal, collection)
+	return !sameListing(before, m.collectionLocked(collection))
+}
+
+// Apply folds one added, updated or deleted event about one collection in.
+// A collection no walk has listed yet takes no membership from an event —
+// the listing a first walk brings is the whole one, and an event's thread
+// alone is not — but the thread's record is kept, and the event is replayed
+// over that walk if one is open.
+func (m *Memory) Apply(collection string, ev Event) Effect {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	before := m.collectionLocked(collection)
+	rewalk := m.applyLocked(collection, ev)
+	if j, open := m.journal[collection]; open {
+		m.journal[collection] = append(j, ev)
+	}
+	return Effect{Changed: !sameListing(before, m.collectionLocked(collection)), Rewalk: rewalk}
+}
+
+// applyLocked is Apply without the bookkeeping; it reports whether only a
+// walk can apply the event.
+func (m *Memory) applyLocked(collection string, ev Event) (rewalk bool) {
+	switch ev.Change {
+	case ChangeAdded, ChangeUpdated:
+		if ev.Thread.TopicID == 0 {
+			return false
+		}
+		t := ev.Thread
+		t.Collection = collection
+		m.threads[t.TopicID] = &t
+		ids, listed := m.members[collection]
+		if !listed {
+			return false
+		}
+		m.members[collection] = union(ids, []int64{t.TopicID})
+		if m.postings[collection] == nil {
+			m.postings[collection] = map[int64]int64{}
+		}
+		m.postings[collection][t.TopicID] = t.PostingID
+	case ChangeDeleted:
+		posts := m.postings[collection]
+		for topic, posting := range posts {
+			if posting == ev.PostingID {
+				delete(posts, topic)
+				m.members[collection] = without(m.members[collection], topic)
+				return false
+			}
+		}
+		// Not a posting this memory maps. If every member is mapped, it is
+		// not one the listing shows — a bundle — and nothing changes;
+		// otherwise it may be a restored member, and only a read can say.
+		for _, id := range m.members[collection] {
+			if _, mapped := posts[id]; !mapped {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Shows reports whether the memory has a listing of the collection to
+// answer with — a walk, or the snapshot of one, even of an empty box. It is
+// the one owner of "warm".
+func (m *Memory) Shows(collection string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.members[collection]
+	return ok
+}
+
+// without drops id from ids, keeping order.
+func without(ids []int64, id int64) []int64 {
+	out := make([]int64, 0, len(ids))
+	for _, x := range ids {
+		if x != id {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// sameListing reports whether two listings show the same thing. Collection
+// is left out: it is where a thread was last seen, which a thread held by
+// two boxes flips between, and no listing shows it.
+func sameListing(a, b []Thread) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if !x.CreatedAt.Equal(y.CreatedAt) {
+			return false
+		}
+		x.Collection, y.Collection = "", ""
+		x.CreatedAt, y.CreatedAt = time.Time{}, time.Time{}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 // union appends the ids of b that a does not already hold, keeping a's order.
@@ -82,6 +224,10 @@ func union(a, b []int64) []int64 {
 func (m *Memory) Collection(key string) []Thread {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.collectionLocked(key)
+}
+
+func (m *Memory) collectionLocked(key string) []Thread {
 	ids := m.members[key]
 	out := make([]Thread, 0, len(ids))
 	for _, id := range ids {
