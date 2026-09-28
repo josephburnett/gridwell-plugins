@@ -62,8 +62,13 @@ func (s *watcher) add(contexts []string) {
 			continue
 		}
 		if len(s.pending) >= watchBuffer {
+			// The collapse keeps the context being announced: what arrives
+			// after the overflow is exactly what a repaint of the root alone
+			// would miss.
 			s.pending, s.queued = []string{todos.RootContext}, map[string]bool{todos.RootContext: true}
-			break
+			if s.queued[c] {
+				continue
+			}
 		}
 		s.pending = append(s.pending, c)
 		s.queued[c] = true
@@ -75,12 +80,20 @@ func (s *watcher) add(contexts []string) {
 	}
 }
 
-func (s *watcher) take() []string {
+// next hands out one context, so the backlog is the stream's only buffer and
+// watchBuffer bounds what a stalled subscriber can ever be owed: the one in
+// flight plus the backlog. A context re-announced while in flight queues
+// again, since the change landed after its send.
+func (s *watcher) next() (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := s.pending
-	s.pending, s.queued = nil, map[string]bool{}
-	return out
+	if len(s.pending) == 0 {
+		return "", false
+	}
+	c := s.pending[0]
+	s.pending = s.pending[1:]
+	delete(s.queued, c)
+	return c, true
 }
 
 // Watch streams a ContextChanged for every listing a change to memory moved:
@@ -98,7 +111,7 @@ func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchSer
 			return stream.Context().Err()
 		case <-s.wake:
 		}
-		for _, c := range s.take() {
+		for c, ok := s.next(); ok; c, ok = s.next() {
 			change := &pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{ContextChanged: &pluginv1.ContextChanged{Context: c}}}
 			if err := stream.Send(change); err != nil {
 				return err

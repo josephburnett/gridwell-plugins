@@ -163,11 +163,11 @@ func TestASlowWatcherNeverBlocksAWalk(t *testing.T) {
 	}
 	close(block)
 	// Every walk announced a week of its own and the root: 70 distinct
-	// contexts. The stalled watcher hears fewer — its backlog collapsed to the
-	// root — and still hears the root and the last walk's week.
+	// contexts. The stalled watcher is owed at most the one in flight plus a
+	// full backlog, and still hears the root and the last walk's week.
 	got := changed(t, w, 0)
 	last := todos.WeekKey(todos.WeekStart(monday.AddDate(0, 0, -7*(watchBuffer+4))))
-	if len(got) >= watchBuffer+6 || !slices.Contains(got, todos.RootContext) || !slices.Contains(got, last) {
+	if len(got) > watchBuffer+1 || !slices.Contains(got, todos.RootContext) || !slices.Contains(got, last) {
 		t.Errorf("after the stall the watcher heard %d contexts %v", len(got), got)
 	}
 }
