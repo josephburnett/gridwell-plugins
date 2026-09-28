@@ -121,6 +121,8 @@ type Plugin struct {
 	// failed is the last refresh's error until a refresh lands. A warm read
 	// answers it, having not waited to hear it.
 	failed error
+
+	watchers watchers
 }
 
 // flight is one refresh in progress; done closes when err is final.
@@ -260,6 +262,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		// declaration, never inferred: the node has no list of which kinds
 		// are host-backed.
 		HostContent: true,
+		Watch:       true,
 	}, nil
 }
 
@@ -323,6 +326,7 @@ func (p *Plugin) sync(ctx context.Context, c mailbox.Collection) error {
 // with its error rather than hanging it.
 func (p *Plugin) refreshFlight(f *flight) {
 	start := time.Now()
+	before := p.faces()
 	swept, err := p.catchUpOrSweep(context.Background())
 	how := "history"
 	if swept {
@@ -345,6 +349,9 @@ func (p *Plugin) refreshFlight(f *flight) {
 	if err == nil {
 		p.saveCache()
 	}
+	// A failed refresh can still have changed memory — a full walk that read
+	// the inbox and then failed — so the announcement does not wait on err.
+	p.watchers.publish(p.changedSince(before))
 	f.err = err
 	close(f.done)
 }

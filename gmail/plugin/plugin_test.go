@@ -1106,3 +1106,127 @@ func TestTheConsistencyPassWalksAgain(t *testing.T) {
 		t.Errorf("a refresh past SweepEvery walked %d times in all, want 2", got)
 	}
 }
+
+// watchStream is the node's end of Watch: every change it is sent, until
+// the test hangs up. A non-nil gate holds every Send until it closes.
+type watchStream struct {
+	pluginv1.Plugin_WatchServer
+	ctx  context.Context
+	sent chan string
+	gate chan struct{}
+}
+
+func (w *watchStream) Context() context.Context { return w.ctx }
+func (w *watchStream) Send(c *pluginv1.Change) error {
+	if w.gate != nil {
+		<-w.gate
+	}
+	w.sent <- c.GetContextChanged().GetContext()
+	return nil
+}
+
+// watch opens Watch and waits until it is subscribed.
+func watch(t *testing.T, p *Plugin, gate chan struct{}) *watchStream {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &watchStream{ctx: ctx, sent: make(chan string, 16), gate: gate}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := p.Watch(&pluginv1.WatchRequest{}, w); err != nil {
+			t.Error(err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if gate != nil {
+			close(gate)
+		}
+		<-done
+	})
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		p.watchers.mu.Lock()
+		n := len(p.watchers.subs)
+		p.watchers.mu.Unlock()
+		if n > 0 {
+			return w
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Watch never subscribed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// announced collects what the stream is sent within a short settle.
+func announced(w *watchStream) []string {
+	var out []string
+	for {
+		select {
+		case k := <-w.sent:
+			out = append(out, k)
+		case <-time.After(100 * time.Millisecond):
+			return out
+		}
+	}
+}
+
+// A refresh announces exactly the collections whose answer it changed, and a
+// quiet one announces nothing.
+func TestWatchAnnouncesExactlyWhatARefreshChanged(t *testing.T) {
+	f := newFake()
+	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
+	f.hold("STARRED", msg("d", "four", "2026-01-04T10:00:00Z"))
+	p, clock := warmHistory(t, f, Options{})
+	info, _ := p.Info(context.Background(), &pluginv1.InfoRequest{})
+	if !info.Watch {
+		t.Error("Info does not declare watch")
+	}
+	w := watch(t, p, nil)
+
+	refreshed(t, p, clock, 2*time.Minute)
+	if got := announced(w); len(got) != 0 {
+		t.Errorf("a quiet refresh announced %v", got)
+	}
+
+	f.deleted("d") // starred only
+	refreshed(t, p, clock, 2*time.Minute)
+	if got := announced(w); !slices.Equal(got, []string{mailbox.StarredContext}) {
+		t.Errorf("a starred deletion announced %v", got)
+	}
+
+	f.hold("STARRED", msg("a", "one", "2026-01-05T09:00:00Z")) // a gains a star: both faces change
+	f.changed("a")
+	refreshed(t, p, clock, 2*time.Minute)
+	if got := announced(w); !slices.Equal(got, []string{mailbox.InboxContext, mailbox.StarredContext}) {
+		t.Errorf("starring an inbox message announced %v", got)
+	}
+}
+
+// A subscriber that never reads costs no refresh anything: refreshes land,
+// and what it has not taken coalesces to one mark per collection.
+func TestASlowWatcherNeverBlocksARefresh(t *testing.T) {
+	f := newFake()
+	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
+	p, clock := warmHistory(t, f, Options{})
+	watch(t, p, make(chan struct{})) // its first Send blocks until cleanup
+
+	for i := range 5 {
+		id := fmt.Sprintf("n%d", i)
+		f.mu.Lock()
+		f.labels["INBOX"] = append([]string{id}, f.labels["INBOX"]...)
+		f.recs[id] = msg(id, "new", "2026-01-05T10:00:00Z")
+		f.mu.Unlock()
+		f.changed(id)
+		refreshed(t, p, clock, 2*time.Minute) // fails the test if a refresh never lands
+	}
+	p.watchers.mu.Lock()
+	defer p.watchers.mu.Unlock()
+	for s := range p.watchers.subs {
+		s.mu.Lock()
+		if len(s.pending) > len(mailbox.Collections) {
+			t.Errorf("a slow watcher holds %d marks", len(s.pending))
+		}
+		s.mu.Unlock()
+	}
+}

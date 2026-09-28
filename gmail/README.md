@@ -161,3 +161,9 @@ not cached at all. A listing is small; a mailbox's bodies are not.
 There is no push. Gmail's own (`users.watch`) publishes to a Google Cloud
 Pub/Sub topic that must deliver to a public HTTPS endpoint, and a personal
 node has neither; a history read once a `refresh` is the cheap substitute.
+
+The node hears about a change without asking: after each refresh the plugin
+sends a `ContextChanged` on its `Watch` stream for every grid whose listing
+changed, and nothing when none did. It never sends `EntryRemoved`: a message
+that left the inbox is often still starred, and whether it is gone is
+`Probe`'s answer.
