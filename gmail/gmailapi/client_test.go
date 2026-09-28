@@ -2,6 +2,7 @@ package gmailapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,8 @@ import (
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/josephburnett/gridwell-plugins/gmail/mailbox"
 )
 
 // fakeGmail is the Gmail contract, served: the exact JSON the API answers
@@ -59,6 +62,14 @@ func (f *fakeGmail) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	switch {
+	case r.URL.Path == "/gmail/v1/users/me/profile":
+		w.Write(golden(f.t, "profile.json"))
+	case r.URL.Path == "/gmail/v1/users/me/history":
+		if q.Get("pageToken") != "" {
+			w.Write(golden(f.t, "history-list-page2.json"))
+			return
+		}
+		w.Write(golden(f.t, "history-list.json"))
 	case r.URL.Path == "/gmail/v1/users/me/messages":
 		switch {
 		case strings.Join(q["labelIds"], "+") == "INBOX+UNREAD":
@@ -199,9 +210,12 @@ func TestAnEmptyLabelIsWhole(t *testing.T) {
 // which is what keeps a hundred-message delta small.
 func TestHeadersReadTheRecordAndPinTheRequest(t *testing.T) {
 	f := newFake(t)
-	m, err := f.client().Headers(context.Background(), "18c2a1b3f4d5e6f7")
+	m, labels, err := f.client().Headers(context.Background(), "18c2a1b3f4d5e6f7")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Join(labels, ",") != "UNREAD,INBOX,IMPORTANT" {
+		t.Errorf("labels = %v; a catch-up places a message by them", labels)
 	}
 	if m.ID != "18c2a1b3f4d5e6f7" || m.ThreadID != "18c2a1b3f4d5e6f7" {
 		t.Errorf("ids = %q/%q", m.ID, m.ThreadID)
@@ -368,5 +382,70 @@ func TestDecodeBodyTakesPaddedAndUnpadded(t *testing.T) {
 func TestTheProductionClientHasATimeout(t *testing.T) {
 	if DefaultTimeout <= 0 {
 		t.Fatal("a Gmail read with no deadline wedges the walk forever")
+	}
+}
+
+// The profile's history id is where a catch-up after a full walk starts.
+func TestHistoryIDReadsTheProfile(t *testing.T) {
+	f := newFake(t)
+	id, err := f.client().HistoryID(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 9912345 {
+		t.Errorf("history id = %d", id)
+	}
+	if got := f.reqs[len(f.reqs)-1].URL.Path; got != "/gmail/v1/users/me/profile" {
+		t.Errorf("path = %s", got)
+	}
+}
+
+// History pages to the end and keeps only what the projection can see: an
+// arrival carrying a watched label, a watched label added or removed, and a
+// deletion. An arrival in SENT and an IMPORTANT added to an inbox message
+// move no tile, and a message that arrived and was deleted is only deleted.
+func TestHistoryPagesAndKeepsWhatTheProjectionSees(t *testing.T) {
+	f := newFake(t)
+	d, err := f.client().History(context.Background(), 9912345, []string{"UNREAD", "INBOX", "STARRED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(d.Touched, ","); got != "18c2a1b3f4d5e7a1,18c2a1b3f4d5e6f7" {
+		t.Errorf("touched = %s", got)
+	}
+	if got := strings.Join(d.Deleted, ","); got != "18c2a1b3f4d5e6f9,18c2a1b3f4d5e7a3" {
+		t.Errorf("deleted = %s", got)
+	}
+	if d.HistoryID != 9912431 {
+		t.Errorf("history id = %d, want the last page's", d.HistoryID)
+	}
+	if len(f.reqs) != 2 {
+		t.Fatalf("%d requests, want two pages", len(f.reqs))
+	}
+	q := f.reqs[0].URL.Query()
+	if q.Get("startHistoryId") != "9912345" {
+		t.Errorf("startHistoryId = %q", q.Get("startHistoryId"))
+	}
+	if got := strings.Join(q["historyTypes"], ","); got != strings.Join(HistoryTypes, ",") {
+		t.Errorf("historyTypes = %s", got)
+	}
+	if f.reqs[1].URL.Query().Get("pageToken") != "08123456789012345678" {
+		t.Errorf("second page token = %q", f.reqs[1].URL.Query().Get("pageToken"))
+	}
+}
+
+// A 404 on history is Gmail saying the id is too old: the one answer that
+// sends the plugin back to a full walk. Any other failure keeps its code.
+func TestAnExpiredHistoryIDIsItsOwnAnswer(t *testing.T) {
+	f := newFake(t)
+	f.status = 404
+	_, err := f.client().History(context.Background(), 1, []string{"INBOX"})
+	if !errors.Is(err, mailbox.ErrHistoryExpired) {
+		t.Fatalf("err = %v, want ErrHistoryExpired", err)
+	}
+	f.status = 503
+	_, err = f.client().History(context.Background(), 1, []string{"INBOX"})
+	if errors.Is(err, mailbox.ErrHistoryExpired) || status.Code(err) != codes.Unavailable {
+		t.Fatalf("err = %v, want Unavailable", err)
 	}
 }

@@ -1,0 +1,33 @@
+{
+  "history": [
+    {
+      "id": "9912404",
+      "messages": [{"id": "18c2a1b3f4d5e6f9", "threadId": "18c2a1b3f4d5e6f9"}],
+      "messagesDeleted": [
+        {"message": {"id": "18c2a1b3f4d5e6f9", "threadId": "18c2a1b3f4d5e6f9"}}
+      ]
+    },
+    {
+      "id": "9912405",
+      "messages": [{"id": "18c2a1b3f4d5e7a1", "threadId": "18c2a1b3f4d5e7a1"}],
+      "labelsAdded": [
+        {"message": {"id": "18c2a1b3f4d5e7a1", "threadId": "18c2a1b3f4d5e7a1", "labelIds": ["UNREAD", "INBOX", "STARRED"]}, "labelIds": ["STARRED"]}
+      ]
+    },
+    {
+      "id": "9912406",
+      "messages": [{"id": "18c2a1b3f4d5e7a3", "threadId": "18c2a1b3f4d5e7a3"}],
+      "messagesAdded": [
+        {"message": {"id": "18c2a1b3f4d5e7a3", "threadId": "18c2a1b3f4d5e7a3", "labelIds": ["UNREAD", "INBOX"]}}
+      ]
+    },
+    {
+      "id": "9912407",
+      "messages": [{"id": "18c2a1b3f4d5e7a3", "threadId": "18c2a1b3f4d5e7a3"}],
+      "messagesDeleted": [
+        {"message": {"id": "18c2a1b3f4d5e7a3", "threadId": "18c2a1b3f4d5e7a3"}}
+      ]
+    }
+  ],
+  "historyId": "9912431"
+}

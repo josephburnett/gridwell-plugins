@@ -45,6 +45,27 @@ type View struct {
 	Starred bool
 }
 
+// SameViews reports whether two answers for one collection show the same
+// thing: the same messages in the same order, each with the same record and
+// state. Dates compare as instants, so a record read back from the cache
+// equals the one Gmail answered.
+func SameViews(a, b []View) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if !x.Date.Equal(y.Date) {
+			return false
+		}
+		x.Date, y.Date = time.Time{}, time.Time{}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
 // Collection is one of the two Gmail labels this plugin projects. Key is the
 // plugin's context key, stable forever. LabelIDs are the label ids Gmail's
 // messages.list takes. Label is the face of the (+) menu row that opens it.

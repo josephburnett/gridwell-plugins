@@ -68,7 +68,7 @@ deleted credential is not rewarmed by use.
 |---|---|---|---|
 | `credentials` | yes | — | the OAuth client JSON from the console |
 | `token` | yes | — | the token file `-auth` wrote |
-| `refresh` | no | `1m` | how often one grid is re-walked |
+| `refresh` | no | `1m` | how often memory catches up with Gmail |
 | `max_messages` | no | `500` | how many of the newest messages a grid holds |
 | `endpoint` | no | Gmail's own | the Gmail API base URL |
 
@@ -81,12 +81,14 @@ the `-auth` command to fix it.
 
 ## The API contract
 
-Built against `google.golang.org/api/gmail/v1`. Three calls, and nothing else:
+Built against `google.golang.org/api/gmail/v1`. Five calls, and nothing else:
 
 ```
 GET users/me/messages?labelIds=…&maxResults=…&pageToken=…
 GET users/me/messages/<id>?format=metadata&metadataHeaders=Subject,From,Date
 GET users/me/messages/<id>?format=full
+GET users/me/profile
+GET users/me/history?startHistoryId=…&historyTypes=…&pageToken=…
 ```
 
 `gmailapi/testdata/` holds the exact JSON each of those answers with, and the
@@ -110,6 +112,11 @@ there.
   with no HTML part — many are still plain text — is escaped and wrapped in a
   minimal document. A message with no text part at all gets a page that says
   so.
+- **History** is every change since a history id, paged. The profile's
+  `historyId`, read before a full walk, is where the next catch-up starts.
+  Only arrivals carrying `INBOX`, `STARRED` or `UNREAD`, changes to those
+  labels, and deletions are read; each such message's metadata is fetched
+  again and its current `labelIds` place it. A 404 means the id is too old.
 - **Inline images do not load.** A `cid:` URL names an attachment, and this
   plugin serves no attachments: the image is broken and everything else reads.
 
@@ -138,11 +145,25 @@ read reaches it.
 ## State
 
 `state_dir` holds one file, `gmail.json`: the messages the plugin has seen,
-the unread set, and each grid's membership, so a restart answers instantly
-and does not call Gmail inside the refresh window. It is disposable — delete
+the unread set, each grid's membership and the history id they are current
+to, so a restart answers instantly, does not call Gmail inside the refresh
+window, and catches up rather than walking after it. It is disposable — delete
 it any time; the next walk rewarms it. **No credential is ever written
 there.**
 
-Every walk after the first is a delta: two id listings, then a metadata read
-for only the ids the memory has never seen. Message bodies are not cached at
-all. A listing is small; a mailbox's bodies are not.
+A refresh reads Gmail's history since the id memory is current to and
+applies it: a quiet mailbox costs one request. A full walk of both labels —
+two id listings each, then a metadata read for only the ids the memory has
+never seen — runs instead when there is no id yet, when Gmail answers that
+the id is too old, and once a day as a consistency pass. Message bodies are
+not cached at all. A listing is small; a mailbox's bodies are not.
+
+There is no push. Gmail's own (`users.watch`) publishes to a Google Cloud
+Pub/Sub topic that must deliver to a public HTTPS endpoint, and a personal
+node has neither; a history read once a `refresh` is the cheap substitute.
+
+The node hears about a change without asking: after each refresh the plugin
+sends a `ContextChanged` on its `Watch` stream for every grid whose listing
+changed, and nothing when none did. It never sends `EntryRemoved`: a message
+that left the inbox is often still starred, and whether it is gone is
+`Probe`'s answer.

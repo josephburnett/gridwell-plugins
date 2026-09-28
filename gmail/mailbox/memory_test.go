@@ -151,6 +151,7 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	m.Absorb(InboxContext, []string{"b", "a"}, map[string]bool{"b": true},
 		[]Message{msg("a", "one", "2026-01-03T09:00:00Z"), msg("b", "two", "2026-01-04T09:00:00Z")}, true)
 	m.Absorb(StarredContext, []string{"b"}, map[string]bool{"b": true}, nil, true)
+	m.SetHistoryID(4242)
 
 	path := filepath.Join(t.TempDir(), CacheFile)
 	if err := SaveCache(path, m.Snapshot()); err != nil {
@@ -179,6 +180,9 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	if !back.Swept() {
 		t.Error("a restored sweep did not count")
 	}
+	if got := back.HistoryID(); got != 4242 {
+		t.Errorf("restored history id = %d; a restart would re-walk every collection", got)
+	}
 	// Two snapshots of the same memory are byte-identical, so a save that
 	// changes nothing does not churn the file.
 	a, b := m.Snapshot(), m.Snapshot()
@@ -199,5 +203,38 @@ func TestACacheOfTheWrongVersionIsRefused(t *testing.T) {
 	}
 	if _, err := LoadCache(filepath.Join(t.TempDir(), "absent")); !os.IsNotExist(err) {
 		t.Fatalf("a missing cache = %v, want a not-exist error the caller can read as a first boot", err)
+	}
+}
+
+// A catch-up places each message by the labels it carries now, whatever it
+// was before, and a deletion leaves every collection. Applying it twice is
+// applying it once.
+func TestApplyPlacesByCurrentLabels(t *testing.T) {
+	m := NewMemory()
+	m.Absorb(InboxContext, []string{"b", "a"}, map[string]bool{"a": true},
+		[]Message{msg("a", "one", "2026-01-03T09:00:00Z"), msg("b", "two", "2026-01-04T09:00:00Z")}, true)
+	m.Absorb(StarredContext, nil, nil, nil, true)
+
+	delta := []Labelled{
+		{Message: msg("a", "one", "2026-01-03T09:00:00Z"), Labels: []string{"STARRED"}},         // archived, starred, read
+		{Message: msg("c", "new", "2026-01-05T09:00:00Z"), Labels: []string{"INBOX", "UNREAD"}}, // arrived
+	}
+	for range 2 {
+		m.Apply(delta, []string{"b"})
+		if got := ids(m.Collection(InboxContext)); !eq(got, []string{"c"}) {
+			t.Fatalf("inbox = %v", got)
+		}
+		if got := ids(m.Collection(StarredContext)); !eq(got, []string{"a"}) {
+			t.Fatalf("starred = %v", got)
+		}
+		if a, _ := m.View("a"); a.Unread || !a.Starred {
+			t.Errorf("a = %+v", a)
+		}
+		if c, _ := m.View("c"); !c.Unread {
+			t.Errorf("c = %+v", c)
+		}
+		if m.Member("b") {
+			t.Error("a deleted message is still a member")
+		}
 	}
 }

@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/josephburnett/gridwell-plugins/gmail/gmailapi"
 	"github.com/josephburnett/gridwell-plugins/gmail/mailbox"
@@ -27,6 +29,8 @@ func TestOverTheRealGmailContract(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		q := r.URL.Query()
 		switch {
+		case r.URL.Path == "/gmail/v1/users/me/profile":
+			w.Write(contract(t, "profile.json"))
 		case r.URL.Path == "/gmail/v1/users/me/messages":
 			switch strings.Join(q["labelIds"], "+") {
 			case "INBOX":
@@ -138,4 +142,82 @@ func withID(t *testing.T, name, id string) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// A catch-up over the real contract: the recorded history, read by the real
+// client, applied to the real memory. The recorded pages name an arrival in
+// the inbox, the first inbox message archived and read, a label change and
+// an arrival this projection cannot see, and the third inbox message deleted.
+func TestACatchUpOverTheRealGmailContract(t *testing.T) {
+	// labels is what each message's metadata answers it carries now.
+	labels := map[string][]string{
+		"18c2a1b3f4d5e7a1": {"UNREAD", "INBOX"},
+		"18c2a1b3f4d5e6f7": {"IMPORTANT"},
+	}
+	var historyAsked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		q := r.URL.Query()
+		switch {
+		case r.URL.Path == "/gmail/v1/users/me/profile":
+			w.Write(contract(t, "profile.json"))
+		case r.URL.Path == "/gmail/v1/users/me/history":
+			if q.Get("pageToken") != "" {
+				w.Write(contract(t, "history-list-page2.json"))
+				return
+			}
+			historyAsked = q.Get("startHistoryId")
+			w.Write(contract(t, "history-list.json"))
+		case r.URL.Path == "/gmail/v1/users/me/messages":
+			switch strings.Join(q["labelIds"], "+") {
+			case "INBOX":
+				if q.Get("pageToken") != "" {
+					w.Write(contract(t, "messages-list-inbox-page2.json"))
+					return
+				}
+				w.Write(contract(t, "messages-list-inbox.json"))
+			default:
+				w.Write(contract(t, "messages-list-empty.json"))
+			}
+		case strings.HasPrefix(r.URL.Path, "/gmail/v1/users/me/messages/"):
+			id := strings.TrimPrefix(r.URL.Path, "/gmail/v1/users/me/messages/")
+			var m map[string]any
+			if err := json.Unmarshal(withID(t, "message-metadata.json", id), &m); err != nil {
+				t.Error(err)
+			}
+			if l, ok := labels[id]; ok {
+				m["labelIds"] = l
+			}
+			raw, _ := json.Marshal(m)
+			w.Write(raw)
+		default:
+			w.WriteHeader(404)
+			w.Write([]byte(`{"error":{"code":404,"message":"not found"}}`))
+		}
+	}))
+	defer srv.Close()
+
+	src, err := gmailapi.NewForTest(context.Background(), srv.URL, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := at("2026-01-06T12:00:00Z")
+	p := stable(src, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
+	listAll(t, p)
+	if got := keys(t, p, mailbox.InboxContext); len(strings.Split(got, ",")) != 3 {
+		t.Fatalf("inbox after the walk = %s", got)
+	}
+
+	refreshed(t, p, &clock, 2*time.Minute)
+	if historyAsked != "9912345" {
+		t.Errorf("history asked from %q, want the profile's id", historyAsked)
+	}
+	got := strings.Split(keys(t, p, mailbox.InboxContext), ",")
+	slices.Sort(got)
+	if want := []string{"msg:18c2a1b3f4d5e6f8", "msg:18c2a1b3f4d5e7a1"}; !slices.Equal(got, want) {
+		t.Errorf("inbox after the catch-up = %v, want %v", got, want)
+	}
+	if id := p.mem.HistoryID(); id != 9912431 {
+		t.Errorf("history id = %d, want the last page's", id)
+	}
 }

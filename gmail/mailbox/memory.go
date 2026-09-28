@@ -34,6 +34,10 @@ type Memory struct {
 	// membership. Until every collection has had one, nothing is ever GONE: a
 	// message missing from a memory nothing has walked is unseen, not deleted.
 	complete map[string]bool
+	// historyID is the Gmail history id the memory is current to: every
+	// change Gmail recorded after it is still to be applied. Zero means none
+	// is known, and only a full walk of every collection mints one.
+	historyID uint64
 }
 
 // NewMemory builds an empty memory.
@@ -120,6 +124,73 @@ func (m *Memory) Absorb(collection string, ids []string, unread map[string]bool,
 	}
 	m.members[collection] = kept
 	m.complete[collection] = true
+}
+
+// Apply folds a history catch-up in. Each fetched message is placed by the
+// labels it carries now: a member of every collection whose labels it has,
+// of none it lacks, and unread exactly when it carries UNREAD. Each deleted
+// message leaves every collection. Applying the same catch-up twice changes
+// nothing, which is what lets a refresh that read only part of it keep the
+// old history id and read it all again.
+func (m *Memory) Apply(fetched []Labelled, deleted []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range fetched {
+		msg := fetched[i].Message
+		m.messages[msg.ID] = &msg
+		has := make(map[string]bool, len(fetched[i].Labels))
+		for _, l := range fetched[i].Labels {
+			has[l] = true
+		}
+		if has[UnreadLabel] {
+			m.unread[msg.ID] = true
+		} else {
+			delete(m.unread, msg.ID)
+		}
+		for _, c := range Collections {
+			in := true
+			for _, l := range c.LabelIDs {
+				in = in && has[l]
+			}
+			m.members[c.Key] = placed(m.members[c.Key], msg.ID, in)
+		}
+	}
+	for _, id := range deleted {
+		delete(m.unread, id)
+		for _, c := range Collections {
+			m.members[c.Key] = placed(m.members[c.Key], id, false)
+		}
+	}
+}
+
+// placed is ids holding id exactly when in is true, otherwise unchanged.
+func placed(ids []string, id string, in bool) []string {
+	for i, have := range ids {
+		if have == id {
+			if in {
+				return ids
+			}
+			return append(ids[:i:i], ids[i+1:]...)
+		}
+	}
+	if in {
+		return append(ids, id)
+	}
+	return ids
+}
+
+// HistoryID answers the Gmail history id the memory is current to.
+func (m *Memory) HistoryID() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.historyID
+}
+
+// SetHistoryID records that the memory is current to id.
+func (m *Memory) SetHistoryID(id uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.historyID = id
 }
 
 // watermarkLocked is the date of the oldest message in ids the memory has a
@@ -210,6 +281,16 @@ func (m *Memory) memberLocked(collection, id string) bool {
 		}
 	}
 	return false
+}
+
+// Shows reports whether the memory has an answer for the collection: some
+// walk produced a usable membership, or it holds a member. It is the line
+// between a warm read, answered at once, and a cold one, which waits on the
+// walk.
+func (m *Memory) Shows(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.complete[key] || len(m.members[key]) > 0
 }
 
 // Swept reports whether every collection has produced a usable membership at
