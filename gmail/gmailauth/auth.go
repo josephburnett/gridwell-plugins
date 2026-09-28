@@ -174,6 +174,10 @@ func (s *savingSource) Token() (*oauth2.Token, error) {
 // door with nothing behind it.
 const AuthorizeTimeout = 5 * time.Minute
 
+// shutdownGrace bounds how long Authorize waits for the browser's page to be
+// written before it closes the listener anyway.
+const shutdownGrace = 5 * time.Second
+
 // Authorize runs the one-time flow on ln and answers the token Google issued.
 // It prints the consent URL to out; the user opens it, approves, and Google
 // redirects the browser back to ln with the code.
@@ -196,6 +200,14 @@ func Authorize(ctx context.Context, cfg *oauth2.Config, ln net.Listener, out io.
 		err  error
 	}
 	done := make(chan result, 1)
+	// The first result is the flow's; a repeat (a reloaded tab) still gets its
+	// page, and never blocks, so the drain below always ends.
+	report := func(r result) {
+		select {
+		case done <- r:
+		default:
+		}
+	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		switch {
@@ -204,18 +216,27 @@ func Authorize(ctx context.Context, cfg *oauth2.Config, ln net.Listener, out io.
 			return // NOT a result: an unrelated request must not end the flow
 		case q.Get("error") != "":
 			http.Error(w, "Google refused: "+q.Get("error"), http.StatusBadRequest)
-			done <- result{err: fmt.Errorf("gmail plugin: Google refused: %s", q.Get("error"))}
+			report(result{err: fmt.Errorf("gmail plugin: Google refused: %s", q.Get("error"))})
 		case q.Get("code") == "":
 			http.Error(w, "no code", http.StatusBadRequest)
 			return
 		default:
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			io.WriteString(w, "Gridwell has your Gmail token. You can close this tab.\n")
-			done <- result{code: q.Get("code")}
+			report(result{code: q.Get("code")})
 		}
 	})}
 	go srv.Serve(ln)
-	defer srv.Close()
+	// The handler reports before its page is written, so Close here would cut
+	// the browser off mid-response. Shutdown drains it; the bound is for a
+	// client that never finishes a request.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		if srv.Shutdown(ctx) != nil {
+			srv.Close()
+		}
+	}()
 
 	// AccessTypeOffline is what asks for a refresh token, and ApprovalForce is
 	// what makes Google issue a NEW one even when the user has approved this

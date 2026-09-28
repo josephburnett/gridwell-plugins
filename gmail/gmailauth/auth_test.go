@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -254,6 +256,97 @@ func TestAuthorizeSurfacesGooglesRefusal(t *testing.T) {
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "access_denied") {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+// The page the browser is sent back to is part of the flow: Authorize must
+// not return, and tear the listener down, while that page is still unwritten.
+// The listener here holds every write until the test releases it, so a flow
+// that closes over an unwritten response is caught every run rather than on
+// the rare schedule where the close wins.
+func TestAuthorizeAnswersTheBrowserBeforeItReturns(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := &heldListener{Listener: inner, writing: make(chan struct{}, 1), release: make(chan struct{})}
+	cfg, err := Config(filepath.Join("testdata", "credentials.json"), RedirectURL(ln))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Endpoint = oauth2.Endpoint{AuthURL: "https://accounts.example/o/oauth2/auth", TokenURL: "http://127.0.0.1:1/token"}
+
+	var out syncBuf
+	returned := make(chan error, 1)
+	go func() {
+		_, err := Authorize(context.Background(), cfg, ln, &out)
+		returned <- err
+	}()
+	consent := waitForURL(t, &out)
+	type answer struct {
+		status int
+		body   string
+		err    error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		resp, err := http.Get(consent.Query().Get("redirect_uri") + "?state=" + consent.Query().Get("state") + "&error=access_denied")
+		if err != nil {
+			got <- answer{err: err}
+			return
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		got <- answer{status: resp.StatusCode, body: string(body), err: err}
+	}()
+
+	<-ln.writing
+	select {
+	case err := <-returned:
+		t.Fatalf("Authorize returned (%v) with the browser's page still unwritten", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(ln.release)
+
+	a := <-got
+	if a.err != nil {
+		t.Fatalf("the browser got no page: %v", a.err)
+	}
+	if a.status != http.StatusBadRequest || !strings.Contains(a.body, "access_denied") {
+		t.Errorf("the browser got %d %q", a.status, a.body)
+	}
+	if err := <-returned; err == nil || !strings.Contains(err.Error(), "access_denied") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// heldListener's connections block every Write until release is closed, and
+// say on writing when the first one starts.
+type heldListener struct {
+	net.Listener
+	writing chan struct{}
+	release chan struct{}
+}
+
+func (l *heldListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &heldConn{Conn: c, l: l}, nil
+}
+
+type heldConn struct {
+	net.Conn
+	l *heldListener
+}
+
+func (c *heldConn) Write(p []byte) (int, error) {
+	select {
+	case c.l.writing <- struct{}{}:
+	default:
+	}
+	<-c.l.release
+	return c.Conn.Write(p)
 }
 
 // syncBuf is a buffer the flow writes from its own goroutine while the test
