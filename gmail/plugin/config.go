@@ -23,7 +23,7 @@ import (
 //
 //	credentials  the OAuth client JSON from the Google Cloud console (required)
 //	token        the token file `-auth` wrote (required)
-//	refresh      how often a collection is re-walked (default: 1m)
+//	refresh      how often memory catches up with Gmail (default: 1m)
 //	max_messages how many of the newest messages a grid holds (default: 500)
 //	endpoint     the Gmail API base URL (default: Gmail's own)
 //

@@ -12,6 +12,10 @@
 //	  one message's headers, snippet and internalDate
 //	GET users/me/messages/<id>?format=full
 //	  one message's MIME tree, from which the HTML body is taken
+//	GET users/me/profile
+//	  the account's current history id, taken before a full walk
+//	GET users/me/history?startHistoryId=…&historyTypes=…&pageToken=…
+//	  every change since a history id, a 404 once the id is too old
 //
 // testdata/ records the exact JSON each of those answers with, and
 // client_test.go serves it from an httptest server the real Gmail client is
@@ -23,6 +27,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"mime"
 	"net/http"
 	"net/mail"
@@ -148,15 +153,109 @@ func (c *Client) Label(ctx context.Context, labelIDs []string, limit int) (ids [
 }
 
 // Headers reads one message's metadata: what a tile is labelled and placed
-// by. It asks for three headers rather than the whole message, so a walk that
-// fetches a hundred new messages moves kilobytes and not megabytes.
-func (c *Client) Headers(ctx context.Context, id string) (mailbox.Message, error) {
+// by, and the labels it carries now. It asks for three headers rather than
+// the whole message, so a walk that fetches a hundred new messages moves
+// kilobytes and not megabytes.
+func (c *Client) Headers(ctx context.Context, id string) (mailbox.Message, []string, error) {
 	m, err := c.svc.Users.Messages.Get(User, id).
 		Format("metadata").MetadataHeaders(MetadataHeaders...).Context(ctx).Do()
 	if err != nil {
-		return mailbox.Message{}, wrap(ctx, "message "+id, err)
+		return mailbox.Message{}, nil, wrap(ctx, "message "+id, err)
 	}
-	return record(m), nil
+	return record(m), m.LabelIds, nil
+}
+
+// HistoryID reads the account's current history id. Taken before a full
+// walk, it is where the next catch-up starts: a change that lands during the
+// walk is read again, and reading a change twice is harmless.
+func (c *Client) HistoryID(ctx context.Context) (uint64, error) {
+	p, err := c.svc.Users.GetProfile(User).Context(ctx).Do()
+	if err != nil {
+		return 0, wrap(ctx, "profile", err)
+	}
+	return p.HistoryId, nil
+}
+
+// HistoryTypes are the changes a catch-up asks Gmail's history for.
+var HistoryTypes = []string{"messageAdded", "messageDeleted", "labelAdded", "labelRemoved"}
+
+// History reads every change since the history id, all pages, reduced to the
+// ones that name one of labels: a message that arrived carrying one, or a
+// label change that added or removed one. A message deleted is Deleted and
+// never Touched. A 404 is Gmail saying the id is too old, and answers
+// mailbox.ErrHistoryExpired.
+func (c *Client) History(ctx context.Context, since uint64, labels []string) (mailbox.Delta, error) {
+	watched := make(map[string]bool, len(labels))
+	for _, l := range labels {
+		watched[l] = true
+	}
+	names := func(ids []string) bool {
+		for _, id := range ids {
+			if watched[id] {
+				return true
+			}
+		}
+		return false
+	}
+	var d mailbox.Delta
+	seen, gone := map[string]bool{}, map[string]bool{}
+	touch := func(m *gmail.Message) {
+		if m != nil && m.Id != "" && !seen[m.Id] {
+			seen[m.Id] = true
+			d.Touched = append(d.Touched, m.Id)
+		}
+	}
+	token := ""
+	for {
+		call := c.svc.Users.History.List(User).StartHistoryId(since).HistoryTypes(HistoryTypes...).Context(ctx)
+		if token != "" {
+			call = call.PageToken(token)
+		}
+		resp, err := call.Do()
+		if err != nil {
+			var api *googleapi.Error
+			if errors.As(err, &api) && api.Code == http.StatusNotFound {
+				return mailbox.Delta{}, fmt.Errorf("gmail plugin: history since %d: %w", since, mailbox.ErrHistoryExpired)
+			}
+			return mailbox.Delta{}, wrap(ctx, "history", err)
+		}
+		for _, h := range resp.History {
+			for _, a := range h.MessagesAdded {
+				if a.Message != nil && names(a.Message.LabelIds) {
+					touch(a.Message)
+				}
+			}
+			for _, a := range h.LabelsAdded {
+				if names(a.LabelIds) {
+					touch(a.Message)
+				}
+			}
+			for _, r := range h.LabelsRemoved {
+				if names(r.LabelIds) {
+					touch(r.Message)
+				}
+			}
+			for _, x := range h.MessagesDeleted {
+				if x.Message != nil && x.Message.Id != "" && !gone[x.Message.Id] {
+					gone[x.Message.Id] = true
+					d.Deleted = append(d.Deleted, x.Message.Id)
+				}
+			}
+		}
+		d.HistoryID = resp.HistoryId
+		token = resp.NextPageToken
+		if token == "" {
+			break
+		}
+	}
+	kept := d.Touched[:0]
+	for _, id := range d.Touched {
+		if !gone[id] {
+			kept = append(kept, id)
+		}
+	}
+	d.Touched = kept
+	return d, nil
 }
 
 // record turns Gmail's message into the plugin's, reading only the facts that

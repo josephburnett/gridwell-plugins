@@ -2,8 +2,10 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -43,13 +45,30 @@ type fakeGmail struct {
 	err    error
 	// headerErr fails Headers only, which is the one failure a walk survives.
 	headerErr error
+	// failLabel fails the listing of that one label intersection.
+	failLabel string
 	calls     map[string]int
 	block     chan struct{} // when non-nil, Label waits on it
+	// history is Gmail's change log: off, every catch-up is told its id
+	// expired, so every refresh is a full walk. On, hid is the current id
+	// and log every change recorded after floor, which is the oldest id
+	// History still accepts.
+	history bool
+	hid     uint64
+	floor   uint64
+	log     []change
+}
+
+// change is one entry in the fake's history.
+type change struct {
+	hid     uint64
+	id      string
+	deleted bool
 }
 
 func newFake() *fakeGmail {
 	return &fakeGmail{labels: map[string][]string{}, whole: map[string]bool{},
-		recs: map[string]mailbox.Message{}, html: map[string]string{}, calls: map[string]int{}}
+		recs: map[string]mailbox.Message{}, html: map[string]string{}, calls: map[string]int{}, hid: 100}
 }
 
 func (f *fakeGmail) hold(collection string, ms ...mailbox.Message) {
@@ -77,6 +96,9 @@ func (f *fakeGmail) Label(_ context.Context, labelIDs []string, limit int) ([]st
 	if f.err != nil {
 		return nil, false, f.err
 	}
+	if f.failLabel != "" && key == f.failLabel {
+		return nil, false, status.Errorf(codes.Unavailable, "fake: %s is down", key)
+	}
 	ids := f.labels[key]
 	if len(ids) > limit {
 		return ids[:limit], false, nil
@@ -88,21 +110,91 @@ func (f *fakeGmail) Label(_ context.Context, labelIDs []string, limit int) ([]st
 	return ids, whole, nil
 }
 
-func (f *fakeGmail) Headers(_ context.Context, id string) (mailbox.Message, error) {
+func (f *fakeGmail) Headers(_ context.Context, id string) (mailbox.Message, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["headers"]++
 	if f.err != nil {
-		return mailbox.Message{}, f.err
+		return mailbox.Message{}, nil, f.err
 	}
 	if f.headerErr != nil {
-		return mailbox.Message{}, f.headerErr
+		return mailbox.Message{}, nil, f.headerErr
 	}
 	m, ok := f.recs[id]
 	if !ok {
-		return mailbox.Message{}, status.Errorf(codes.NotFound, "no message %s", id)
+		return mailbox.Message{}, nil, status.Errorf(codes.NotFound, "no message %s", id)
 	}
-	return m, nil
+	var labels []string
+	for key, ids := range f.labels {
+		if !slices.Contains(ids, id) {
+			continue
+		}
+		if strings.HasSuffix(key, "+"+mailbox.UnreadLabel) {
+			if !slices.Contains(labels, mailbox.UnreadLabel) {
+				labels = append(labels, mailbox.UnreadLabel)
+			}
+		} else {
+			labels = append(labels, key)
+		}
+	}
+	return m, labels, nil
+}
+
+func (f *fakeGmail) HistoryID(context.Context) (uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["profile"]++
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.hid, nil
+}
+
+func (f *fakeGmail) History(_ context.Context, since uint64, _ []string) (mailbox.Delta, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["history"]++
+	if f.err != nil {
+		return mailbox.Delta{}, f.err
+	}
+	if !f.history || since < f.floor {
+		return mailbox.Delta{}, fmt.Errorf("fake: history since %d: %w", since, mailbox.ErrHistoryExpired)
+	}
+	d := mailbox.Delta{HistoryID: f.hid}
+	for _, c := range f.log {
+		if c.hid <= since {
+			continue
+		}
+		if c.deleted {
+			d.Deleted = append(d.Deleted, c.id)
+		} else {
+			d.Touched = append(d.Touched, c.id)
+		}
+	}
+	return d, nil
+}
+
+// changed records that these messages' labels changed at Gmail, after the
+// test has changed them.
+func (f *fakeGmail) changed(ids ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range ids {
+		f.hid++
+		f.log = append(f.log, change{hid: f.hid, id: id})
+	}
+}
+
+// deleted removes a message from Gmail and records it.
+func (f *fakeGmail) deleted(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, ids := range f.labels {
+		f.labels[key] = slices.DeleteFunc(slices.Clone(ids), func(x string) bool { return x == id })
+	}
+	delete(f.recs, id)
+	f.hid++
+	f.log = append(f.log, change{hid: f.hid, id: id, deleted: true})
 }
 
 func (f *fakeGmail) HTML(_ context.Context, id string) ([]byte, string, error) {
@@ -495,7 +587,9 @@ func TestServeContentSurfacesAFailure(t *testing.T) {
 func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
-	p := stable(f, Options{})
+	f.failLabel = "STARRED" // the inbox walks, the starred mail does not
+	clock := at("2026-01-06T12:00:00Z")
+	p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
 
 	// Nothing walked yet: cannot say.
@@ -503,9 +597,9 @@ func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED {
 		t.Fatalf("cold probe = %v", got.Presence)
 	}
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
-		t.Fatal(err)
-	}
+	// The refresh walks the inbox, then fails on the starred mail.
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	landed(t, p)
 	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:a"})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_PRESENT {
 		t.Fatalf("a listed message probed %v", got.Presence)
@@ -514,9 +608,13 @@ func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED {
 		t.Fatalf("half-swept probe = %v", got.Presence)
 	}
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.StarredContext}); err != nil {
-		t.Fatal(err)
-	}
+	f.mu.Lock()
+	f.failLabel = ""
+	f.mu.Unlock()
+	clock = clock.Add(2 * time.Minute)
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}) // answers the last failure, and refreshes
+	landed(t, p)
+	listAll(t, p)
 	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:z"})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_GONE {
 		t.Fatalf("swept probe = %v", got.Presence)
@@ -781,18 +879,14 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 	}
 }
 
-// landed waits out every walk in flight, its cache write included: a warm
-// read answers before the walk it started has landed.
+// landed waits out the refresh in flight, its cache write included: a warm
+// read answers before the refresh it started has landed.
 func landed(t *testing.T, p *Plugin) {
 	t.Helper()
 	deadline := time.After(5 * time.Second)
 	for {
 		p.mu.Lock()
-		var f *flight
-		for _, ex := range p.flights {
-			f = ex
-			break
-		}
+		f := p.flight
 		p.mu.Unlock()
 		if f == nil {
 			return
@@ -848,5 +942,167 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	landed(t, p)
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("after a failed walk a warm read answered %v, want the walk's verdict", err)
+	}
+}
+
+// warmHistory is a plugin over a fake that keeps history, after its first
+// full walk, with a clock the test moves.
+func warmHistory(t *testing.T, f *fakeGmail, o Options) (*Plugin, *time.Time) {
+	t.Helper()
+	f.history = true
+	clock := at("2026-01-06T12:00:00Z")
+	o.Refresh = time.Minute
+	o.Now = func() time.Time { return clock }
+	p := stable(f, o)
+	listAll(t, p)
+	return p, &clock
+}
+
+// refreshed moves the clock past the refresh window and lets one refresh
+// land.
+func refreshed(t *testing.T, p *Plugin, clock *time.Time, by time.Duration) {
+	t.Helper()
+	*clock = clock.Add(by)
+	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	landed(t, p)
+}
+
+func keys(t *testing.T, p *Plugin, ctxKey string) string {
+	t.Helper()
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctxKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range resp.Entries {
+		out = append(out, e.Key)
+	}
+	return strings.Join(out, ",")
+}
+
+// Past the window, a refresh over a quiet mailbox is one history request and
+// nothing else: no listing, no metadata, no change.
+func TestAQuietRefreshIsOneHistoryRequest(t *testing.T) {
+	f := newFake()
+	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
+	p, clock := warmHistory(t, f, Options{})
+	before := keys(t, p, mailbox.InboxContext)
+	inbox, headers := f.count("INBOX"), f.count("headers")
+
+	refreshed(t, p, clock, 2*time.Minute)
+	if got := f.count("history"); got != 1 {
+		t.Errorf("history read %d times, want 1", got)
+	}
+	if f.count("INBOX") != inbox || f.count("headers") != headers || f.count("profile") != 1 {
+		t.Errorf("a quiet refresh listed or read: calls = %v", f.calls)
+	}
+	if after := keys(t, p, mailbox.InboxContext); after != before {
+		t.Errorf("inbox %s became %s", before, after)
+	}
+}
+
+// A catch-up changes exactly what history names: an arrival joins the inbox,
+// an archived message leaves it, a starred one joins the starred grid, a
+// deleted one leaves every grid. Each touched message costs one metadata
+// read, and nothing is listed.
+func TestACatchUpAppliesExactlyWhatHistoryNames(t *testing.T) {
+	f := newFake()
+	a, b, d := msg("a", "one", "2026-01-05T09:00:00Z"), msg("b", "two", "2026-01-05T10:00:00Z"), msg("d", "four", "2026-01-04T10:00:00Z")
+	untouched := msg("u", "five", "2026-01-05T08:00:00Z")
+	f.hold("INBOX", untouched, a, b)
+	f.hold("STARRED", d)
+	p, clock := warmHistory(t, f, Options{})
+	inbox, headers := f.count("INBOX"), f.count("headers")
+
+	c := msg("c", "three", "2026-01-05T11:00:00Z")
+	f.hold("INBOX", untouched, a, c) // c arrives, b is archived
+	f.hold("STARRED", d, a)          // a is starred
+	f.changed("c", "b", "a")
+	f.deleted("d")
+	refreshed(t, p, clock, 2*time.Minute)
+
+	if got := keys(t, p, mailbox.InboxContext); got != "msg:u,msg:a,msg:c" {
+		t.Errorf("inbox = %s", got)
+	}
+	if got := keys(t, p, mailbox.StarredContext); got != "msg:a" {
+		t.Errorf("starred = %s", got)
+	}
+	if got := f.count("headers") - headers; got != 3 {
+		t.Errorf("%d metadata reads, want 3 (a, b, c)", got)
+	}
+	if f.count("INBOX") != inbox {
+		t.Error("a catch-up listed a label")
+	}
+	resp, _ := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	for _, e := range resp.Entries {
+		if e.Key == "msg:a" && !strings.HasPrefix(e.Label, mailbox.StarMark) {
+			t.Errorf("a starred message has no star in the inbox: %q", e.Label)
+		}
+	}
+}
+
+// Gmail forgets old history. An id it refuses costs one full walk, which
+// mints a fresh id, and the refresh after that is a catch-up again.
+func TestAnExpiredHistoryIDWalksOnceThenCatchesUp(t *testing.T) {
+	f := newFake()
+	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
+	p, clock := warmHistory(t, f, Options{})
+	f.changed("a")
+	f.mu.Lock()
+	f.floor = f.hid // the id memory holds is now too old
+	f.mu.Unlock()
+
+	refreshed(t, p, clock, 2*time.Minute)
+	if got := f.count("INBOX"); got != 2 {
+		t.Fatalf("an expired id walked the inbox %d times in all, want 2", got)
+	}
+	if got := p.mem.HistoryID(); got != f.hid {
+		t.Fatalf("history id after the walk = %d, want Gmail's %d", got, f.hid)
+	}
+	refreshed(t, p, clock, 2*time.Minute)
+	if got := f.count("INBOX"); got != 2 {
+		t.Errorf("the refresh after the walk listed again (%d)", got)
+	}
+	if got := f.count("history"); got != 2 {
+		t.Errorf("history read %d times, want 2", got)
+	}
+}
+
+// The history id rides the cache: a restart past the refresh window catches
+// up from it instead of walking every collection.
+func TestTheHistoryIDSurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	f := newFake()
+	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
+	_, clock := warmHistory(t, f, Options{StateDir: dir})
+	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"), msg("b", "two", "2026-01-05T10:00:00Z"))
+	f.changed("b")
+	inbox := f.count("INBOX")
+
+	later := clock.Add(2 * time.Minute)
+	back := stable(f, Options{StateDir: dir, Refresh: time.Minute, Now: func() time.Time { return later }})
+	_, _ = back.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	landed(t, back)
+	if got := keys(t, back, mailbox.InboxContext); got != "msg:a,msg:b" {
+		t.Errorf("inbox after restart = %s", got)
+	}
+	if f.count("INBOX") != inbox {
+		t.Error("a restart walked instead of catching up")
+	}
+}
+
+// History is the whole truth only for what a catch-up can see, so once
+// SweepEvery has passed a refresh walks every collection again.
+func TestTheConsistencyPassWalksAgain(t *testing.T) {
+	f := newFake()
+	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
+	p, clock := warmHistory(t, f, Options{})
+	refreshed(t, p, clock, 2*time.Minute)
+	if got := f.count("INBOX"); got != 1 {
+		t.Fatalf("a refresh inside SweepEvery walked (%d)", got)
+	}
+	refreshed(t, p, clock, SweepEvery)
+	if got := f.count("INBOX"); got != 2 {
+		t.Errorf("a refresh past SweepEvery walked %d times in all, want 2", got)
 	}
 }

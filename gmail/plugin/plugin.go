@@ -44,17 +44,22 @@ const Kind = "gmail"
 // server.yaml's label; this is the fallback when none is configured.
 const displayName = "gmail"
 
-// DefaultRefresh bounds how often one collection is re-walked. The node lists
-// a context on every GetGrid and GetTile, and a descent must feel instant
-// rather than cost a round trip to Google each time.
+// DefaultRefresh bounds how often memory catches up with Gmail. The node
+// lists a context on every GetGrid and GetTile, and a descent must feel
+// instant rather than cost a round trip to Google each time.
 const DefaultRefresh = time.Minute
 
+// SweepEvery is how old the last full walk may grow before a refresh walks
+// every collection again instead of reading history. History carries every
+// change, but a catch-up only sees labels it watches and messages it could
+// read, so once a day the cold path runs as a consistency pass.
+const SweepEvery = 24 * time.Hour
+
 // DefaultFirstAnswer bounds how long a cold List — one the memory has no
-// answer for — waits on a walk in flight before answering what memory holds
-// so far. A cold walk is a label listing plus a
-// metadata read per new message; waiting for all of it would show the user
-// "loading" the whole time, and the node's refresh paints the rest in when it
-// lands.
+// answer for — waits on a refresh in flight before answering what memory
+// holds so far. A cold refresh is a label listing plus a metadata read per
+// new message; waiting for all of it would show the user "loading" the whole
+// time, and the node's refresh paints the rest in when it lands.
 const DefaultFirstAnswer = 2 * time.Second
 
 // DefaultMaxMessages bounds one collection's grid. A mailbox has no end, and
@@ -72,11 +77,17 @@ type Source interface {
 	// Label answers the ids one label (or intersection of labels) holds,
 	// newest first, up to limit, and whether the read reached the end.
 	Label(ctx context.Context, labelIDs []string, limit int) (ids []string, whole bool, err error)
-	// Headers answers one message's record.
-	Headers(ctx context.Context, id string) (mailbox.Message, error)
+	// Headers answers one message's record and the labels it carries now. An
+	// error with codes.NotFound means Gmail no longer has the message.
+	Headers(ctx context.Context, id string) (mailbox.Message, []string, error)
 	// HTML answers one message's body and its media type. An empty body is
 	// not an error: some messages have none.
 	HTML(ctx context.Context, id string) (body []byte, mediaType string, err error)
+	// HistoryID answers the account's current history id.
+	HistoryID(ctx context.Context) (uint64, error)
+	// History answers every change since the history id that names one of
+	// labels, or mailbox.ErrHistoryExpired when the id is too old.
+	History(ctx context.Context, since uint64, labels []string) (mailbox.Delta, error)
 }
 
 // Plugin implements pluginv1.PluginServer.
@@ -91,24 +102,28 @@ type Plugin struct {
 	// cache is the memory's file in the state directory, "" when the node
 	// handed no state_dir — then the plugin runs cold at every start.
 	cache string
-	// logf is the plugin's one log door: the walk's narration, and what must
-	// not be swallowed and must not fail a read — a cache it could not read
-	// or write, a metadata fetch that failed.
+	// logf is the plugin's one log door: the refresh's narration, and what
+	// must not be swallowed and must not fail a read — a cache it could not
+	// read or write, a metadata fetch that failed.
 	logf func(format string, args ...any)
 
+	// A refresh is of the whole account, never of one collection: Gmail's
+	// history is account-wide, and one history id is current to every
+	// collection at once.
 	mu       sync.Mutex
-	walkedAt map[string]time.Time // collection key → last successful walk
-	// flights are the walks in progress, by collection. A List that finds one
-	// joins it instead of starting its own, because the node lists a context
-	// on every GetGrid and GetTile and a burst of reads must cost Gmail one
-	// walk, not one per reader.
-	flights map[string]*flight
-	// failed is the last walk's error, by collection, until a walk of that
-	// collection lands. A warm read answers it, having not waited to hear it.
-	failed map[string]error
+	syncedAt time.Time // last refresh that landed
+	sweptAt  time.Time // last full walk that landed
+	// flight is the refresh in progress. A List that finds one joins it
+	// instead of starting its own, because the node lists a context on every
+	// GetGrid and GetTile and a burst of reads must cost Gmail one refresh,
+	// not one per reader.
+	flight *flight
+	// failed is the last refresh's error until a refresh lands. A warm read
+	// answers it, having not waited to hear it.
+	failed error
 }
 
-// flight is one walk in progress; done closes when err is final.
+// flight is one refresh in progress; done closes when err is final.
 type flight struct {
 	done chan struct{}
 	err  error
@@ -141,9 +156,6 @@ func New(src Source, o Options) *Plugin {
 		max:         o.MaxMessages,
 		now:         o.Now,
 		logf:        o.Logf,
-		walkedAt:    map[string]time.Time{},
-		flights:     map[string]*flight{},
-		failed:      map[string]error{},
 	}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
@@ -167,43 +179,36 @@ func New(src Source, o Options) *Plugin {
 	return p
 }
 
-// loadCache folds the last process's walk into memory, each collection's
-// landing time included: a walk is fresh for the refresh window whichever
+// loadCache folds the last process's memory in, with when its last refresh
+// and full walk landed: a refresh is fresh for the refresh window whichever
 // process ran it, so a restart inside that window answers every listing from
-// the file without touching Gmail. A missing file is the first boot, which is
-// not news; anything else is reported and the plugin starts cold, because a
-// cache is disposable and a walk rebuilds it, but a cache that cannot be read
-// must not vanish in silence.
+// the file without touching Gmail, and one past it catches up from the
+// remembered history id instead of walking. A missing file is the first boot,
+// which is not news; anything else is reported and the plugin starts cold,
+// because a cache is disposable and a walk rebuilds it, but a cache that
+// cannot be read must not vanish in silence.
 func (p *Plugin) loadCache() {
 	snap, err := mailbox.LoadCache(p.cache)
 	switch {
 	case err == nil:
 		p.mem.Restore(snap)
-		for key, in := range snap.Collections {
-			if !in.WalkedAt.IsZero() {
-				p.walkedAt[key] = in.WalkedAt
-			}
-		}
+		p.syncedAt, p.sweptAt = snap.SyncedAt, snap.SweptAt
 	case errors.Is(err, fs.ErrNotExist):
 	default:
 		p.logf("gmail plugin: cache: %v (starting cold)", err)
 	}
 }
 
-// saveCache writes memory back after a successful walk, each collection
-// stamped with when its own walk landed. A failure is reported and nothing
-// else: the walk succeeded, the answer is good, and only the next restart
-// pays for the lost write.
+// saveCache writes memory back after a refresh lands. A failure is reported
+// and nothing else: the refresh succeeded, the answer is good, and only the
+// next restart pays for the lost write.
 func (p *Plugin) saveCache() {
 	if p.cache == "" {
 		return
 	}
 	snap := p.mem.Snapshot()
 	p.mu.Lock()
-	for key, in := range snap.Collections {
-		in.WalkedAt = p.walkedAt[key]
-		snap.Collections[key] = in
-	}
+	snap.SyncedAt, snap.SweptAt = p.syncedAt, p.sweptAt
 	p.mu.Unlock()
 	if err := mailbox.SaveCache(p.cache, snap); err != nil {
 		p.logf("gmail plugin: cache: %v", err)
@@ -212,9 +217,9 @@ func (p *Plugin) saveCache() {
 
 // MinRefresherInterval is the fastest the background refresher runs, whatever
 // the refresh window says. The refresher is a warmer, not a poller: a window
-// shorter than a walk would leave it always walking, hammering Gmail. Reads
-// still walk on the configured window — a tiny one is how a test says "walk
-// on every read", and that keeps working.
+// shorter than a refresh would leave it always refreshing, hammering Gmail.
+// Reads still refresh on the configured window — a tiny one is how a test
+// says "refresh on every read", and that keeps working.
 const MinRefresherInterval = time.Second
 
 func (p *Plugin) refresherInterval() time.Duration {
@@ -224,13 +229,11 @@ func (p *Plugin) refresherInterval() time.Duration {
 	return p.refresh
 }
 
-// Run keeps the memory warm until ctx is done: one goroutine walking both
-// collections on the refresher's interval, so the walk has happened before a
-// read asks rather than because one did. It shares the flights and the
-// freshness window with the reads, so a tick that lands on a memory a read has
-// just refreshed costs Gmail nothing. Walking both together is also what lets
-// Probe ever answer GONE: a message is gone only when no collection holds it,
-// and that takes a pass over every one.
+// Run keeps the memory warm until ctx is done: one goroutine refreshing on
+// the refresher's interval, so the refresh has happened before a read asks
+// rather than because one did. It shares the flight and the freshness window
+// with the reads, so a tick that lands on a memory a read has just refreshed
+// costs Gmail nothing.
 func (p *Plugin) Run(ctx context.Context) {
 	t := time.NewTicker(p.refresherInterval())
 	defer t.Stop()
@@ -239,12 +242,9 @@ func (p *Plugin) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			for _, c := range mailbox.Collections {
-				// No verdict to read: the walk logs its own start and finish,
-				// and sync answers before the walk ends. The refresher's whole job is to make sure a walk
-				// happens.
-				_ = p.sync(ctx, c)
-			}
+			// No verdict to read: the refresh logs its own start and finish.
+			// The refresher's whole job is to make sure a refresh happens.
+			p.kick()
 		}
 	}
 }
@@ -263,84 +263,166 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	}, nil
 }
 
-// freshLocked reports whether the collection was walked within the refresh
-// window. A walk stamped in the FUTURE is not fresh: the stamp can come from
-// the cache file, and a clock that has since stepped back would otherwise
-// freeze the plugin on a stale memory. The caller holds p.mu.
-func (p *Plugin) freshLocked(key string) bool {
-	t, ok := p.walkedAt[key]
-	if !ok {
+// withinLocked reports whether t is less than d ago. A stamp in the FUTURE is
+// not within: it can come from the cache file, and a clock that has since
+// stepped back would otherwise freeze the plugin on a stale memory. The
+// caller holds p.mu.
+func (p *Plugin) withinLocked(t time.Time, d time.Duration) bool {
+	if t.IsZero() {
 		return false
 	}
-	d := p.now().Sub(t)
-	return d >= 0 && d < p.refresh
+	age := p.now().Sub(t)
+	return age >= 0 && age < d
 }
 
-// sync makes one collection answerable: fresh memory as-is, else a walk. A
-// walk already in flight for it is shared — one pass per burst of readers —
-// and no walk belongs to its starter: it runs detached, so no reader's
-// patience or hangup can kill or restart it. A read the memory already Shows
-// something for answers at once, with the last failed walk's error if there
-// is one: waiting on the walk would tax every read past the refresh window
-// for an answer memory already has. Only a cold read waits, at most
+// kick makes sure memory is fresh or a refresh is on its way, and answers the
+// flight to wait on — nil when memory is fresh — with the last refresh's
+// error. No refresh belongs to its starter: it runs detached, so no reader's
+// patience or hangup can kill or restart it.
+func (p *Plugin) kick() (*flight, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.withinLocked(p.syncedAt, p.refresh) {
+		return nil, nil
+	}
+	if p.flight == nil {
+		p.flight = &flight{done: make(chan struct{})}
+		go p.refreshFlight(p.flight)
+	}
+	return p.flight, p.failed
+}
+
+// sync makes one collection answerable. A read the memory already Shows
+// something for answers at once, with the last failed refresh's error if
+// there is one: waiting on the refresh would tax every read past the refresh
+// window for an answer memory already has. Only a cold read waits, at most
 // firstAnswer, then answers what memory holds so far.
 func (p *Plugin) sync(ctx context.Context, c mailbox.Collection) error {
 	warm := p.mem.Shows(c.Key)
-	p.mu.Lock()
-	if p.freshLocked(c.Key) {
-		p.mu.Unlock()
+	f, last := p.kick()
+	if f == nil {
 		return nil
 	}
-	f, running := p.flights[c.Key]
-	if !running {
-		f = &flight{done: make(chan struct{})}
-		p.flights[c.Key] = f
-		go p.walkFlight(c, f)
-	}
-	last := p.failed[c.Key]
-	p.mu.Unlock()
 	if warm {
 		return last
 	}
-
 	select {
 	case <-f.done:
 		return f.err
 	case <-time.After(p.firstAnswer):
-		p.logf("gmail plugin: %q answering with memory so far; the walk runs on", c.Key)
+		p.logf("gmail plugin: %q answering with memory so far; the refresh runs on", c.Key)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-// walkFlight is one detached walk: it owns its flight and outlives every
-// reader. Its context is the plugin's lifetime — every Gmail call is bounded
-// by the client's own timeout, so a dead source ends the walk with its error
-// rather than hanging it.
-func (p *Plugin) walkFlight(c mailbox.Collection, f *flight) {
-	p.logf("gmail plugin: walk %q starting", c.Key)
+// refreshFlight is one detached refresh: it owns its flight and outlives
+// every reader. Its context is the plugin's lifetime — every Gmail call is
+// bounded by the client's own timeout, so a dead source ends the refresh
+// with its error rather than hanging it.
+func (p *Plugin) refreshFlight(f *flight) {
 	start := time.Now()
-	n, err := p.walk(context.Background(), c)
-	p.logf("gmail plugin: walk %q finished in %s: %d messages, err=%v",
-		c.Key, time.Since(start).Round(time.Millisecond), n, err)
+	swept, err := p.catchUpOrSweep(context.Background())
+	how := "history"
+	if swept {
+		how = "full walk"
+	}
+	p.logf("gmail plugin: refresh (%s) finished in %s: err=%v", how, time.Since(start).Round(time.Millisecond), err)
 	p.mu.Lock()
 	if err == nil {
-		p.walkedAt[c.Key] = p.now()
-		delete(p.failed, c.Key)
-	} else {
-		p.failed[c.Key] = err
+		p.syncedAt = p.now()
+		if swept {
+			p.sweptAt = p.syncedAt
+		}
 	}
-	delete(p.flights, c.Key)
+	p.failed = err
+	p.flight = nil
 	p.mu.Unlock()
 	// The cache lands before the flight closes: a listing that waited for the
-	// walk is one a restart can repeat, and a listing answered without
-	// waiting becomes repeatable as soon as the walk behind it lands.
+	// refresh is one a restart can repeat, and a listing answered without
+	// waiting becomes repeatable as soon as the refresh behind it lands.
 	if err == nil {
 		p.saveCache()
 	}
 	f.err = err
 	close(f.done)
+}
+
+// catchUpOrSweep is the one rule for how memory catches up. A full walk of
+// every collection when memory has no history id, has not seen every
+// collection, or last walked SweepEvery ago; else Gmail's history since the
+// id memory is current to, and a full walk after all when Gmail says that id
+// is too old. swept reports that the full walk ran.
+func (p *Plugin) catchUpOrSweep(ctx context.Context) (swept bool, err error) {
+	p.mu.Lock()
+	due := p.mem.HistoryID() == 0 || !p.mem.Swept() || !p.withinLocked(p.sweptAt, SweepEvery)
+	p.mu.Unlock()
+	if !due {
+		err := p.catchUp(ctx)
+		if !errors.Is(err, mailbox.ErrHistoryExpired) {
+			return false, err
+		}
+		p.logf("gmail plugin: %v; walking every collection", err)
+	}
+	return true, p.sweep(ctx)
+}
+
+// sweep is the full walk: every collection, from the history id Gmail stood
+// at before the first listing. A change that lands during the walk is read
+// again by the next catch-up, and reading a change twice is harmless.
+func (p *Plugin) sweep(ctx context.Context) error {
+	id, err := p.src.HistoryID(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range mailbox.Collections {
+		if _, err := p.walk(ctx, c); err != nil {
+			return err
+		}
+	}
+	p.mem.SetHistoryID(id)
+	return nil
+}
+
+// catchUp applies Gmail's history since the id memory is current to: each
+// message whose watched labels changed is read as it stands now and placed
+// by its labels, and each deleted one, or one Gmail no longer answers for,
+// leaves. A message whose read failed costs its change this refresh, not the
+// others: the id stays where it was, so the next refresh reads that change
+// again. Every read failing is the refresh failing, with its reason.
+func (p *Plugin) catchUp(ctx context.Context) error {
+	d, err := p.src.History(ctx, p.mem.HistoryID(), mailbox.WatchedLabels())
+	if err != nil {
+		return err
+	}
+	fetched := make([]mailbox.Labelled, 0, len(d.Touched))
+	deleted := append([]string(nil), d.Deleted...)
+	var firstErr error
+	failed := 0
+	for _, id := range d.Touched {
+		m, labels, err := p.src.Headers(ctx, id)
+		switch {
+		case status.Code(err) == codes.NotFound:
+			deleted = append(deleted, id)
+		case err != nil:
+			if firstErr == nil {
+				firstErr = err
+			}
+			failed++
+			p.logf("gmail plugin: history: message %s: %v", id, err)
+		default:
+			fetched = append(fetched, mailbox.Labelled{Message: m, Labels: labels})
+		}
+	}
+	if failed > 0 && failed == len(d.Touched) {
+		return firstErr
+	}
+	p.mem.Apply(fetched, deleted)
+	if failed == 0 {
+		p.mem.SetHistoryID(d.HistoryID)
+	}
+	return nil
 }
 
 // walk is one pass over one collection, and it is a DELTA: two cheap id
@@ -367,7 +449,7 @@ func (p *Plugin) walk(ctx context.Context, c mailbox.Collection) (int, error) {
 	fetched := make([]mailbox.Message, 0, len(missing))
 	var firstErr error
 	for _, id := range missing {
-		m, err := p.src.Headers(ctx, id)
+		m, _, err := p.src.Headers(ctx, id)
 		if err != nil {
 			// One message the metadata read could not reach costs a tile this
 			// pass, not the walk: the id stays in the membership, so nothing

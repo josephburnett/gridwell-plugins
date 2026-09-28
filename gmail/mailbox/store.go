@@ -21,24 +21,29 @@ const CacheFile = "gmail.json"
 const snapshotVersion = 1
 
 // Snapshot is what the cache file holds: every message the memory has seen,
-// the unread set, and each collection's membership.
+// the unread set, each collection's membership, and the history id all of it
+// is current to.
+//
+// SyncedAt and SweptAt are the PLUGIN's facts — when its last refresh and its
+// last full walk landed — so a restart inside the refresh window answers from
+// the file without calling Gmail at all, and the consistency pass keeps its
+// schedule across restarts. Memory neither sets nor reads them; the plugin
+// stamps them on the way out and takes them back on the way in.
 type Snapshot struct {
 	Version     int                     `json:"version"`
 	Messages    []Message               `json:"messages"`
 	Unread      []string                `json:"unread"`
 	Collections map[string]CollectionIn `json:"collections"`
+	HistoryID   uint64                  `json:"historyId,omitempty"`
+	SyncedAt    time.Time               `json:"syncedAt,omitempty"`
+	SweptAt     time.Time               `json:"sweptAt,omitempty"`
 }
 
 // CollectionIn is one collection's remembered membership: what it held, and
-// whether the walk that read it produced a usable membership. WalkedAt is the
-// PLUGIN's fact — when that walk landed, so a restart inside the refresh
-// window answers from the file without calling Gmail at all. Memory neither
-// sets nor reads it; the plugin stamps it on the way out and takes it back on
-// the way in.
+// whether the walk that read it produced a usable membership.
 type CollectionIn struct {
-	Complete bool      `json:"complete"`
-	WalkedAt time.Time `json:"walkedAt,omitempty"`
-	IDs      []string  `json:"ids"`
+	Complete bool     `json:"complete"`
+	IDs      []string `json:"ids"`
 }
 
 // Snapshot copies out everything the memory holds, messages oldest first and
@@ -64,7 +69,7 @@ func (m *Memory) Snapshot() Snapshot {
 		copy(out, ids)
 		cols[key] = CollectionIn{Complete: m.complete[key], IDs: out}
 	}
-	return Snapshot{Version: snapshotVersion, Messages: msgs, Unread: unread, Collections: cols}
+	return Snapshot{Version: snapshotVersion, Messages: msgs, Unread: unread, Collections: cols, HistoryID: m.historyID}
 }
 
 // Restore folds a snapshot into the memory. It is the boot path only: the
@@ -88,6 +93,7 @@ func (m *Memory) Restore(s Snapshot) {
 			m.complete[key] = true
 		}
 	}
+	m.historyID = s.HistoryID
 }
 
 func sortMessages(ms []Message) {
