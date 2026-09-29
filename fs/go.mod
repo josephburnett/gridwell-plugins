@@ -2,7 +2,7 @@ module github.com/josephburnett/gridwell-plugins/fs
 
 go 1.26.6
 
-require github.com/josephburnett/gridwell/api v0.2.0
+require github.com/josephburnett/gridwell/api v0.3.0
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1
