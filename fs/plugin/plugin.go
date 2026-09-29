@@ -1,8 +1,8 @@
 // Package plugin is the fs content plugin: a stateless projection of a
 // directory tree. Keys are slash-relative paths under the configured root, and
-// "." is the one context. Every derivation and byte-level answer comes from
-// plugins/fs/fsfile. There is no database, no ids, and no layout; the node
-// owns those.
+// a directory's key is its context, "." the root's. Every derivation and
+// byte-level answer comes from plugins/fs/fsfile. There is no database, no
+// ids, and no layout; the node owns those.
 package plugin
 
 import (
@@ -39,8 +39,9 @@ func (trashHost) RemoveAll(p string) error { return trash.Trash(p) }
 // Plugin implements pluginv1.PluginServer for one directory root.
 type Plugin struct {
 	pluginv1.UnimplementedPluginServer
-	root string
-	host Host
+	root  string
+	host  Host
+	watch *watcher
 }
 
 // FromConfig builds the production plugin from the shared config vocabulary.
@@ -59,7 +60,7 @@ func New(root string, host Host) *Plugin {
 	if host == nil {
 		host = trashHost{}
 	}
-	return &Plugin{root: filepath.Clean(root), host: host}
+	return &Plugin{root: filepath.Clean(root), host: host, watch: newWatcher()}
 }
 
 // abs resolves a relative key under the root, refusing escapes. Keys are
@@ -103,6 +104,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	// The one collection this plugin serves: the configured tree. It
 	// declares no label, so the swatch reads as the configured instance.
 	resp.MenuEntries = []*pluginv1.MenuEntry{{Id: ".", Context: "."}}
+	resp.Watch = true
 	if label := filepath.Base(p.root); label != "/" && label != "." {
 		resp.DisplayName = label
 	}

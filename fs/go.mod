@@ -5,6 +5,7 @@ go 1.26.6
 require github.com/josephburnett/gridwell/api v0.2.0
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/josephburnett/gridwell-plugins/guest v0.1.0
 	google.golang.org/grpc v1.83.2
 )
