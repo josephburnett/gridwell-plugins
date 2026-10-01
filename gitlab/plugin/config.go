@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -19,8 +20,8 @@ const DefaultURL = "https://gitlab.com"
 // and starts its refresher. It is the one owner of the config-to-plugin
 // derivation, so the subprocess main and a bundled binary compose exactly the
 // same plugin. A missing or unreadable token is a refusal: the error is the
-// verdict, and both doors turn it into a launch that stops with the reason
-// instead of a plugin serving an empty grid.
+// verdict, the node shows the plugin broken with it instead of serving an
+// empty grid, and guest.Main asks again until the token file is fixed.
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	base := strings.TrimSpace(cfg["url"])
 	if base == "" {
@@ -48,7 +49,11 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	}
 	raw, err := os.ReadFile(tokenFile)
 	if err != nil {
-		return nil, fmt.Errorf("gitlab plugin: token_file: %v", err)
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		return nil, fmt.Errorf("gitlab plugin: token_file %s cannot be read: %v", tokenFile, err)
 	}
 	token := strings.TrimSpace(string(raw))
 	if token == "" {

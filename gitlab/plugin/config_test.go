@@ -12,13 +12,12 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// A config the plugin cannot run on is FromConfig's error — the one
-// verdict both doors (guest.Main, the loader's Factory) turn into a
-// launch that stops with the reason.
+// A config the plugin cannot run on is FromConfig's error, the sentence
+// guest.Main answers Info with and the node shows on the plugin's row.
 func TestFromConfigRefusesBadConfig(t *testing.T) {
 	cases := map[string]map[string]string{
 		"token_file not configured":              {},
-		"token_file: open":                       {"token_file": filepath.Join(t.TempDir(), "missing")},
+		"cannot be read: no such file":           {"token_file": filepath.Join(t.TempDir(), "missing")},
 		"is empty":                               {"token_file": writeTemp(t, "  \n")},
 		"refresh \"soon\" is not a duration":     {"token_file": writeTemp(t, "tok"), "refresh": "soon"},
 		"full_refresh \"-1m\" is not a duration": {"token_file": writeTemp(t, "tok"), "full_refresh": "-1m"},

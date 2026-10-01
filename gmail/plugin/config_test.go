@@ -41,9 +41,9 @@ func aToken(t *testing.T) string {
 	return tokenFile(t, string(raw))
 }
 
-// A config the plugin cannot run on is FromConfig's error — the one verdict
-// both doors turn into a launch that stops with the reason, rather than a
-// plugin row serving an empty grid forever.
+// A config the plugin cannot run on is FromConfig's error, the sentence
+// guest.Main answers Info with and the node shows on the plugin's row, rather
+// than a row serving an empty grid forever.
 func TestFromConfigRefusesBadConfig(t *testing.T) {
 	ok := aToken(t)
 	cases := []struct {

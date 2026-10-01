@@ -76,8 +76,9 @@ deleted credential is not rewarmed by use.
 knob the gitlab plugin's `url` is. Point it at a recorded Gmail to exercise the
 plugin without an account; the credential is still required and still sent.
 
-A missing or unreadable credential is refused at launch, with the reason and
-the `-auth` command to fix it.
+A missing or unreadable credential is refused, with the reason and the
+`-auth` command to fix it: the plugin's row shows it broken until the file is
+fixed, and it comes back without a restart.
 
 ## The API contract
 

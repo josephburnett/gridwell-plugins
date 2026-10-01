@@ -126,8 +126,8 @@ type Options struct {
 }
 
 // New builds a plugin over src. Whether there is a source is decided before
-// this point: FromConfig refuses a missing token, and both doors stop the
-// launch with its reason. A state directory holding a cache file is loaded
+// this point: FromConfig refuses a missing token, and the node shows the
+// plugin broken with its reason. A state directory holding a cache file is loaded
 // here, before the plugin serves its first request, so the first listing is
 // answered from what the last process walked.
 func New(src todos.Source, o Options) *Plugin {
