@@ -23,10 +23,10 @@ import (
 //	refresh  how often a collection is re-walked while the live feed is
 //	         down (default: 1m)
 //
-// A missing or unusable CLI is not refused here. It is a fact about the host
-// that can change while the node runs — the user installs it, or signs in —
-// and refusing at launch would leave a dead plugin row until the node is
-// restarted. Every read says so instead, with the reason.
+// A missing CLI is not refused here but at Info until it is found, because
+// it is a fact about the host that can change while the node runs: the user
+// installs it and the plugin comes back without a restart. A CLI that is not signed in
+// is only learned by running it, so every read says that, with the reason.
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	opts := Options{
 		// state_dir is the private directory the node mints for this plugin
@@ -43,8 +43,9 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 		}
 		opts.Refresh = d
 	}
-	src := heycli.New(heycli.Exec{Binary: strings.TrimSpace(cfg["binary"])})
-	p := New(src, opts)
+	cli := heycli.Exec{Binary: strings.TrimSpace(cfg["binary"])}
+	opts.Ready = cli.Installed
+	p := New(heycli.New(cli), opts)
 	// The refresher lives as long as the process does: a plugin subprocess is
 	// stopped by the node killing it, and there is nothing else to unwind.
 	go p.Run(context.Background())

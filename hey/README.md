@@ -32,6 +32,9 @@ Two optional keys:
 | `binary` | `hey` on PATH | the CLI to run |
 | `refresh` | `1m` | how often one collection is re-walked while the live feed is down |
 
+A CLI that cannot be found refuses the plugin's handshake with that reason, so
+its row shows it broken until the CLI is installed.
+
 ## The CLI contract
 
 Built against **hey 1.4.1**. Three commands, and nothing else:

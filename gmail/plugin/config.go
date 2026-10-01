@@ -38,10 +38,9 @@ import (
 // either path — a plugin that guessed where a credential lives would be
 // guessing about the one thing it must not.
 //
-// A missing or unusable credential IS refused here, unlike a missing CLI: it
-// is a fact about the configuration and not about the host's weather, and the
-// node turns the refusal into a launch that stops naming the reason instead of
-// a plugin row that serves an empty grid forever.
+// A missing or unusable credential is refused here: the node shows the
+// plugin broken with the reason instead of a row that serves an empty grid,
+// and guest.Main asks again until the file is fixed.
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	opts := Options{
 		// state_dir is the private directory the node mints for this plugin

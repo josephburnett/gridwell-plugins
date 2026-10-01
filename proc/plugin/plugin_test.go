@@ -2,8 +2,14 @@ package plugin
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
@@ -17,7 +23,8 @@ func TestFromConfigOwnsThePidDerivation(t *testing.T) {
 			t.Errorf("pid %q → %v, %v; want a refusal naming it", bad, impl, err)
 		}
 	}
-	for raw, want := range map[string]string{"": "1", "1": "1", " 4242 ": "4242"} {
+	self := strconv.Itoa(os.Getpid())
+	for raw, want := range map[string]string{"": "1", "1": "1", " " + self + " ": self} {
 		impl, err := FromConfig(map[string]string{"pid": raw})
 		if err != nil {
 			t.Fatalf("pid %q: %v", raw, err)
@@ -42,5 +49,39 @@ func TestInfoDeclaresHostContent(t *testing.T) {
 	}
 	if !info.GetHostContent() {
 		t.Error("host_content false; the process table is host state")
+	}
+}
+
+// A process the plugin cannot project refuses Info with a sentence naming
+// it, so the node shows the plugin broken rather than an empty tree; a
+// running process with no children is a tree it can serve. The check runs on
+// every Info until one passes, so a process that appears later is served
+// without a respawn, and one that exits after that is a dark source.
+func TestInfoRefusesAProcessItCannotServe(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	cases := map[*Plugin]string{
+		New(filepath.Join(root, "absent"), 1, nil): "the process table " + filepath.Join(root, "absent") + " cannot be read",
+		New(root, 4242, nil):                       "pid 4242 is not running",
+	}
+	for p, want := range cases {
+		_, err := p.Info(ctx, &pluginv1.InfoRequest{})
+		if status.Code(err) != codes.FailedPrecondition || !strings.HasPrefix(status.Convert(err).Message(), want) {
+			t.Errorf("procRoot %s pid %d → Info %v; want FailedPrecondition %q", p.procRoot, p.rootPID, err, want)
+		}
+	}
+
+	p := New(root, 4242, nil)
+	if err := os.Mkdir(filepath.Join(root, "4242"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
+		t.Errorf("a childless process that started after launch → Info %v, %v; want its one collection", info, err)
+	}
+	if err := os.Remove(filepath.Join(root, "4242")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil {
+		t.Errorf("a served process that exited → Info %v, want a dark source rather than a refusal", err)
 	}
 }

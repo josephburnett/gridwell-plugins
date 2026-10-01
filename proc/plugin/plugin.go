@@ -8,9 +8,13 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"google.golang.org/grpc/codes"
@@ -45,15 +49,18 @@ type Plugin struct {
 	procRoot string
 	rootPID  int64
 	killer   Killer
+	// served latches the first Info that found the process; see fs's
+	// Plugin.served for why the check stops there.
+	served atomic.Bool
 }
 
 // FromConfig builds the production plugin from the shared config vocabulary.
 // It is the one owner of the config-to-plugin derivation, so the subprocess
 // main and a bundled binary compose exactly the same plugin. The config key is
 // pid, an optional root pid defaulting to 1. A pid that is not a positive
-// integer is refused and the launch stops with the reason: silently falling
-// back to pid 1 would present the whole process tree as if that were what
-// server.yaml said.
+// integer is refused, and the node shows the plugin broken with the reason:
+// silently falling back to pid 1 would present the whole process tree as if
+// that were what server.yaml said.
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	var pid int64
 	if raw := strings.TrimSpace(cfg["pid"]); raw != "" {
@@ -81,7 +88,17 @@ func New(procRoot string, rootPID int64, killer Killer) *Plugin {
 	return &Plugin{procRoot: procRoot, rootPID: rootPID, killer: killer}
 }
 
+// Info refuses while the configured process is not there to project: a pid
+// that is not running, or a process table that cannot be read. It checks on
+// every call until one passes, so a process that starts after launch is
+// served without a respawn.
 func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	if !p.served.Load() {
+		if err := p.servable(); err != nil {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		p.served.Store(true)
+	}
 	label := "processes"
 	if p.rootPID != 1 {
 		label = "pid " + strconv.FormatInt(p.rootPID, 10)
@@ -101,6 +118,25 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		// earns these grids the host treatment on the client.
 		HostContent: true,
 	}, nil
+}
+
+// servable's error is the sentence the node shows on the plugin's row.
+func (p *Plugin) servable() error {
+	if _, err := os.Stat(p.procRoot); err != nil {
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		return fmt.Errorf("the process table %s cannot be read: %v", p.procRoot, err)
+	}
+	up, err := procsource.Exists(p.procRoot, p.rootPID)
+	switch {
+	case err != nil:
+		return fmt.Errorf("pid %d cannot be read: %v", p.rootPID, err)
+	case !up:
+		return fmt.Errorf("pid %d is not running", p.rootPID)
+	}
+	return nil
 }
 
 // keyPID resolves any key shape to the pid it denotes.

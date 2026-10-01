@@ -15,7 +15,9 @@ plugins:
 ```
 
 No `root` means the plugin declares no collection and contributes nothing to
-the (+) menu.
+the (+) menu. A `root` that does not exist, is not a directory, or cannot be
+read is refused with that reason, and the plugin's row shows it broken until
+the directory is there.
 
 ## Changes
 

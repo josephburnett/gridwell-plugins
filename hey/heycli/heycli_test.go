@@ -415,3 +415,24 @@ func TestAFeedWithNoCLIIsAVerdict(t *testing.T) {
 		t.Errorf("err = %v, want FailedPrecondition", err)
 	}
 }
+
+// Installed is the check Info makes: a CLI that cannot be found is named in
+// the sentence, and one on PATH passes without being run.
+func TestInstalledNamesAMissingCLI(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "no-such-hey")
+	if err := (Exec{Binary: missing}).Installed(); err == nil || !strings.Contains(err.Error(), missing) {
+		t.Errorf("missing path → %v, want a refusal naming it", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if err := (Exec{}).Installed(); err == nil || !strings.Contains(err.Error(), `"hey" is not installed`) {
+		t.Errorf("no hey on PATH → %v, want a refusal naming it", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hey"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if err := (Exec{}).Installed(); err != nil {
+		t.Errorf("hey on PATH → %v, want installed", err)
+	}
+}

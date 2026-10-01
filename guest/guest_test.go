@@ -49,8 +49,8 @@ func TestConfigMalformedIsAnError(t *testing.T) {
 
 // TestMainRefusesTheHandshake: a config that will not decode, and a factory
 // that refuses its config, both become a plugin whose Info answers
-// FailedPrecondition with the reason, which is how the host stops the
-// launch naming it. A factory that builds is served as itself.
+// FailedPrecondition with the reason, which the node shows as the plugin
+// broken. A factory that builds is served as itself.
 func TestMainRefusesTheHandshake(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv(gplug.ConfigEnvVar, `{not valid json`)
@@ -78,5 +78,46 @@ func TestMainRefusesTheHandshake(t *testing.T) {
 	built := &pluginv1.UnimplementedPluginServer{}
 	if got := build(func(map[string]string) (pluginv1.PluginServer, error) { return built, nil }); got != built {
 		t.Errorf("a factory that builds must be served as itself, got %T", got)
+	}
+}
+
+type countingInfo struct {
+	pluginv1.UnimplementedPluginServer
+}
+
+func (countingInfo) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	return &pluginv1.InfoResponse{DisplayName: "built"}, nil
+}
+
+// A refused build is asked again on each call, so a config fixed on disk
+// comes back without a respawn, and once built it is asked no more.
+func TestARefusedBuildComesBackWhenItsConfigIsFixed(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(gplug.ConfigEnvVar, `{"token_file":"/x"}`)
+	fixed, builds := false, 0
+	impl := build(func(map[string]string) (pluginv1.PluginServer, error) {
+		builds++
+		if !fixed {
+			return nil, errors.New(`token_file "/x" does not exist`)
+		}
+		return countingInfo{}, nil
+	})
+	if _, err := impl.Info(ctx, &pluginv1.InfoRequest{}); status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("refused → Info %v, want FailedPrecondition with the reason", err)
+	}
+	if _, err := impl.List(ctx, &pluginv1.ListRequest{}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("refused → List %v, want the same refusal on every verb", err)
+	}
+	fixed = true
+	info, err := impl.Info(ctx, &pluginv1.InfoRequest{})
+	if err != nil || info.DisplayName != "built" {
+		t.Fatalf("fixed → Info %v, %v; want the built plugin's answer", info, err)
+	}
+	was := builds
+	if _, err := impl.Info(ctx, &pluginv1.InfoRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if builds != was {
+		t.Errorf("the factory ran again after it built (%d → %d runs)", was, builds)
 	}
 }

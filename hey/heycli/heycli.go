@@ -69,6 +69,22 @@ type Exec struct {
 	Timeout time.Duration
 }
 
+// Installed says whether the CLI can be found, in a sentence a person reads
+// on the plugin's row. It runs nothing, so Info can ask it on every call.
+func (e Exec) Installed() error {
+	bin := strings.TrimSpace(e.Binary)
+	if bin == "" {
+		bin = DefaultBinary
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		if strings.ContainsRune(bin, os.PathSeparator) {
+			return fmt.Errorf("the hey CLI %q is not an executable file", bin)
+		}
+		return fmt.Errorf("the hey CLI %q is not installed: it is not on PATH", bin)
+	}
+	return nil
+}
+
 // Run spawns the CLI with no stdin. HEY_NONINTERACTIVE stops the CLI offering
 // to sign the user in: a prompt with nothing to read it would hang the sweep,
 // and signing in is the user's own gesture at their own terminal, never
