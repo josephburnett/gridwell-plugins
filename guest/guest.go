@@ -17,10 +17,12 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -48,42 +50,140 @@ func Config() (map[string]string, error) {
 
 // Factory is the plugin's config→plugin derivation: the one owner of how
 // server.yaml config becomes a running plugin, and the argument Main takes.
-// An error is the verdict "I do not have the config I need".
+// An error is the verdict "I cannot serve what this config declares", in
+// plain words the user reads on the plugin's row.
 type Factory func(cfg map[string]string) (pluginv1.PluginServer, error)
 
-// Main decodes the spawn config, builds the plugin, and serves it. A
-// config that will not decode, or a factory that refuses it, is served as
-// a refusal: a plugin whose Info answers FailedPrecondition with the
-// reason, so the host stops the launch naming it. Exiting instead would
-// present as a handshake failure with the reason lost in the guest's
-// stderr.
+// Main decodes the spawn config, builds the plugin, and serves it. A factory
+// that refuses is asked again on every call until it builds, so a file the
+// config names that is fixed on disk comes back without a respawn; until then
+// every call, Info included, answers FailedPrecondition with the reason, which
+// the node shows as the plugin broken. Exiting instead would present as a
+// handshake failure with the reason lost in the guest's stderr.
 func Main(factory Factory) {
 	Serve(build(factory))
 }
 
 // build is Main without the serving: the decode + factory + refusal
-// derivation, testable in-process.
+// derivation, testable in-process. A config that will not decode is the
+// spawn's, so it is refused for the process's life.
 func build(factory Factory) pluginv1.PluginServer {
 	cfg, err := Config()
 	if err != nil {
-		return refusal{err: err}
+		return &rebuilding{factory: func(map[string]string) (pluginv1.PluginServer, error) { return nil, err }}
 	}
 	impl, err := factory(cfg)
 	if err != nil {
-		return refusal{err: err}
+		return &rebuilding{factory: factory, cfg: cfg}
 	}
 	return impl
 }
 
-// refusal is the plugin that could not be built: Info carries the reason
-// as FailedPrecondition; every other verb is unimplemented.
-type refusal struct {
-	pluginv1.UnimplementedPluginServer
-	err error
+// rebuilding is the plugin whose factory refused: each call runs the factory
+// again until it builds, then forwards to what it built. It embeds
+// UnsafePluginServer rather than the Unimplemented server, so a verb added to
+// plugin.v1 is a compile error here instead of one this wrapper refuses.
+type rebuilding struct {
+	pluginv1.UnsafePluginServer
+	factory Factory
+	cfg     map[string]string
+
+	mu   sync.Mutex
+	impl pluginv1.PluginServer
 }
 
-func (r refusal) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
-	return nil, status.Errorf(codes.FailedPrecondition, "%v", r.err)
+func (r *rebuilding) built() (pluginv1.PluginServer, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.impl != nil {
+		return r.impl, nil
+	}
+	impl, err := r.factory(r.cfg)
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
+	r.impl = impl
+	return impl, nil
+}
+
+func (r *rebuilding) Info(ctx context.Context, req *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	impl, err := r.built()
+	if err != nil {
+		return nil, err
+	}
+	return impl.Info(ctx, req)
+}
+
+func (r *rebuilding) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
+	impl, err := r.built()
+	if err != nil {
+		return nil, err
+	}
+	return impl.List(ctx, req)
+}
+
+func (r *rebuilding) ReadContent(req *pluginv1.ReadContentRequest, s grpc.ServerStreamingServer[pluginv1.ContentChunk]) error {
+	impl, err := r.built()
+	if err != nil {
+		return err
+	}
+	return impl.ReadContent(req, s)
+}
+
+func (r *rebuilding) WriteContent(s grpc.ClientStreamingServer[pluginv1.WriteContentRequest, pluginv1.WriteContentResponse]) error {
+	impl, err := r.built()
+	if err != nil {
+		return err
+	}
+	return impl.WriteContent(s)
+}
+
+func (r *rebuilding) ServeContent(req *pluginv1.ServeContentRequest, s grpc.ServerStreamingServer[pluginv1.ServeContentChunk]) error {
+	impl, err := r.built()
+	if err != nil {
+		return err
+	}
+	return impl.ServeContent(req, s)
+}
+
+func (r *rebuilding) GetPreview(ctx context.Context, req *pluginv1.GetPreviewRequest) (*pluginv1.GetPreviewResponse, error) {
+	impl, err := r.built()
+	if err != nil {
+		return nil, err
+	}
+	return impl.GetPreview(ctx, req)
+}
+
+func (r *rebuilding) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
+	impl, err := r.built()
+	if err != nil {
+		return nil, err
+	}
+	return impl.Probe(ctx, req)
+}
+
+func (r *rebuilding) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {
+	impl, err := r.built()
+	if err != nil {
+		return nil, err
+	}
+	return impl.Delete(ctx, req)
+}
+
+func (r *rebuilding) Search(ctx context.Context, req *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
+	impl, err := r.built()
+	if err != nil {
+		return nil, err
+	}
+	return impl.Search(ctx, req)
+}
+
+func (r *rebuilding) Watch(req *pluginv1.WatchRequest, s grpc.ServerStreamingServer[pluginv1.Change]) error {
+	impl, err := r.built()
+	if err != nil {
+		return err
+	}
+	return impl.Watch(req, s)
 }
 
 // watchHost exits the guest when the spawning host dies. go-plugin gives a
