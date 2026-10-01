@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,6 +124,63 @@ func TestDeleteFailureLeavesTheMemoryAlone(t *testing.T) {
 	week := todos.WeekKey(todos.WeekStart(at("2026-08-18T10:00:00Z")))
 	if got := weekState(t, p, week, "todo:1"); got != todos.StatePending {
 		t.Fatalf("after a refused write the listing says %q, want pending", got)
+	}
+}
+
+// held serves src's pages, holding each page named in gates — once — after its
+// answer is read and before it is returned: a GitLab that answered, and a
+// walk that has not yet heard.
+type held struct {
+	src   *oneShot
+	gates map[string]gate
+	once  sync.Map
+}
+
+type gate struct{ began, release chan struct{} }
+
+func newGate() gate { return gate{make(chan struct{}), make(chan struct{})} }
+
+func (h *held) Page(ctx context.Context, state string, page int) (todos.Reply, error) {
+	r, err := h.src.Page(ctx, state, page)
+	r.Todos = append([]todos.Todo(nil), r.Todos...) // fakeMarker edits src in place
+	key := fmt.Sprintf("%s/%d", state, page)
+	if g, ok := h.gates[key]; ok {
+		if _, done := h.once.LoadOrStore(key, true); !done {
+			close(g.began)
+			<-g.release
+		}
+	}
+	return r, err
+}
+
+// A todo trashed while a walk's pending page is in flight stays done: the page
+// GitLab answered before the write still says pending, and a read between that
+// page landing and the done list being walked must not show it so.
+func TestATrashOutlivesAWalkAlreadyInFlight(t *testing.T) {
+	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending"), mk(2, "2026-08-25T10:00:00Z", "pending")}}
+	pending, done := newGate(), newGate()
+	p := warmOver(t, &held{src: src, gates: map[string]gate{"pending/1": pending, "done/1": done}}, time.Hour)
+	p.marker = &fakeMarker{src: src}
+	ctx := context.Background()
+	week, key := "week:2026-08-17", "todo:1"
+
+	// A warm read answers from memory and starts the walk behind it.
+	if got := weekState(t, p, week, key); got != todos.StatePending {
+		t.Fatalf("before: %q", got)
+	}
+	<-pending.began
+	if _, err := p.Delete(ctx, &pluginv1.DeleteRequest{Key: key}); err != nil {
+		t.Fatal(err)
+	}
+	close(pending.release)
+	<-done.began
+	if got := weekState(t, p, week, key); got != todos.StateDone {
+		t.Errorf("a page fetched before the trash flipped the todo back to %q", got)
+	}
+	close(done.release)
+	landed(t, p)
+	if got := weekState(t, p, week, key); got != todos.StateDone {
+		t.Errorf("after the walk landed the listing says %q, want done", got)
 	}
 }
 

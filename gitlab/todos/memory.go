@@ -26,6 +26,9 @@ type Reply struct {
 	// walk that knows it fetches pages concurrently; one that does not pages
 	// serially.
 	Pages int
+	// asOf is the memory's clock when the walk asked for this page; see
+	// Memory.marks.
+	asOf uint64
 }
 
 // walkConcurrency is how many pages a walk fetches at once: GitLab answers
@@ -58,6 +61,12 @@ type Memory struct {
 	// TakeChanges; see note.
 	changedWeeks map[time.Time]bool
 	rootChanged  bool
+	// marks holds, per todo marked done here, the clock tick of the mark. A
+	// page asked for before that tick may still say pending, and absorb keeps
+	// the mark over it; the first page asked for after it is GitLab's word
+	// again and retires the mark. clock ticks only on a mark.
+	marks map[int64]uint64
+	clock uint64
 }
 
 // resumePoint is a failed walk's mark: the phase that failed, and the page the
@@ -71,7 +80,7 @@ type resumePoint struct {
 
 // NewMemory builds an empty memory.
 func NewMemory() *Memory {
-	return &Memory{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}, changedWeeks: map[time.Time]bool{}}
+	return &Memory{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}, changedWeeks: map[time.Time]bool{}, marks: map[int64]uint64{}}
 }
 
 // Changes is what the memory changed since it was last asked: the weeks whose
@@ -186,8 +195,8 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 		// coverage is the oldest creation time the pending walk provably
 		// enumerated past; zero means everything.
 		coverage := since
-		failed, err := walkPages(ctx, src, StatePending, pendingFrom, func(r Reply) bool {
-			m.absorb(r.Todos)
+		failed, err := m.walkPages(ctx, src, StatePending, pendingFrom, func(r Reply) bool {
+			m.absorb(r.Todos, r.asOf)
 			for i := range r.Todos {
 				seenPending[r.Todos[i].ID] = true
 			}
@@ -206,8 +215,8 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 		}
 	}
 
-	failed, err := walkPages(ctx, src, StateDone, doneFrom, func(r Reply) bool {
-		unknown := m.absorb(r.Todos)
+	failed, err := m.walkPages(ctx, src, StateDone, doneFrom, func(r Reply) bool {
+		unknown := m.absorb(r.Todos, r.asOf)
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if !r.More {
@@ -233,8 +242,8 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 // list, may — and leaves no resume mark, since the next glance starts at the
 // top anyway. A page not newest-first ends it: its top proves nothing.
 func (m *Memory) Glance(ctx context.Context, src Source) error {
-	_, err := walkPages(ctx, src, StatePending, 1, func(r Reply) bool {
-		unknown := m.absorb(r.Todos)
+	_, err := m.walkPages(ctx, src, StatePending, 1, func(r Reply) bool {
+		unknown := m.absorb(r.Todos, r.asOf)
 		return len(r.Todos) == 0 || unknown < len(r.Todos) || !descending(r.Todos)
 	})
 	return err
@@ -256,10 +265,11 @@ func pastSince(todos []Todo, since time.Time) bool {
 // ahead of the page visit has reached, so an early stop wastes little. Pages
 // past the named length — the list grew mid-walk — or a list of unknown length
 // are paged one after another.
-func walkPages(ctx context.Context, src Source, state string, from int, visit func(Reply) (stop bool)) (failed int, err error) {
+func (m *Memory) walkPages(ctx context.Context, src Source, state string, from int, visit func(Reply) (stop bool)) (failed int, err error) {
 	fetch := func(ctx context.Context, page int) (Reply, error) {
-		start := time.Now()
+		start, asOf := time.Now(), m.now()
 		r, err := src.Page(ctx, state, page)
+		r.asOf = asOf
 		if ctx.Err() == nil || err == nil {
 			// A page the walk abandoned is not news; one it asked for is.
 			logPage(state, page, len(r.Todos), r.More, time.Since(start), err)
@@ -410,10 +420,11 @@ func rewind(page int) int {
 	return page - 1
 }
 
-// absorb records a page, with GitLab's record replacing the remembered one,
-// its state included, so a restored todo goes back to pending. It returns how
-// many were new.
-func (m *Memory) absorb(todos []Todo) (unknown int) {
+// absorb records a page asked for at clock tick asOf, with GitLab's record
+// replacing the remembered one, its state included, so a restored todo goes
+// back to pending — unless the todo was marked done after the page was asked
+// for (see marks). It returns how many were new.
+func (m *Memory) absorb(todos []Todo, asOf uint64) (unknown int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range todos {
@@ -421,6 +432,13 @@ func (m *Memory) absorb(todos []Todo) (unknown int) {
 		was, ok := m.todos[t.ID]
 		if !ok {
 			unknown++
+		}
+		if mark, marked := m.marks[t.ID]; marked {
+			if asOf < mark {
+				t.State = StateDone
+			} else {
+				delete(m.marks, t.ID)
+			}
 		}
 		m.noteLocked(was, &t)
 		m.todos[t.ID] = &t
@@ -452,7 +470,8 @@ func (m *Memory) Walked() bool {
 // flips to done. It is the write-side sibling of deriveDone's absence rule —
 // the only other place state changes without a walk saying so — and it is only
 // called after GitLab itself accepted the write, so the next walk's record
-// agrees with it. False when the todo is unknown.
+// agrees with it, and a page asked for before it cannot undo it (see marks).
+// False when the todo is unknown.
 func (m *Memory) MarkDone(id int64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -460,10 +479,18 @@ func (m *Memory) MarkDone(id int64) bool {
 	if !ok {
 		return false
 	}
+	m.clock++
+	m.marks[id] = m.clock
 	was := *t
 	t.State = StateDone
 	m.noteLocked(&was, t)
 	return true
+}
+
+func (m *Memory) now() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.clock
 }
 
 // Get answers one remembered todo (a copy).

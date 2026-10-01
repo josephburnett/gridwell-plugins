@@ -289,7 +289,7 @@ func TestWeeksAndEntries(t *testing.T) {
 		mk(2, "2026-08-18T12:00:00Z", StateDone),    // Tue, same day, second row
 		mk(3, "2026-08-23T10:00:00Z", StateDone),    // Sun
 		mk(4, "2026-08-25T10:00:00Z", StatePending), // week of 08-24
-	})
+	}, 0)
 	weeks := m.Weeks()
 	if len(weeks) != 2 || !weeks[0].Start.Equal(at("2026-08-24T00:00:00Z")) || weeks[1].Open != 1 || weeks[1].Done != 2 {
 		t.Fatalf("weeks = %+v", weeks)
@@ -800,5 +800,78 @@ func TestAGlancePagesOnlyToTheFirstKnownTodo(t *testing.T) {
 	}
 	if got := m.TakeChanges().Contexts(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-24"}) {
 		t.Errorf("the glance changed %v", got)
+	}
+}
+
+// gate holds one page after its fetch began until the test releases it.
+type gate struct{ began, release chan struct{} }
+
+func newGate() gate { return gate{make(chan struct{}), make(chan struct{})} }
+
+// gatedSource holds the pages named in gates, once each: the window in which
+// a walk has asked GitLab and not yet heard.
+type gatedSource struct {
+	*fakeSource
+	gates map[string]gate
+	once  sync.Map
+}
+
+func (g *gatedSource) Page(ctx context.Context, state string, page int) (Reply, error) {
+	r, err := g.fakeSource.Page(ctx, state, page)
+	key := state + "/" + strconv.Itoa(page)
+	if gt, ok := g.gates[key]; ok {
+		if _, held := g.once.LoadOrStore(key, true); !held {
+			close(gt.began)
+			<-gt.release
+		}
+	}
+	return r, err
+}
+
+// A mark-done GitLab accepted while a walk's pending page was in flight is not
+// undone by that page: the page was fetched before the mark, so its pending is
+// stale, and nothing is announced for it. A page fetched after the mark is
+// GitLab's word again, a reopen included.
+func TestAMarkOutlivesAPageFetchedBeforeIt(t *testing.T) {
+	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-18T10:00:00Z", StatePending)}}
+	m := NewMemory()
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	m.TakeChanges()
+
+	pending, done := newGate(), newGate()
+	g := &gatedSource{fakeSource: src, gates: map[string]gate{"pending/1": pending, "done/1": done}}
+	walked := make(chan error)
+	go func() { walked <- m.Sync(context.Background(), g, time.Time{}) }()
+	<-pending.began
+	m.MarkDone(1)
+	m.TakeChanges()
+	src.mu.Lock()
+	src.pending, src.done = nil, []Todo{mk(1, "2026-08-18T10:00:00Z", StateDone)}
+	src.mu.Unlock()
+	close(pending.release)
+	// The stale pending page is absorbed; the done list is not yet read.
+	<-done.began
+	if got, _ := m.Get(1); got.State != StateDone {
+		t.Errorf("a page fetched before the mark flipped the todo back to %q", got.State)
+	}
+	if got := m.TakeChanges().Contexts(); got != nil {
+		t.Errorf("the stale page announced %v", got)
+	}
+	close(done.release)
+	if err := <-walked; err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopened at GitLab: a page fetched after the mark wins.
+	src.mu.Lock()
+	src.pending, src.done = []Todo{mk(1, "2026-08-18T10:00:00Z", StatePending)}, nil
+	src.mu.Unlock()
+	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Get(1); got.State != StatePending {
+		t.Fatalf("a page fetched after the mark says pending, memory says %q", got.State)
 	}
 }

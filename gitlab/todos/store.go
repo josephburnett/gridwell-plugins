@@ -44,12 +44,12 @@ func (m *Memory) Snapshot() Snapshot {
 }
 
 // Restore folds a snapshot into the memory. The records absorb exactly as a
-// walked page does, and doneComplete only ever rises: a memory that has
+// walked page does, one asked for before any mark, and doneComplete only ever rises: a memory that has
 // already reached the end of the done list does not forget it because the
 // file was written before that walk. A restore is no change to announce: it
 // is what the last process already answered.
 func (m *Memory) Restore(s Snapshot) {
-	m.absorb(s.Todos)
+	m.absorb(s.Todos, 0)
 	m.TakeChanges()
 	if s.DoneComplete {
 		m.mu.Lock()
