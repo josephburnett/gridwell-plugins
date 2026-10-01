@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -112,6 +113,9 @@ type Plugin struct {
 	changes fanout
 
 	ready func() error
+	// readied latches the first Info ready passed: a CLI that goes missing
+	// later is a source gone dark, which every read reports.
+	readied atomic.Bool
 }
 
 // flight is one walk in progress; done closes when err is final.
@@ -138,8 +142,8 @@ type Options struct {
 	// RecoverAfter is how long a disconnected feed may take to say ready
 	// again before it is restarted. Zero means DefaultRecoverAfter.
 	RecoverAfter time.Duration
-	// Ready is asked on every Info, and its error is Info's refusal. Nil
-	// means the source is always servable, as a test's fake is.
+	// Ready is asked on every Info until it passes, and its error is Info's
+	// refusal. Nil means the source is always servable, as a test's fake is.
 	Ready func() error
 }
 
@@ -274,10 +278,11 @@ func (p *Plugin) Run(ctx context.Context) {
 }
 
 func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
-	if p.ready != nil {
+	if p.ready != nil && !p.readied.Load() {
 		if err := p.ready(); err != nil {
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		}
+		p.readied.Store(true)
 	}
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,

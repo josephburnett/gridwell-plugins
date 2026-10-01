@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,6 +45,11 @@ type Plugin struct {
 	root  string
 	host  Host
 	watch *watcher
+	// served latches the first Info that found the root readable. The check
+	// is a verdict on the config, so it stops there: a root that goes
+	// unreadable later is a dark source, which reads answer as weather while
+	// the node serves its rows.
+	served atomic.Bool
 }
 
 // FromConfig builds the production plugin from the shared config vocabulary.
@@ -103,8 +109,11 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	if p.root == "" || p.root == "." {
 		return resp, nil
 	}
-	if err := readableDir(p.root); err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	if !p.served.Load() {
+		if err := readableDir(p.root); err != nil {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		p.served.Store(true)
 	}
 	// The one collection this plugin serves: the configured tree. It
 	// declares no label, so the swatch reads as the configured instance.
@@ -116,7 +125,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	return resp, nil
 }
 
-// readableDir is the check Info makes on every call, so a root created or
+// readableDir is the check Info makes until it passes, so a root created or
 // fixed after launch is served without a respawn. Its error is the sentence
 // the node shows on the plugin's row.
 func readableDir(root string) error {

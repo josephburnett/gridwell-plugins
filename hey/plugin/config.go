@@ -23,9 +23,9 @@ import (
 //	refresh  how often a collection is re-walked while the live feed is
 //	         down (default: 1m)
 //
-// A missing CLI is not refused here but at every Info, because it is a fact
-// about the host that can change while the node runs: the user installs it
-// and the plugin comes back without a restart. A CLI that is not signed in
+// A missing CLI is not refused here but at Info until it is found, because
+// it is a fact about the host that can change while the node runs: the user
+// installs it and the plugin comes back without a restart. A CLI that is not signed in
 // is only learned by running it, so every read says that, with the reason.
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	opts := Options{

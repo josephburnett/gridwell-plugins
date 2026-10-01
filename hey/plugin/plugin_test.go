@@ -759,7 +759,7 @@ func TestAWarmReadAnswersTheLastFailedWalk(t *testing.T) {
 
 // A source that is not ready refuses Info with its sentence, so the node
 // shows the plugin broken rather than three empty collections; one that is
-// ready declares them, and the check is asked again on every Info.
+// ready declares them. The check is asked on every Info until it passes.
 func TestInfoRefusesWhileTheCLIIsMissing(t *testing.T) {
 	missing := errors.New(`the hey CLI "hey" is not installed: it is not on PATH`)
 	ready := missing
@@ -771,5 +771,9 @@ func TestInfoRefusesWhileTheCLIIsMissing(t *testing.T) {
 	ready = nil
 	if info, err := p.Info(context.Background(), &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) == 0 {
 		t.Errorf("installed CLI → Info %v, %v; want its collections", info, err)
+	}
+	ready = missing
+	if _, err := p.Info(context.Background(), &pluginv1.InfoRequest{}); err != nil {
+		t.Errorf("a served CLI that went missing → Info %v, want a dark source that reads report", err)
 	}
 }

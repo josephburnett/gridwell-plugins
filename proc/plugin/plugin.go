@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"google.golang.org/grpc/codes"
@@ -48,6 +49,9 @@ type Plugin struct {
 	procRoot string
 	rootPID  int64
 	killer   Killer
+	// served latches the first Info that found the process; see fs's
+	// Plugin.served for why the check stops there.
+	served atomic.Bool
 }
 
 // FromConfig builds the production plugin from the shared config vocabulary.
@@ -86,11 +90,14 @@ func New(procRoot string, rootPID int64, killer Killer) *Plugin {
 
 // Info refuses while the configured process is not there to project: a pid
 // that is not running, or a process table that cannot be read. It checks on
-// every call, so a process that starts after launch is served without a
-// respawn.
+// every call until one passes, so a process that starts after launch is
+// served without a respawn.
 func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
-	if err := p.servable(); err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	if !p.served.Load() {
+		if err := p.servable(); err != nil {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		p.served.Store(true)
 	}
 	label := "processes"
 	if p.rootPID != 1 {

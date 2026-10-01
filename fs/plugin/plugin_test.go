@@ -97,8 +97,8 @@ func TestInfoDeclaresHostContent(t *testing.T) {
 
 // A root the plugin cannot serve refuses Info with a sentence naming it, so
 // the node shows the plugin broken rather than healthy and empty; an empty
-// directory is a root it can serve. The check runs on every Info, so a root
-// created after launch is served without a respawn.
+// directory is a root it can serve. The check runs on every Info until it
+// passes, so a root created after launch is served without a respawn.
 func TestInfoRefusesARootItCannotServe(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -132,6 +132,13 @@ func TestInfoRefusesARootItCannotServe(t *testing.T) {
 	}
 	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
 		t.Fatalf("root created after launch → Info %v, %v; want its one collection", info, err)
+	}
+	// Once served, a root that goes away is a dark source, not a refusal.
+	if err := os.Remove(missing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil {
+		t.Errorf("a served root that went away → Info %v, want the source dark rather than a refusal", err)
 	}
 	empty := filepath.Join(dir, "empty")
 	if err := os.Mkdir(empty, 0o755); err != nil {

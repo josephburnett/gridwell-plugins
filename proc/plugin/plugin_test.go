@@ -55,7 +55,8 @@ func TestInfoDeclaresHostContent(t *testing.T) {
 // A process the plugin cannot project refuses Info with a sentence naming
 // it, so the node shows the plugin broken rather than an empty tree; a
 // running process with no children is a tree it can serve. The check runs on
-// every Info, so a process that appears later is served without a respawn.
+// every Info until one passes, so a process that appears later is served
+// without a respawn, and one that exits after that is a dark source.
 func TestInfoRefusesAProcessItCannotServe(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -76,5 +77,11 @@ func TestInfoRefusesAProcessItCannotServe(t *testing.T) {
 	}
 	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
 		t.Errorf("a childless process that started after launch → Info %v, %v; want its one collection", info, err)
+	}
+	if err := os.Remove(filepath.Join(root, "4242")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil {
+		t.Errorf("a served process that exited → Info %v, want a dark source rather than a refusal", err)
 	}
 }
