@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -753,5 +754,22 @@ func TestAWarmReadAnswersTheLastFailedWalk(t *testing.T) {
 	idle(t, p)
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
 		t.Fatalf("a walk that landed left the failure standing: %v", err)
+	}
+}
+
+// A source that is not ready refuses Info with its sentence, so the node
+// shows the plugin broken rather than three empty collections; one that is
+// ready declares them, and the check is asked again on every Info.
+func TestInfoRefusesWhileTheCLIIsMissing(t *testing.T) {
+	missing := errors.New(`the hey CLI "hey" is not installed: it is not on PATH`)
+	ready := missing
+	p := stable(newFake(), Options{Ready: func() error { return ready }})
+	_, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
+	if status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != missing.Error() {
+		t.Fatalf("missing CLI → Info %v, want FailedPrecondition %q", err, missing)
+	}
+	ready = nil
+	if info, err := p.Info(context.Background(), &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) == 0 {
+		t.Errorf("installed CLI → Info %v, %v; want its collections", info, err)
 	}
 }

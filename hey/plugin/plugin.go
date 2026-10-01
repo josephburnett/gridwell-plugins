@@ -110,6 +110,8 @@ type Plugin struct {
 	recoverAfter time.Duration
 	// changes is where every listing change goes out to Watch subscribers.
 	changes fanout
+
+	ready func() error
 }
 
 // flight is one walk in progress; done closes when err is final.
@@ -136,6 +138,9 @@ type Options struct {
 	// RecoverAfter is how long a disconnected feed may take to say ready
 	// again before it is restarted. Zero means DefaultRecoverAfter.
 	RecoverAfter time.Duration
+	// Ready is asked on every Info, and its error is Info's refusal. Nil
+	// means the source is always servable, as a test's fake is.
+	Ready func() error
 }
 
 // New builds a plugin over src. A state directory holding a cache file is
@@ -157,6 +162,7 @@ func New(src Source, o Options) *Plugin {
 		watchBackoff: o.WatchBackoff,
 		recoverAfter: o.RecoverAfter,
 		changes:      fanout{subs: map[*subscriber]struct{}{}},
+		ready:        o.Ready,
 	}
 	if p.watchBackoff <= 0 {
 		p.watchBackoff = DefaultWatchBackoff
@@ -268,6 +274,11 @@ func (p *Plugin) Run(ctx context.Context) {
 }
 
 func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	if p.ready != nil {
+		if err := p.ready(); err != nil {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+	}
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
