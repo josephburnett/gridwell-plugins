@@ -8,6 +8,8 @@ package plugin
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	iofs "io/fs"
 	"os"
 	"path"
@@ -101,6 +103,9 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	if p.root == "" || p.root == "." {
 		return resp, nil
 	}
+	if err := readableDir(p.root); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	// The one collection this plugin serves: the configured tree. It
 	// declares no label, so the swatch reads as the configured instance.
 	resp.MenuEntries = []*pluginv1.MenuEntry{{Id: ".", Context: "."}}
@@ -109,6 +114,43 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		resp.DisplayName = label
 	}
 	return resp, nil
+}
+
+// readableDir is the check Info makes on every call, so a root created or
+// fixed after launch is served without a respawn. Its error is the sentence
+// the node shows on the plugin's row.
+func readableDir(root string) error {
+	fi, err := os.Stat(root)
+	switch {
+	case errors.Is(err, iofs.ErrNotExist):
+		return fmt.Errorf("root %q does not exist", root)
+	case err != nil:
+		return fmt.Errorf("root %q cannot be read: %v", root, pathErr(err))
+	case !fi.IsDir():
+		return fmt.Errorf("root %q is not a directory", root)
+	}
+	f, err := os.Open(root)
+	if err == nil {
+		_, err = f.Readdirnames(1)
+		_ = f.Close()
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("root %q cannot be read: %v", root, pathErr(err))
+	}
+	return nil
+}
+
+// pathErr drops the operation and path a *PathError repeats, since the
+// sentence around it already names the root.
+func pathErr(err error) error {
+	var pe *iofs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
 }
 
 // List enumerates one directory context. A definitively missing directory is
