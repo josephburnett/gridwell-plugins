@@ -1,6 +1,6 @@
 module github.com/josephburnett/gridwell-plugins/proc
 
-go 1.26.6
+go 1.27.1
 
 require github.com/josephburnett/gridwell/api v0.2.0
 

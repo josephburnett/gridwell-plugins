@@ -1,6 +1,6 @@
 module github.com/josephburnett/gridwell-plugins/fs
 
-go 1.26.6
+go 1.27.1
 
 require github.com/josephburnett/gridwell/api v0.3.0
 
