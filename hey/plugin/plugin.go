@@ -471,28 +471,6 @@ func (p *Plugin) readAll(ctx context.Context) (unreachable string, err error) {
 	return "", nil
 }
 
-// ReadContent answers the thread's markdown card: the tile's face and its
-// read-only document. The email itself is ServeContent's answer, not this
-// one. An unknown key reads as a one-line notice.
-func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {
-	id, ok := mail.ParseKey(req.Key)
-	if !ok {
-		return stream.Send(&pluginv1.ContentChunk{}) // not one of ours: no body
-	}
-	t, known := p.mem.Get(id)
-	if !known {
-		// Before any collection has been swept, "not in memory" means "not
-		// yet", not "gone" — and it must answer Unavailable, transport-shaped,
-		// so the node's cache serves the remembered body instead of storing a
-		// gone body over it while the sweep is still running.
-		if !p.mem.Swept() {
-			return status.Error(codes.Unavailable, "hey plugin: the first sweep has not completed")
-		}
-		return stream.Send(&pluginv1.ContentChunk{Data: mail.GoneMarkdown(req.Key), MediaType: "text/markdown"})
-	}
-	return stream.Send(&pluginv1.ContentChunk{Data: mail.Markdown(&t), MediaType: "text/markdown"})
-}
-
 // ServeContent is the email. Subpath "" is the thread, as mail.Page presents
 // the HTML HEY served; any other subpath is a resource named by a relative
 // URL, and those are paths in HEY's own app that this door cannot serve, so it

@@ -87,24 +87,14 @@ func TestCollectionsAreTheSixBoxes(t *testing.T) {
 	}
 }
 
-func TestMarkdownIsACardAboutTheEmail(t *testing.T) {
-	th := Thread{
-		TopicID: 7, Collection: ReplyLaterContext, Subject: "Lunch plans",
-		Summary: "Are you  free\nfriday?", FromName: "Alice", FromEmail: "alice@example.com",
-		CreatedAt: at("2026-01-05T14:03:00Z"),
+func TestSnippetIsOneBoundedLine(t *testing.T) {
+	th := Thread{Summary: "Are you  free\nfriday?"}
+	if got := th.Snippet(); got != "Are you free friday?" {
+		t.Errorf("snippet = %q", got)
 	}
-	got := string(Markdown(&th))
-	for _, want := range []string{
-		"# " + UnseenMark + " Lunch plans",
-		"from Alice <alice@example.com>",
-		"2026-01-05 14:03 UTC",
-		"reply later",
-		"> Are you free friday?",
-		"[Open in HEY](https://app.hey.com/topics/7)",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("markdown missing %q:\n%s", want, got)
-		}
+	th.Summary = strings.Repeat("a", SnippetRunes+1)
+	if got := []rune(th.Snippet()); len(got) != SnippetRunes+1 || got[SnippetRunes] != '…' {
+		t.Errorf("a long summary was not bounded: %d runes", len(got))
 	}
 }
 

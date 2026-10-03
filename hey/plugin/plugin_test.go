@@ -328,9 +328,9 @@ func TestASlowWalkAnswersFromMemory(t *testing.T) {
 	close(f.block)
 }
 
-// A thread is a text tile that serves a page. The markdown is the card; the
-// page is the email.
-func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
+// A thread is a url tile whose page is the email. It has no markdown card:
+// nothing on the node reads one for a url entry.
+func TestServeContentIsTheEmailAndThereIsNoCard(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	f.html[1] = "<!doctype html><html><body><article>lunch</article></body></html>"
@@ -338,17 +338,6 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 	ctx := context.Background()
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
 		t.Fatal(err)
-	}
-
-	r := &reader{}
-	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "thread:1"}, r); err != nil {
-		t.Fatal(err)
-	}
-	if len(r.chunks) != 1 || r.chunks[0].MediaType != "text/markdown" {
-		t.Fatalf("chunks = %+v", r.chunks)
-	}
-	if !strings.Contains(string(r.chunks[0].Data), "# ") || !strings.Contains(string(r.chunks[0].Data), "lunch") {
-		t.Errorf("card = %q", r.chunks[0].Data)
 	}
 
 	s := &server{}
@@ -360,6 +349,9 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 	}
 	if got := string(s.chunks[0].Data); !strings.Contains(got, "<article>lunch</article>") || !strings.Contains(got, "<style>") || !strings.Contains(got, mail.AppURL(1)) {
 		t.Errorf("page = %q", got)
+	}
+	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "thread:1"}, &reader{}); status.Code(err) != codes.Unimplemented {
+		t.Errorf("ReadContent = %v, want Unimplemented: a url entry has no card", err)
 	}
 }
 
@@ -603,16 +595,6 @@ func TestAWarmReadAnswersMemoryAndTheLastFailure(t *testing.T) {
 	idle(t, p)
 	if r := list(); len(r.Entries) != 1 || r.Unreachable != "" {
 		t.Fatalf("a walk that landed left %+v", r)
-	}
-}
-
-// Before any sweep, a key the memory does not hold is "not yet", not "gone":
-// a Gone body stored over the node's remembered one would be a loss.
-func TestReadContentWaitsRatherThanDeclaringAThreadGone(t *testing.T) {
-	p := stable(t, newFake(), Options{})
-	err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "thread:1"}, &reader{})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("err = %v, want Unavailable", err)
 	}
 }
 
