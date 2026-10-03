@@ -141,8 +141,8 @@ func (t *Thread) Title() string {
 	return NoSubject
 }
 
-// UnseenMark is the unread thread's banner glyph. It leads the label, so
-// unread reads from a zoomed-out grid where the text does not.
+// UnseenMark is the status a box tile carries while its thread is unseen
+// there. The label never carries it: the name stays as it was.
 const UnseenMark = "●"
 
 // From is who the thread is from: the sender's name, else their address.
@@ -153,12 +153,10 @@ func (t *Thread) From() string {
 	return strings.TrimSpace(t.FromEmail)
 }
 
-// Label is the tile's banner: the unread mark, the sender, and the subject.
+// Label is the tile's banner: the sender and the subject. It reads the same
+// seen or unseen; StatusDetail carries the difference.
 func (t *Thread) Label() string {
 	var b strings.Builder
-	if !t.Seen {
-		b.WriteString(UnseenMark + " ")
-	}
 	if from := t.From(); from != "" {
 		b.WriteString(from)
 		b.WriteString(": ")
@@ -167,37 +165,15 @@ func (t *Thread) Label() string {
 	return b.String()
 }
 
-// StatusDetail is the one word the tile carries about its state.
+// StatusDetail is UnseenMark while the thread is unseen in the box it was
+// listed from, and nothing once it is seen.
 func (t *Thread) StatusDetail() string {
 	if t.Seen {
-		return "seen"
+		return ""
 	}
-	return "unseen"
+	return UnseenMark
 }
-
-// ── placement ──────────────────────────────────────────────────────────
-
-// HintEpoch anchors the calendar a collection is hinted as: the day
-// containing it is row y=0, later days climb into negative y, and earlier
-// days descend. It is a fixed date, so a thread's hint is the same on every
-// host and every restart and two nodes never disagree about where a thread
-// first lands.
-var HintEpoch = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 // ThreadTileW is a thread tile's hinted width: two cells, so the sender and
 // the subject read together on one banner.
 const ThreadTileW = 2
-
-// Day is the number of whole days from HintEpoch to t, in UTC because HEY's
-// timestamps are UTC and a hint must never shift with the host's zone.
-func Day(t time.Time) int64 {
-	u := t.UTC()
-	d := time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
-	return int64(d.Sub(HintEpoch).Hours() / 24)
-}
-
-// Cell is the hint for the index'th thread of its day: one row per day,
-// newest at the top, the day's threads left to right in arrival order.
-func Cell(created time.Time, index int) (x, y int64) {
-	return int64(index) * ThreadTileW, -Day(created)
-}

@@ -3,7 +3,7 @@ package plugin
 import (
 	"context"
 	"errors"
-	"sync"
+
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -27,15 +27,11 @@ const MaxWatchBackoff = 5 * time.Minute
 // restarted.
 const DefaultRecoverAfter = 2 * time.Minute
 
-// SubscriberBuffer is how many changes one Watch subscriber may fall behind.
-// Past it the feed does not wait: the subscriber's changes are dropped and it
-// is told every collection changed, which is always true enough to re-list.
-const SubscriberBuffer = 64
-
-// watch keeps one `hey watch` running until ctx ends, restarting it with
+// watch is the feed unit's Do: it keeps one `hey watch` running until ctx
+// ends — the last Watch stream left memo's Linger ago — restarting it with
 // backoff when it stops. A feed the CLI refuses as usage (1 or 8: a CLI with
-// no watch) is not restarted: the refresher's walks keep memory instead, and
-// the log says so once. Any other verdict is also every read's answer
+// no watch) is not restarted: reads walk on the refresh window instead, and
+// the log says so once. Any other verdict is every read's unreachable reason
 // (watchErr) until a feed reaches ready.
 func (p *Plugin) watch(ctx context.Context) {
 	backoff := p.watchBackoff
@@ -54,13 +50,11 @@ func (p *Plugin) watch(ctx context.Context) {
 		}
 		switch status.Code(err) {
 		case codes.InvalidArgument:
-			p.logf("hey plugin: this CLI cannot watch (%v); collections are re-walked every %s instead", err, p.refresh)
+			p.logf("hey plugin: this CLI cannot watch (%v); a read re-walks a collection older than %s instead", err, p.refresh)
 			return
 		case codes.Unavailable:
 		default:
-			p.mu.Lock()
-			p.watchErr = err
-			p.mu.Unlock()
+			p.verdict(err)
 		}
 		if live {
 			backoff = p.watchBackoff
@@ -130,16 +124,16 @@ func (p *Plugin) apply(ev mail.Event) {
 		p.mu.Lock()
 		p.live = true
 		p.liveGen++
-		p.watchErr = nil
 		p.mu.Unlock()
+		p.verdict(nil)
 		for _, c := range mail.Collections {
-			p.rewalk(c)
+			p.flights.Rewalk(c.Key)
 		}
 	case mail.ChangeDisconnected:
 		p.setLive(false)
 	case mail.ChangeResync:
 		if c, ok := mail.LookupBox(ev.Box); ok {
-			p.rewalk(c)
+			p.ask(c.Key)
 		}
 	case mail.ChangeAdded, mail.ChangeUpdated, mail.ChangeDeleted:
 		c, ok := mail.LookupBox(ev.Box)
@@ -148,12 +142,24 @@ func (p *Plugin) apply(ev mail.Event) {
 		}
 		eff := p.mem.Apply(c.Key, ev)
 		if eff.Changed || eff.Everything {
-			p.saveCache()
+			p.save()
 		}
 		p.publish(c.Key, eff)
 		if eff.Rewalk {
-			p.rewalk(c)
+			p.ask(c.Key)
 		}
+	}
+}
+
+// verdict records why the feed last ended, nil once one is live. Every read
+// answers it as its unreachable reason, so its edges repaint every context.
+func (p *Plugin) verdict(err error) {
+	p.mu.Lock()
+	edge := (p.watchErr == nil) != (err == nil)
+	p.watchErr = err
+	p.mu.Unlock()
+	if edge {
+		p.changes.Publish(contexts()...)
 	}
 }
 
@@ -166,82 +172,10 @@ func (p *Plugin) setLive(live bool) {
 // Watch streams a ContextChanged for every collection whose listing changes
 // from now on, by the feed or by a walk, everything included: a thread's
 // record changing moves everything, which the node passes on to every box
-// that links into it. It never sends EntryRemoved: this plugin's listings
-// are not authoritative, and a thread leaving one box is usually in another,
-// so absence is Probe's to settle, not the feed's. The feed is account-wide,
-// so the scope the node names is not read.
-func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
-	s := p.changes.subscribe()
-	defer p.changes.unsubscribe(s)
-	// The node counts the stream open when its header arrives, and only then
-	// clears a refusal or catches up after a drop (docs/plugin-authoring.md).
-	if err := stream.SendHeader(nil); err != nil {
-		return err
-	}
-	send := func(key string) error {
-		return stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{
-			ContextChanged: &pluginv1.ContextChanged{Context: key},
-		}})
-	}
-	for {
-		select {
-		case <-stream.Context().Done():
-			return nil
-		case key := <-s.ch:
-			if err := send(key); err != nil {
-				return err
-			}
-		case <-s.lost:
-			for _, c := range mail.Collections {
-				if err := send(c.Key); err != nil {
-					return err
-				}
-			}
-			if err := send(mail.EverythingContext); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-// fanout hands each change to every subscriber without ever waiting on one.
-type fanout struct {
-	mu   sync.Mutex
-	subs map[*subscriber]struct{}
-}
-
-// subscriber is one Watch stream's queue. lost is raised when a change could
-// not be queued.
-type subscriber struct {
-	ch   chan string
-	lost chan struct{}
-}
-
-func (f *fanout) subscribe() *subscriber {
-	s := &subscriber{ch: make(chan string, SubscriberBuffer), lost: make(chan struct{}, 1)}
-	f.mu.Lock()
-	f.subs[s] = struct{}{}
-	f.mu.Unlock()
-	return s
-}
-
-func (f *fanout) unsubscribe(s *subscriber) {
-	f.mu.Lock()
-	delete(f.subs, s)
-	f.mu.Unlock()
-}
-
-func (f *fanout) publish(key string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for s := range f.subs {
-		select {
-		case s.ch <- key:
-		default:
-			select {
-			case s.lost <- struct{}{}:
-			default:
-			}
-		}
-	}
+// that links into it. It never sends EntryRemoved: absence is Probe's to
+// settle, not the feed's. The feed is account-wide, so every context in any
+// scope needs the one feed unit, and a stream that names none watches every
+// collection.
+func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
+	return p.changes.Serve(req.GetContexts(), stream)
 }

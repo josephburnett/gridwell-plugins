@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -19,7 +20,7 @@ func TestEverythingIsEveryThreadOnceAndBoxesLinkToIt(t *testing.T) {
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	f.boxes["laterbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z"), th(2, "invoice", "2026-01-04T09:00:00Z")}
 	f.boxes["feedbox"] = []mail.Thread{th(3, "digest", "2026-01-03T09:00:00Z")}
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	ctx := context.Background()
 
 	all, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext})
@@ -51,6 +52,51 @@ func TestEverythingIsEveryThreadOnceAndBoxesLinkToIt(t *testing.T) {
 	}
 }
 
+// One box that cannot be read costs everything nothing it remembers: every
+// other box's threads still list, and the failure is the listing's
+// unreachable reason, as it is the failing box's. A refused everything would
+// cost the node every email's page, since each one is a tile in it.
+func TestOneFailingBoxLeavesEverythingServing(t *testing.T) {
+	f := newFake()
+	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
+	f.boxes["laterbox"] = []mail.Thread{th(2, "invoice", "2026-01-04T09:00:00Z")}
+	f.boxErr["feedbox"] = status.Error(codes.NotFound, "hey plugin: box view feedbox: no box of kind feedbox")
+	p := stable(t, f, Options{})
+	ctx := context.Background()
+
+	all, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext})
+	if err != nil {
+		t.Fatalf("one failing box refused everything: %v", err)
+	}
+	var keys []string
+	for _, e := range all.Entries {
+		keys = append(keys, e.Key)
+	}
+	if want := []string{"thread:2", "thread:1"}; !slices.Equal(keys, want) {
+		t.Fatalf("everything = %v, want %v", keys, want)
+	}
+	if !strings.Contains(all.Unreachable, "no box of kind feedbox") {
+		t.Errorf("everything's unreachable = %q, want the feed's failure", all.Unreachable)
+	}
+	feed, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.FeedContext})
+	if err != nil || !strings.Contains(feed.Unreachable, "no box of kind feedbox") {
+		t.Errorf("the failing box = %+v, %v; want memory and its reason", feed, err)
+	}
+	imbox, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+	if err != nil || imbox.Unreachable != "" {
+		t.Errorf("a box that reads = %+v, %v; want no reason", imbox, err)
+	}
+
+	f.mu.Lock()
+	delete(f.boxErr, "feedbox")
+	f.mu.Unlock()
+	p.flights.Rewalk(mail.FeedContext)
+	idle(t, p)
+	if all, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext}); err != nil || all.Unreachable != "" {
+		t.Errorf("everything after the box reads again = %q, %v", all.GetUnreachable(), err)
+	}
+}
+
 // Probe answers for the context the node asks about: a box for its own
 // membership, everything for whether HEY still has the thread at all.
 func TestProbeAnswersForTheContextAsked(t *testing.T) {
@@ -60,7 +106,7 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 	f.threadErr[9] = status.Error(codes.NotFound, "hey plugin: thread read: resource not found")
 	f.threadErr[7] = status.Error(codes.Unavailable, "hey plugin: thread read: network")
 	f.html[8] = "<!doctype html>"
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	ctx := context.Background()
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext}); err != nil {
 		t.Fatal(err)

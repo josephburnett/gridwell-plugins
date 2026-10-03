@@ -3,6 +3,8 @@ package mail
 import (
 	"testing"
 
+	"github.com/josephburnett/gridwell-plugins/memo/calendar"
+	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell/api/rpc"
 )
 
@@ -33,22 +35,44 @@ func TestCollectionEntriesAreURLsThatServeTheirPage(t *testing.T) {
 	}
 }
 
-// One row per day, the day's threads left to right in arrival order: a hint
-// derived from the thread's own timestamp, so it is the same on every host.
-func TestCollectionEntriesHintAsACalendar(t *testing.T) {
-	entries := CollectionEntries([]Thread{
-		{TopicID: 1, CreatedAt: at("2026-01-02T09:00:00Z")},
-		{TopicID: 2, CreatedAt: at("2026-01-02T11:00:00Z")},
-		{TopicID: 3, CreatedAt: at("2026-01-03T09:00:00Z")},
-	})
-	got := make([][2]int64, len(entries))
-	for i, e := range entries {
-		got[i] = [2]int64{e.PlacementHint.X, e.PlacementHint.Y}
+// A thread's hint is calendar.Cell of its own creation time and nothing
+// else: a thread arriving earlier the same day leaves every other hint where
+// it was, in a box and in everything alike.
+func TestEntriesHintIsPureInTheCreationTime(t *testing.T) {
+	later := Thread{TopicID: 2, CreatedAt: at("2026-09-02T11:00:00Z")}
+	earlier := Thread{TopicID: 1, CreatedAt: at("2026-09-02T09:00:00Z")}
+	wx, wy := calendar.Cell(later.CreatedAt, ThreadTileW)
+	for name, derive := range map[string]func([]Thread) []*pluginv1.Entry{
+		"everything": CollectionEntries,
+		"box":        BoxEntries,
+	} {
+		alone := derive([]Thread{later})
+		both := derive([]Thread{earlier, later})
+		for _, h := range []*pluginv1.PlacementHint{alone[0].PlacementHint, both[1].PlacementHint} {
+			if h.X != wx || h.Y != wy || h.W != ThreadTileW || h.H != 1 {
+				t.Errorf("%s: hint = %+v, want (%d, %d) %dx1", name, h, wx, wy, ThreadTileW)
+			}
+		}
 	}
-	want := [][2]int64{{0, -1}, {ThreadTileW, -1}, {0, -2}}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("entry %d hinted at %v, want %v", i, got[i], want[i])
+}
+
+// Seen is a box's fact: a box tile carries the unseen mark only while it is
+// unseen there, and everything, which is no box, carries none.
+func TestStatusIsTheUnseenMarkInABoxOnly(t *testing.T) {
+	threads := []Thread{
+		{TopicID: 1, Subject: "a", CreatedAt: at("2026-09-02T09:00:00Z")},
+		{TopicID: 2, Subject: "b", CreatedAt: at("2026-09-02T10:00:00Z"), Seen: true},
+	}
+	box := BoxEntries(threads)
+	if box[0].StatusDetail != UnseenMark {
+		t.Errorf("unseen box tile status = %q, want %q", box[0].StatusDetail, UnseenMark)
+	}
+	if box[1].StatusDetail != "" {
+		t.Errorf("seen box tile status = %q, want none", box[1].StatusDetail)
+	}
+	for _, e := range CollectionEntries(threads) {
+		if e.StatusDetail != "" {
+			t.Errorf("everything tile %s status = %q, want none", e.Key, e.StatusDetail)
 		}
 	}
 }

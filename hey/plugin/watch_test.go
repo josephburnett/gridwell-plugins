@@ -18,6 +18,7 @@ import (
 
 	"github.com/josephburnett/gridwell-plugins/hey/heycli"
 	"github.com/josephburnett/gridwell-plugins/hey/mail"
+	"github.com/josephburnett/gridwell-plugins/memo"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
@@ -78,7 +79,7 @@ func (w *watcher) Send(c *pluginv1.Change) error {
 func TestWatchSendsItsHeaderOnAccept(t *testing.T) {
 	f := newFake()
 	f.feed = newFeed()
-	p := stable(f, Options{Refresh: time.Hour})
+	p := stable(t, f, Options{Refresh: time.Hour})
 	w := watchFrom(t, p, nil)
 	deadline := time.Now().Add(5 * time.Second)
 	for !w.header.Load() {
@@ -90,19 +91,19 @@ func TestWatchSendsItsHeaderOnAccept(t *testing.T) {
 }
 func (w *watcher) Context() context.Context { return w.ctx }
 
-func subscribers(p *Plugin) int {
-	p.changes.mu.Lock()
-	defer p.changes.mu.Unlock()
-	return len(p.changes.subs)
-}
-
-// watchFrom subscribes a watcher and waits until it is listening.
+// watchFrom opens a Watch stream that lives until the test ends, and waits
+// until it is listening.
 func watchFrom(t *testing.T, p *Plugin, block chan struct{}) *watcher {
 	t.Helper()
-	w := &watcher{ctx: t.Context(), got: make(chan string, 1024), block: block}
-	n := subscribers(p)
+	return watchUntil(t, t.Context(), p, block)
+}
+
+// watchUntil opens a Watch stream that lives until ctx ends.
+func watchUntil(t *testing.T, ctx context.Context, p *Plugin, block chan struct{}) *watcher {
+	t.Helper()
+	w := &watcher{ctx: ctx, got: make(chan string, 1024), block: block}
 	go func() { _ = p.Watch(&pluginv1.WatchRequest{}, w) }()
-	eventually(t, "the watcher subscribes", func() bool { return subscribers(p) > n })
+	eventually(t, "the watcher is listening", w.header.Load)
 	return w
 }
 
@@ -127,9 +128,12 @@ func isLive(p *Plugin) bool {
 func idle(t *testing.T, p *Plugin) {
 	t.Helper()
 	eventually(t, "the walks land", func() bool {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return len(p.flights) == 0 && len(p.again) == 0
+		for _, c := range mail.Collections {
+			if p.flights.Busy(c.Key) {
+				return false
+			}
+		}
+		return true
 	})
 }
 
@@ -183,11 +187,8 @@ func live(t *testing.T, o Options) (*Plugin, *fakeHEY, *watcher, []mail.Event) {
 	if o.Refresh == 0 {
 		o.Refresh = time.Hour
 	}
-	p := stable(f, o)
+	p := stable(t, f, o)
 	w := watchFrom(t, p, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go p.Run(ctx)
 	<-f.feed.starts
 	evs := fixture(t)
 	send(t, f.feed, evs[lineReady])
@@ -299,10 +300,8 @@ func TestAFeedThatEndsRestartsWithBackoff(t *testing.T) {
 	}
 	f := newFake()
 	f.feed = newFeed()
-	p := stable(f, Options{Refresh: time.Hour, WatchBackoff: base, Logf: logf})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go p.Run(ctx)
+	p := stable(t, f, Options{Refresh: time.Hour, WatchBackoff: base, Logf: logf})
+	watchFrom(t, p, nil)
 
 	<-f.feed.starts
 	gap := func() time.Duration {
@@ -340,14 +339,12 @@ func TestACLIThatCannotWatchIsNotRestarted(t *testing.T) {
 	var logs []string
 	f := newFake()
 	f.feed = newFeed()
-	p := stable(f, Options{Refresh: time.Hour, WatchBackoff: time.Millisecond, Logf: func(format string, args ...any) {
+	p := stable(t, f, Options{Refresh: time.Hour, WatchBackoff: time.Millisecond, Logf: func(format string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
 		logs = append(logs, format)
 	}})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go p.Run(ctx)
+	watchFrom(t, p, nil)
 	<-f.feed.starts
 	f.feed.exit <- status.Error(codes.InvalidArgument, "unknown command")
 	select {
@@ -367,10 +364,8 @@ func TestACLIThatCannotWatchIsNotRestarted(t *testing.T) {
 func TestADisconnectThatDoesNotRecoverRestarts(t *testing.T) {
 	f := newFake()
 	f.feed = newFeed()
-	p := stable(f, Options{Refresh: time.Hour, WatchBackoff: time.Millisecond, RecoverAfter: 20 * time.Millisecond})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go p.Run(ctx)
+	p := stable(t, f, Options{Refresh: time.Hour, WatchBackoff: time.Millisecond, RecoverAfter: 20 * time.Millisecond})
+	watchFrom(t, p, nil)
 	<-f.feed.starts
 	send(t, f.feed, mail.Event{Change: mail.ChangeDisconnected})
 	select {
@@ -389,10 +384,8 @@ func TestADisconnectThatDoesNotRecoverRestarts(t *testing.T) {
 func TestADisconnectThatRecoversKeepsTheFeed(t *testing.T) {
 	f := newFake()
 	f.feed = newFeed()
-	p := stable(f, Options{Refresh: time.Hour, RecoverAfter: 50 * time.Millisecond})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go p.Run(ctx)
+	p := stable(t, f, Options{Refresh: time.Hour, RecoverAfter: 50 * time.Millisecond})
+	watchFrom(t, p, nil)
 	<-f.feed.starts
 	send(t, f.feed, mail.Event{Change: mail.ChangeDisconnected})
 	send(t, f.feed, mail.Event{Change: mail.ChangeReady})
@@ -403,37 +396,62 @@ func TestADisconnectThatRecoversKeepsTheFeed(t *testing.T) {
 	}
 }
 
-// Shutdown ends the feed and starts no other.
-func TestShutdownStopsTheFeed(t *testing.T) {
+// Nothing is done for nobody (rule 8): with no Watch stream open, no feed
+// runs and no clock walks a box, however much time passes. The first stream
+// starts the feed; the last one leaving stops it, after the linger.
+func TestTheFeedRunsOnlyWhileWatched(t *testing.T) {
 	f := newFake()
 	f.feed = newFeed()
-	p := stable(f, Options{Refresh: time.Hour, WatchBackoff: time.Millisecond})
-	ctx, cancel := context.WithCancel(context.Background())
-	go p.Run(ctx)
+	p := stable(t, f, Options{Refresh: time.Millisecond, Linger: -1})
+	time.Sleep(50 * time.Millisecond)
+	if n := f.count("watch") + f.count("imbox"); n != 0 {
+		t.Fatalf("with no stream open HEY was asked %d times", n)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	watchUntil(t, ctx, p, nil)
 	<-f.feed.starts
 	cancel()
 	select {
 	case <-f.feed.stops:
 	case <-time.After(10 * time.Second):
-		t.Fatal("shutdown did not end the feed")
+		t.Fatal("the last stream left and the feed ran on")
 	}
 	select {
 	case <-f.feed.starts:
-		t.Fatal("a feed was started after shutdown")
+		t.Fatal("a feed was started with no stream open")
 	case <-time.After(100 * time.Millisecond):
+	}
+	if n := f.count("imbox"); n != 0 {
+		t.Errorf("a feed that never said ready cost %d walks", n)
 	}
 }
 
-// A watcher that stops reading never holds the feed or another watcher up.
-// Its queue overflows, its changes are dropped, and once it reads again it is
-// told every collection changed, which re-lists all it missed.
+// The plugin's end ends the feed.
+func TestTheEndOfLifeStopsTheFeed(t *testing.T) {
+	f := newFake()
+	f.feed = newFeed()
+	life := memo.NewLife()
+	p := stable(t, f, Options{Life: life, WatchBackoff: time.Millisecond})
+	watchFrom(t, p, nil)
+	<-f.feed.starts
+	life.End()
+	select {
+	case <-f.feed.stops:
+	default:
+		t.Fatal("End returned with the feed still running")
+	}
+}
+
+// A watcher that stops reading never holds the feed or another watcher up,
+// and a burst it missed is owed once per context: one repaint each, not one
+// per change.
 func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 	p, f, fast, _ := live(t, Options{})
 	block := make(chan struct{})
 	slow := watchFrom(t, p, block)
 
-	n := SubscriberBuffer + 10
-	for i := range n {
+	for i := range 3 * memo.DefaultBuffer {
 		id := int64(1000 + i)
 		send(t, f.feed, mail.Event{Change: mail.ChangeAdded, Box: "imbox", PostingID: id,
 			Thread: th(id, "news", "2026-01-06T09:00:00Z")})
@@ -441,20 +459,16 @@ func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 		expect(t, fast, mail.EverythingContext)
 	}
 	close(block)
-	got := map[string]bool{}
-	eventually(t, "the slow watcher is told every collection", func() bool {
-		select {
-		case k := <-slow.got:
-			got[k] = true
-		default:
-		}
-		for _, c := range mail.Collections {
-			if !got[c.Key] {
-				return false
-			}
-		}
-		return got[mail.EverythingContext]
-	})
+	got := quiet(slow)
+	n := map[string]int{}
+	for _, k := range got {
+		n[k]++
+	}
+	// One change was in flight when the watcher stalled, and the burst
+	// collapsed behind it; the last change may land after the release.
+	if n[mail.ImboxContext] < 1 || n[mail.EverythingContext] < 1 || len(n) != 2 || len(got) > 6 {
+		t.Fatalf("a slow watcher missing %d changes was owed %v, want a few repaints of the imbox and everything", 3*memo.DefaultBuffer, got)
+	}
 }
 
 // While the feed is live, memory is current: no read and no clock walks a
@@ -507,22 +521,48 @@ func TestAFailedCatchUpIsWalkedByTheNextRead(t *testing.T) {
 	}
 }
 
-// A feed that ends on a verdict — not signed in — is every read's answer, not
-// only the log's, until a feed reaches ready again. The memory it leaves is
-// still there to answer from; the error says it is no longer current.
-func TestAFeedVerdictSurfacesOnTheNextRead(t *testing.T) {
+// A feed that ends on a verdict — not signed in — is every read's reason
+// until a feed reaches ready again, never a refusal: the memory it leaves
+// still answers (decision 3). Both edges repaint every open grid, so the
+// reason reaches the screen and leaves it without a gesture.
+func TestAFeedVerdictIsEveryReadsReason(t *testing.T) {
 	var mu sync.Mutex
 	var logs []string
-	p, f, _, evs := live(t, Options{WatchBackoff: 20 * time.Millisecond, Logf: func(format string, args ...any) {
+	p, f, w, evs := live(t, Options{WatchBackoff: 20 * time.Millisecond, Logf: func(format string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
 		logs = append(logs, format)
 	}})
+	list := func() *pluginv1.ListResponse {
+		t.Helper()
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+		if err != nil {
+			t.Fatalf("the verdict refused a read: %v", err)
+		}
+		return resp
+	}
 	f.feed.exit <- status.Error(codes.PermissionDenied, "hey plugin: watch: Not logged in (Run: hey auth login)")
-	eventually(t, "the verdict reaches a read", func() bool {
-		_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
-		return status.Code(err) == codes.PermissionDenied && strings.Contains(err.Error(), "Not logged in")
-	})
+	repainted := func() {
+		t.Helper()
+		got := map[string]bool{}
+		eventually(t, "every context is repainted", func() bool {
+			select {
+			case k := <-w.got:
+				got[k] = true
+			default:
+			}
+			for _, c := range contexts() {
+				if !got[c] {
+					return false
+				}
+			}
+			return true
+		})
+	}
+	repainted()
+	if r := list(); len(r.Entries) != 1 || !strings.Contains(r.Unreachable, "Not logged in") {
+		t.Fatalf("listing under the verdict = %+v, want memory and the reason", r)
+	}
 	mu.Lock()
 	if !slices.ContainsFunc(logs, func(l string) bool { return strings.Contains(l, "watch ended") }) {
 		t.Errorf("the verdict was not logged: %v", logs)
@@ -531,10 +571,103 @@ func TestAFeedVerdictSurfacesOnTheNextRead(t *testing.T) {
 
 	<-f.feed.starts
 	send(t, f.feed, evs[lineReady])
-	eventually(t, "the feed is live", func() bool { return isLive(p) })
+	repainted()
 	idle(t, p)
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
-		t.Fatalf("a feed that is live again left the verdict standing: %v", err)
+	if r := list(); r.Unreachable != "" {
+		t.Fatalf("a feed that is live again left the verdict standing: %q", r.Unreachable)
+	}
+}
+
+// A walk that fails, and the walk that lands after it, each repaint the box
+// and everything: the reason is news to an open grid, and so is its end.
+func TestTheEdgesOfAFailedWalkRepaint(t *testing.T) {
+	p, f, w, _ := live(t, Options{})
+	f.mu.Lock()
+	f.boxErr["laterbox"] = status.Error(codes.Unavailable, "network")
+	f.mu.Unlock()
+	p.flights.Rewalk(mail.ReplyLaterContext)
+	expect(t, w, mail.ReplyLaterContext)
+	expect(t, w, mail.EverythingContext)
+	p.flights.Rewalk(mail.ReplyLaterContext)
+	idle(t, p)
+	if got := quiet(w); len(got) != 0 {
+		t.Fatalf("a second failure repainted %v", got)
+	}
+	f.mu.Lock()
+	delete(f.boxErr, "laterbox")
+	f.mu.Unlock()
+	p.flights.Rewalk(mail.ReplyLaterContext)
+	expect(t, w, mail.ReplyLaterContext)
+	expect(t, w, mail.EverythingContext)
+}
+
+// A box's listing is authoritative only when it is definitive (rule 4): its
+// last walk read the whole box, the feed is live, and that walk is the
+// catch-up of the feed's latest ready, with nothing the feed asked to be
+// re-read since. Everything never is: a thread in no box is Probe's to
+// settle against HEY.
+func TestAuthoritativeOnlyWhenDefinitive(t *testing.T) {
+	authoritative := func(p *Plugin, ctx string) bool {
+		t.Helper()
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctx})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Authoritative
+	}
+	for _, c := range []struct {
+		name    string
+		context string
+		then    func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event)
+		want    bool
+	}{
+		{"a whole walk under a live feed", mail.ImboxContext, nil, true},
+		{"everything", mail.EverythingContext, nil, false},
+		{"a capped walk", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, _ []mail.Event) {
+			f.mu.Lock()
+			f.whole["imbox"] = false
+			f.mu.Unlock()
+			p.flights.Rewalk(mail.ImboxContext)
+			idle(t, p)
+		}, false},
+		{"the feed down", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+			send(t, f.feed, evs[lineDisconnected])
+			eventually(t, "the feed is down", func() bool { return !isLive(p) })
+		}, false},
+		{"a resync in flight", mail.ReplyLaterContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+			f.mu.Lock()
+			f.block = make(chan struct{})
+			f.mu.Unlock()
+			t.Cleanup(func() { close(f.block) })
+			send(t, f.feed, evs[lineResync])
+			eventually(t, "the resync walks", func() bool { return p.flights.Busy(mail.ReplyLaterContext) })
+		}, false},
+		{"a resync whose walk failed", mail.ReplyLaterContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+			f.mu.Lock()
+			f.boxErr["laterbox"] = status.Error(codes.Unavailable, "network")
+			f.mu.Unlock()
+			send(t, f.feed, evs[lineResync])
+			eventually(t, "the resync walks", func() bool { return f.count("laterbox") == 2 })
+			idle(t, p)
+		}, false},
+		{"a catch-up that failed", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+			f.mu.Lock()
+			f.boxErr["imbox"] = status.Error(codes.Unavailable, "network")
+			f.mu.Unlock()
+			send(t, f.feed, evs[lineReadyAgain])
+			eventually(t, "the catch-up runs", func() bool { return f.count("imbox") == 2 })
+			idle(t, p)
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, f, _, evs := live(t, Options{})
+			if c.then != nil {
+				c.then(t, p, f, evs)
+			}
+			if got := authoritative(p, c.context); got != c.want {
+				t.Errorf("authoritative = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 
@@ -550,10 +683,8 @@ func TestAFeedThatKeepsEndingLogsOnce(t *testing.T) {
 	}
 	f := newFake()
 	f.feed = newFeed()
-	p := stable(f, Options{Refresh: time.Hour, WatchBackoff: 10 * time.Millisecond, Logf: logf})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go p.Run(ctx)
+	p := stable(t, f, Options{Refresh: time.Hour, WatchBackoff: 10 * time.Millisecond, Logf: logf})
+	watchFrom(t, p, nil)
 	count := func(sub string) int {
 		mu.Lock()
 		defer mu.Unlock()
