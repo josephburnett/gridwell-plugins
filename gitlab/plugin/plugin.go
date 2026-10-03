@@ -268,14 +268,17 @@ func (p *Plugin) tick(ctx context.Context) {
 // it. Its failure is the root's, as a walk's is, so the next read answers it;
 // its success clears that, and only that — a glance runs only while the last
 // root walk is fresh, which is to say it landed. It does not stamp the walk
-// window: it proved nothing about absence.
+// window: it proved nothing about absence. A glance cut short because the
+// refresher stopped heard no verdict from GitLab, so it records none.
 func (p *Plugin) glance(ctx context.Context) {
 	err := p.mem.Glance(ctx, p.src)
 	p.mu.Lock()
-	if err != nil {
+	switch {
+	case ctx.Err() != nil:
+	case err != nil:
 		p.logf("gitlab plugin: glance: %v", err)
 		p.failed[todos.RootContext] = err
-	} else {
+	default:
 		delete(p.failed, todos.RootContext)
 	}
 	walked := p.syncedAt[todos.RootContext]
