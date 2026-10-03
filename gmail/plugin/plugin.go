@@ -458,22 +458,20 @@ func (p *Plugin) shows(key string) bool {
 
 // read makes a context answerable: fresh memory as it is, else a refresh,
 // joined if one is in flight (memo.Flights.Read). A read memory can answer
-// never waits; a cold one waits at most the first-answer bound. current
-// reports that memory is current to Gmail: a refresh landed inside the
-// window, none has failed since, and memory knows the history id it is
-// current to, so the next refresh reads every change since.
-//
-// A failed refresh answers Unavailable with its reason, so the node serves
-// its remembered listing, stamped stale.
-func (p *Plugin) read(ctx context.Context, key string) (current bool, err error) {
-	unreachable, err := p.flights.Read(ctx, account, p.shows(key))
+// never waits and never fails on Gmail: unreachable is why the last refresh
+// failed, "" while it lands, and memory answers either way — a token revoked
+// after Info included, which costs the user no tile. A cold read waits at
+// most the first-answer bound, and fails only when its refresh failed with
+// nothing remembered. current reports that memory is current to Gmail: no
+// refresh has failed since one landed inside the window, and memory knows
+// the history id it is current to, so the next refresh reads every change
+// since.
+func (p *Plugin) read(ctx context.Context, key string) (unreachable string, current bool, err error) {
+	unreachable, err = p.flights.Read(ctx, account, p.shows(key))
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	if unreachable != "" {
-		return false, status.Error(codes.Unavailable, unreachable)
-	}
-	return p.flights.Fresh(account) && p.mem.HistoryID() != 0, nil
+	return unreachable, unreachable == "" && p.flights.Fresh(account) && p.mem.HistoryID() != 0, nil
 }
 
 // List answers one context.
@@ -486,25 +484,26 @@ func (p *Plugin) read(ctx context.Context, key string) (current bool, err error)
 // left every label is usually archived, not gone, and Probe asks Gmail.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	if req.Context == mailbox.AllMailContext {
-		if _, err := p.read(ctx, req.Context); err != nil {
+		unreachable, _, err := p.read(ctx, req.Context)
+		if err != nil {
 			return nil, err
 		}
 		views := p.mem.AllMail()
-		return listing(mailbox.AllMailLabel, views, mailbox.CollectionEntries(views), false), nil
+		return listing(mailbox.AllMailLabel, views, mailbox.CollectionEntries(views), false, unreachable), nil
 	}
 	c, ok := mailbox.LookupCollection(req.Context)
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "gmail plugin: unknown context %q", req.Context)
 	}
-	current, err := p.read(ctx, c.Key)
+	unreachable, current, err := p.read(ctx, c.Key)
 	if err != nil {
 		return nil, err
 	}
 	views := p.mem.Collection(c.Key)
-	return listing(c.Label, views, mailbox.LabelEntries(c.Key, views), p.mem.Definitive(c.Key) && current), nil
+	return listing(c.Label, views, mailbox.LabelEntries(c.Key, views), p.mem.Definitive(c.Key) && current, unreachable), nil
 }
 
-func listing(label string, views []mailbox.View, entries []*pluginv1.Entry, authoritative bool) *pluginv1.ListResponse {
+func listing(label string, views []mailbox.View, entries []*pluginv1.Entry, authoritative bool, unreachable string) *pluginv1.ListResponse {
 	unread := 0
 	for _, v := range views {
 		if v.Unread {
@@ -515,6 +514,7 @@ func listing(label string, views []mailbox.View, entries []*pluginv1.Entry, auth
 		Entries:       entries,
 		Authoritative: authoritative,
 		SourceLabel:   fmt.Sprintf("%s · %d messages · %d unread", label, len(views), unread),
+		Unreachable:   unreachable,
 	}
 }
 

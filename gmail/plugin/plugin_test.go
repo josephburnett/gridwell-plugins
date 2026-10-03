@@ -761,8 +761,8 @@ func TestAMessageGmailWillNotReadNeverFailsAWalk(t *testing.T) {
 			listAll(t, p)
 			refreshed(t, p, &clock, 2*time.Minute) // b is all this walk has to read
 			resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
-			if err != nil {
-				t.Fatalf("the walk after one unreadable message = %v", err)
+			if err != nil || resp.Unreachable != "" {
+				t.Fatalf("the walk after one unreadable message = %q, %v", resp.GetUnreachable(), err)
 			}
 			if got := entryKeys(resp.Entries); got != "msg:a" {
 				t.Errorf("inbox = %s", got)
@@ -968,11 +968,13 @@ func landed(t *testing.T, p *Plugin) {
 // A read over a memory that has an answer gives it at once, however slow the
 // walk behind it: past the refresh window every read would otherwise pay the
 // first-answer bound for an answer memory already had. The walk still runs
-// and lands, and a walk that failed is answered by the next warm read with
-// its reason, transport-shaped, so the node serves what it remembers.
-func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
+// and lands. A walk that failed — here a token revoked after Info passed —
+// costs no read its answer: the next warm read answers memory, every entry,
+// and says why in unreachable, until a walk lands again.
+func TestAWarmReadAnswersMemoryAndSaysWhyTheWalkFailed(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
+	f.hold("STARRED", msg("a", "lunch", "2026-01-05T14:00:00Z"))
 	clock := at("2026-01-06T12:00:00Z")
 	p := stable(f, Options{Refresh: time.Minute, FirstAnswer: time.Hour, Now: func() time.Time { return clock }})
 	ctx := context.Background()
@@ -1007,9 +1009,25 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	f.mu.Unlock()
 	close(f.block)
 	landed(t, p)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); status.Code(err) != codes.Unavailable ||
-		!strings.Contains(err.Error(), "the stored token was refused") {
-		t.Fatalf("after a failed walk a warm read answered %v, want Unavailable with the walk's reason", err)
+	for _, c := range mailbox.Contexts() {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: c})
+		if err != nil {
+			t.Fatalf("%s after a failed walk = %v, want memory's answer", c, err)
+		}
+		if len(resp.Entries) != 1 || resp.Unreachable != "the stored token was refused" || resp.Authoritative {
+			t.Errorf("%s after a failed walk = %d entries, unreachable %q, authoritative %v; want memory, the reason, no authority",
+				c, len(resp.Entries), resp.Unreachable, resp.Authoritative)
+		}
+	}
+
+	f.mu.Lock()
+	f.err = nil
+	f.mu.Unlock()
+	clock = clock.Add(2 * time.Minute)
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	landed(t, p)
+	if resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil || resp.Unreachable != "" {
+		t.Errorf("after a walk landed = unreachable %q, %v; want live again", resp.GetUnreachable(), err)
 	}
 }
 
