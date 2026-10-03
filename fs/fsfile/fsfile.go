@@ -108,31 +108,27 @@ func Renderable(name string) bool {
 	return strings.HasSuffix(n, ".md") || strings.HasSuffix(n, ".markdown") || strings.HasSuffix(n, ".org")
 }
 
-// TextPresentation classifies a file tile's text-body presentation: markdown
-// and org render, with the raw-source toggle; the plain-text families show
-// verbatim; and everything else carries no declaration, so the metadata
-// summary renders.
+// TextPresentation declares a file tile's text-body presentation, and Body
+// answers in the form it names. The plain-text families show verbatim; every
+// other name renders: markdown and org as documents, anything else as its
+// metadata summary.
 func TextPresentation(name string) string {
-	if Renderable(name) {
-		return rpc.TextPresentationBoth
-	}
-	lower := strings.ToLower(name)
-	if plainTextExts[filepath.Ext(lower)] || plainTextNames[lower] {
+	if IsPlainText(name) && !Renderable(name) {
 		return rpc.TextPresentationPlain
 	}
-	return ""
+	return rpc.TextPresentationBoth
 }
 
-// IsPlainText reports the plain-text classification: TextPresentation's rule
-// minus the renderable arm.
+// IsPlainText reports the plain-text families by name.
 func IsPlainText(name string) bool {
 	lower := strings.ToLower(name)
 	return plainTextExts[filepath.Ext(lower)] || plainTextNames[lower]
 }
 
 // PreviewStamp returns the cheap preview generation for a file: an image's
-// mtime, and 0 for everything else. It travels as Tile.preview_blob_id and is
-// the client's thumbnail-cache key.
+// mtime, and 0 for everything else. It travels as Entry.preview_stamp, and the
+// node keys the tile's face by it until a screenshot exists (see
+// pluginhost.faceKey).
 func PreviewStamp(dirPath, name string) int64 {
 	if dirPath == "" || !strings.HasPrefix(PageMediaType(name), "image/") {
 		return 0
@@ -144,35 +140,39 @@ func PreviewStamp(dirPath, name string) int64 {
 	return fi.ModTime().Unix()
 }
 
-// renderableBodyCap bounds how much of a renderable file the descent body
-// carries: a document view, not a file transfer. A file past the cap falls
-// back to the metadata summary.
+// renderableBodyCap bounds how much of a file the descent body carries: a
+// document view, not a file transfer. A file past the cap falls back to the
+// metadata summary.
 const renderableBodyCap = 4 << 20
 
-// Body returns a file's descent body: real bytes for a renderable or plain
-// file under the cap, and the metadata summary otherwise. A missing or
-// unstattable file returns (nil, ""), and the caller decides what absence
-// means.
+// Body returns a file's descent body in the media type its TextPresentation
+// names: real bytes for a renderable or plain file under the cap, and the
+// metadata summary otherwise. The summary is markdown that reads as itself
+// verbatim, so a plain file past the cap answers it as text/plain and its
+// declaration holds. A missing or unstattable file returns (nil, ""), and the
+// caller decides what absence means.
 func Body(dirPath, name string) (data []byte, mediaType string) {
 	fullPath := filepath.Join(dirPath, name)
 	entry, err := fssource.Stat(fullPath)
 	if err != nil {
 		return nil, ""
 	}
+	mediaType = "text/markdown"
+	if TextPresentation(name) == rpc.TextPresentationPlain {
+		mediaType = "text/plain"
+	}
 	if (Renderable(name) || IsPlainText(name)) && entry.Size <= renderableBodyCap {
 		if body, readErr := os.ReadFile(fullPath); readErr == nil {
-			if IsPlainText(name) && !Renderable(name) {
-				return body, "text/plain"
-			}
-			return body, "text/markdown"
+			return body, mediaType
 		}
 		// Unreadable despite the stat: the metadata summary still tells the
 		// user what is here, instead of a blank pane.
 	}
-	return []byte(fssource.MetadataMarkdown(entry)), "text/markdown"
+	return []byte(fssource.MetadataMarkdown(entry)), mediaType
 }
 
-// serveChunkBytes mirrors the home store's read-side chunking.
+// serveChunkBytes keeps each ServeContent message far under gRPC's 4 MiB
+// default limit.
 const serveChunkBytes = 256 * 1024
 
 // ServeChunkSender is the streaming half the caller provides.
