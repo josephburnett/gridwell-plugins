@@ -518,28 +518,6 @@ func listing(label string, views []mailbox.View, entries []*pluginv1.Entry, auth
 	}
 }
 
-// ReadContent answers the message's markdown card: the tile's face and its
-// read-only document. The email itself is ServeContent's answer, not this
-// one. An unknown key reads as a one-line notice.
-func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {
-	id, ok := mailbox.ParseKey(req.Key)
-	if !ok {
-		return stream.Send(&pluginv1.ContentChunk{}) // not one of ours: no body
-	}
-	v, known := p.mem.View(id)
-	if !known {
-		// Before any collection has been walked, "not in memory" means "not
-		// yet", not "gone" — and it must answer Unavailable, transport-shaped,
-		// so the node's cache serves the remembered body instead of storing a
-		// gone body over it while the walk is still running.
-		if !p.mem.Swept() {
-			return status.Error(codes.Unavailable, "gmail plugin: the first walk has not completed")
-		}
-		return stream.Send(&pluginv1.ContentChunk{Data: mailbox.GoneMarkdown(req.Key), MediaType: "text/markdown"})
-	}
-	return stream.Send(&pluginv1.ContentChunk{Data: mailbox.Markdown(v), MediaType: "text/markdown"})
-}
-
 // ServeContent is the email. Subpath "" is the message, as the HTML the
 // sender wrote; any other subpath is a resource the email named by a relative
 // URL, and there are none — an email's own images and links are absolute,

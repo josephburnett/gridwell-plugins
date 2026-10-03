@@ -151,21 +151,6 @@ func TestHintsAreTheCalendarCellOfTheDate(t *testing.T) {
 	}
 }
 
-// The card is markdown ABOUT the email and carries no link: the email is what
-// the tile opens into, and a link would open a second, weaker copy of it.
-func TestMarkdownIsTheCard(t *testing.T) {
-	v := View{Message: msg("a1", "lunch", "2026-01-05T14:03:00Z"), Unread: true, Starred: true}
-	got := string(Markdown(v))
-	for _, want := range []string{"# " + UnreadMark + StarMark + " lunch", "from Alice <alice@example.com>", "2026-01-05 14:03 UTC", "> about lunch"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("card missing %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "](") {
-		t.Errorf("the card carries a link:\n%s", got)
-	}
-}
-
 // A plain-text mail is escaped into its page, not injected: escaping is not
 // sanitizing (the node sandboxes), it is what stops "<b>" typed in a plain
 // mail from being read as markup it never was.

@@ -535,9 +535,10 @@ func TestASlowWalkAnswersFromMemory(t *testing.T) {
 	close(f.block)
 }
 
-// A message is a text tile that serves a page. The markdown is the card; the
-// page is the email.
-func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
+// A message is a url tile that serves a page, and the page is the email. It
+// has no text body: nothing on the node reads one for a url entry, so the
+// plugin serves none (ReadContent is the embedded Unimplemented).
+func TestTheEmailIsThePageAndThereIsNoCard(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
 	f.html["a"] = "<div>Are you free friday?</div>"
@@ -547,15 +548,8 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := &reader{}
-	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "msg:a"}, r); err != nil {
-		t.Fatal(err)
-	}
-	if len(r.chunks) != 1 || r.chunks[0].MediaType != "text/markdown" {
-		t.Fatalf("chunks = %+v", r.chunks)
-	}
-	if !strings.Contains(string(r.chunks[0].Data), "# ") || !strings.Contains(string(r.chunks[0].Data), "lunch") {
-		t.Errorf("card = %q", r.chunks[0].Data)
+	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "msg:a"}, &reader{}); status.Code(err) != codes.Unimplemented {
+		t.Errorf("ReadContent = %v, want no card at all", err)
 	}
 
 	s := &server{}
@@ -567,14 +561,6 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 	}
 	if string(s.chunks[0].Data) != f.html["a"] {
 		t.Errorf("page = %q", s.chunks[0].Data)
-	}
-	// A key that is not one of ours reads as no body at all, not as an error.
-	r2 := &reader{}
-	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "label:INBOX"}, r2); err != nil {
-		t.Fatal(err)
-	}
-	if len(r2.chunks) != 1 || len(r2.chunks[0].Data) != 0 {
-		t.Errorf("chunks = %+v", r2.chunks)
 	}
 }
 
@@ -781,16 +767,6 @@ func TestEveryMetadataReadFailingFailsTheWalk(t *testing.T) {
 	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v, want the walk to fail with Gmail's reason", err)
-	}
-}
-
-// Before any walk, a key the memory does not hold is "not yet", not "gone":
-// a Gone body stored over the node's remembered one would be a loss.
-func TestReadContentWaitsRatherThanDeclaringAMessageGone(t *testing.T) {
-	p := stable(newFake(), Options{})
-	err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "msg:a"}, &reader{})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("err = %v, want Unavailable", err)
 	}
 }
 

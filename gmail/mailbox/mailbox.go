@@ -37,7 +37,7 @@ type Message struct {
 }
 
 // View is a message as one grid shows it: the record, plus the state Memory
-// owns. Nothing derives a label, a card or an entry from a bare Message, so
+// owns. Nothing derives a status or an entry from a bare Message, so
 // the mutable half can never be read from a stale copy.
 type View struct {
 	Message
