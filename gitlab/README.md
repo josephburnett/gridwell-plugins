@@ -19,6 +19,12 @@ The frequent read is one request; only the full read can tell that a todo
 has left the pending list. When either read changes what the plugin knows,
 it tells the node which grids changed, and every view showing them repaints.
 
+At start the plugin asks GitLab whether it takes the token. If GitLab
+refuses it, the plugin shows as broken with the reason until a working
+token is written to `token_file`, which is read again at every request, so
+no restart is needed. After that first check, a token GitLab stops taking
+is treated like GitLab being down.
+
 The plugin remembers every todo it has read, in its state directory, so a
 restart shows them at once. When GitLab cannot be read, the grids keep
 showing what the plugin last read and the plugin's status says why, until a

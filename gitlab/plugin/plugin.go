@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -59,11 +60,21 @@ type Marker interface {
 	MarkDone(ctx context.Context, id int64) error
 }
 
+// Token is the proof that GitLab takes the plugin's token, asked at Info.
+// *gitlabapi.Client implements it.
+type Token interface {
+	CheckToken(ctx context.Context) error
+}
+
 // Plugin implements pluginv1.PluginServer.
 type Plugin struct {
 	pluginv1.UnimplementedPluginServer
-	src         todos.Source
-	marker      Marker
+	src    todos.Source
+	marker Marker
+	token  Token
+	// proven latches Info's first pass: after it, GitLab failing is weather
+	// that memory answers through, never a refusal.
+	proven      atomic.Bool
 	mem         *todos.Memory
 	refresh     time.Duration
 	fullRefresh time.Duration
@@ -88,6 +99,8 @@ type Options struct {
 	// Marker is the mark-as-done writer. Nil means read-only: Delete answers
 	// Unimplemented and everything else works as before.
 	Marker Marker
+	// Token is asked at Info until it passes once. Nil passes at once.
+	Token Token
 	// StateDir is the private directory the node hands the plugin. Empty
 	// means no file: the plugin keeps its memory for its process lifetime.
 	StateDir string
@@ -105,6 +118,7 @@ func New(src todos.Source, o Options) *Plugin {
 	p := &Plugin{
 		src:         retrying{src: src, attempts: pageAttempts, backoff: pageBackoff},
 		marker:      o.Marker,
+		token:       o.Token,
 		mem:         todos.NewMemory(),
 		refresh:     o.Refresh,
 		fullRefresh: o.FullRefresh,
@@ -251,7 +265,18 @@ func (p *Plugin) glance(ctx context.Context) {
 	}
 }
 
-func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+// Info refuses, with the sentence the node shows, while GitLab refuses the
+// token, and asks again on every call until it passes once (plugin standard
+// rule 2). GitLab not answering is not a refusal: Info passes and the source
+// goes dark until it answers.
+func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	if p.token != nil && !p.proven.Load() {
+		switch err := p.token.CheckToken(ctx); status.Code(err) {
+		case codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.InvalidArgument:
+			return nil, status.Error(codes.FailedPrecondition, status.Convert(err).Message())
+		}
+		p.proven.Store(true)
+	}
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,

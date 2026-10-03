@@ -63,7 +63,7 @@ func (r retrying) Page(ctx context.Context, state string, page int) (todos.Reply
 // including an error carrying no status at all, is treated as weather.
 func transient(err error) bool {
 	switch status.Code(err) {
-	case codes.PermissionDenied, codes.Unauthenticated, codes.InvalidArgument:
+	case codes.PermissionDenied, codes.Unauthenticated, codes.InvalidArgument, codes.FailedPrecondition:
 		return false
 	}
 	return true

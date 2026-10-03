@@ -72,8 +72,8 @@ func TestDefaultClientHasATimeout(t *testing.T) {
 }
 
 // TestStalledResponseIsUnavailable: a request that exceeds the client timeout
-// answers Unavailable — "not right now", transport-shaped — so the node
-// degrades to its remembered listing instead of waiting forever.
+// answers Unavailable — "not right now", transport-shaped — so memory answers
+// with that reason instead of every reader waiting forever.
 func TestStalledResponseIsUnavailable(t *testing.T) {
 	stall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
