@@ -127,12 +127,12 @@ func TestTheFaceIsAJPEGInTheAccent(t *testing.T) {
 	}
 }
 
-// Every doc has a markdown body, page or not: a page tile is still a tile, and
-// what it reads as a document is this.
-func TestEveryDocHasANote(t *testing.T) {
+// A doc is a page or a note, never both: a page tile has no document body,
+// so a note beside a page is bytes nothing reads.
+func TestADocIsAPageOrANote(t *testing.T) {
 	for _, d := range Docs() {
-		if strings.TrimSpace(d.Note) == "" {
-			t.Errorf("%s has no note", d.Key)
+		if hasNote := strings.TrimSpace(d.Note) != ""; hasNote == (d.Page != nil) {
+			t.Errorf("%s: note %v, page %v; want exactly one", d.Key, hasNote, d.Page != nil)
 		}
 	}
 }

@@ -160,8 +160,8 @@ func TestAbsenceIsA404Page(t *testing.T) {
 	}
 }
 
-// ReadContent answers the markdown body for every doc, page or not. An
-// unknown key is an empty chunk: Probe is where absence is decided.
+// ReadContent answers a text doc's markdown body. A page doc has none, and an
+// unknown key is an empty chunk too: Probe is where absence is decided.
 func TestReadContentAnswersMarkdown(t *testing.T) {
 	p := New()
 	r := &reader{}
@@ -177,8 +177,8 @@ func TestReadContentAnswersMarkdown(t *testing.T) {
 	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "hello"}, r); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.chunks) != 1 || len(r.chunks[0].Data) == 0 {
-		t.Errorf("a page tile still has a document body, got %v", r.chunks)
+	if len(r.chunks) != 1 || len(r.chunks[0].Data) != 0 {
+		t.Errorf("a page tile has no document body, got %v", r.chunks)
 	}
 
 	r = &reader{}
@@ -195,13 +195,33 @@ func TestReadContentAnswersMarkdown(t *testing.T) {
 func TestProbeIsDefinitiveBothWays(t *testing.T) {
 	p := New()
 	ctx := context.Background()
-	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "hello"})
+	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "hello", Context: site.RootContext})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_PRESENT {
 		t.Errorf("Probe(hello) = %v", got.Presence)
 	}
-	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "gone"})
+	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "gone", Context: site.RootContext})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_GONE {
 		t.Errorf("Probe(gone) = %v", got.Presence)
+	}
+}
+
+// Probe answers for the context the request names (standard rule 6): a key
+// the site holds is GONE from a context the site does not list it in, and an
+// empty context asks after the plugin as a whole.
+func TestProbeAnswersForTheContextAsked(t *testing.T) {
+	p := New()
+	for _, c := range []struct {
+		context string
+		want    pluginv1.ProbeResponse_Presence
+	}{
+		{site.RootContext, pluginv1.ProbeResponse_PRESENCE_PRESENT},
+		{"elsewhere", pluginv1.ProbeResponse_PRESENCE_GONE},
+		{"", pluginv1.ProbeResponse_PRESENCE_PRESENT},
+	} {
+		got, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: "hello", Context: c.context})
+		if err != nil || got.Presence != c.want {
+			t.Errorf("Probe(hello in %q) = %v, %v; want %v", c.context, got.GetPresence(), err, c.want)
+		}
 	}
 }
 
@@ -221,6 +241,39 @@ func TestInfoDeclaresTheCollectionAndNotHostContent(t *testing.T) {
 	}
 	if info.HostContent {
 		t.Error("host_content is true; the pages are the plugin's own content")
+	}
+	// Standard rule 1: the plugin implements no Watch, so it declares none.
+	if info.Watch {
+		t.Error("watch is declared; this plugin implements no Watch")
+	}
+	if err := impl.Watch(&pluginv1.WatchRequest{}, nil); status.Code(err) != codes.Unimplemented {
+		t.Errorf("Watch = %v; a plugin that declares no watch must not implement one", err)
+	}
+}
+
+// Every entry's label is its doc's and no entry carries state (standard rule
+// 11): the site never changes, so there is nothing worth noticing. Every hint
+// is the doc's own cell (rule 10), so it cannot move with the listing order.
+func TestEntriesAreQuietAndHintedByTheirDoc(t *testing.T) {
+	resp, err := New().List(context.Background(), &pluginv1.ListRequest{Context: site.RootContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range resp.Entries {
+		d := site.Lookup(e.Key)
+		if d == nil {
+			t.Fatalf("listed %q, which the site does not hold", e.Key)
+		}
+		if e.Label != d.Label {
+			t.Errorf("%s label = %q, want the doc's %q", e.Key, e.Label, d.Label)
+		}
+		if e.StatusDetail != "" {
+			t.Errorf("%s carries status_detail %q; the site has no state", e.Key, e.StatusDetail)
+		}
+		h := e.PlacementHint
+		if h == nil || h.X != d.Col || h.Y != d.Row || h.W != 2 || h.H != 2 {
+			t.Errorf("%s hint = %v, want the doc's cell (%d,%d) at 2x2", e.Key, h, d.Col, d.Row)
+		}
 	}
 }
 
