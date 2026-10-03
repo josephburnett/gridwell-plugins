@@ -194,9 +194,23 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		key := strconv.FormatInt(c.PID, 10)
 		resp.Entries = append(resp.Entries, &pluginv1.Entry{
 			Key: key, Kind: "well", Label: key, ChildContext: key,
+			StatusDetail: stateMark(c.State),
 		})
 	}
 	return resp, nil
+}
+
+// stateMark is a process's status_detail: one emoji for the states worth
+// noticing, a zombie (💀) or a process stopped by a signal or a tracer (⏸),
+// and nothing for every other state.
+func stateMark(state byte) string {
+	switch state {
+	case 'Z':
+		return "💀"
+	case 'T', 't':
+		return "⏸"
+	}
+	return ""
 }
 
 func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {

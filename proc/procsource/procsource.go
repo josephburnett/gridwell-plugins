@@ -84,6 +84,8 @@ func Get(procRoot string, pid int64) (Info, error) {
 type Stat struct {
 	PID  int64
 	PPID int64
+	// State is the kernel's one-letter state (proc(5)): 'R', 'S', 'Z', 'T'…
+	State byte
 	// StartTime is when the process started, in clock ticks since boot: with
 	// PID it names one process, where a pid alone is reused.
 	StartTime uint64
@@ -114,8 +116,8 @@ func parseStat(b []byte) (Stat, error) {
 	if err != nil {
 		return Stat{}, fmt.Errorf("stat pid: %w", err)
 	}
-	// After the name come fields 3 onward (proc(5)): ppid is field 4 and
-	// starttime field 22.
+	// After the name come fields 3 onward (proc(5)): state is field 3, ppid
+	// field 4 and starttime field 22.
 	rest := strings.Fields(s[rp+1:])
 	if len(rest) < 22-2 {
 		return Stat{}, fmt.Errorf("stat %q is short", s)
@@ -128,7 +130,7 @@ func parseStat(b []byte) (Stat, error) {
 	if err != nil {
 		return Stat{}, fmt.Errorf("stat starttime: %w", err)
 	}
-	return Stat{PID: pid, PPID: ppid, StartTime: start}, nil
+	return Stat{PID: pid, PPID: ppid, State: rest[0][0], StartTime: start}, nil
 }
 
 // IsGone reports whether err from a read under /proc/<pid> means the process

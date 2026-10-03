@@ -283,3 +283,44 @@ func TestDeleteStopsAProcessAndNeverAnInfoTile(t *testing.T) {
 		t.Errorf("Delete of info:10 → %v, signalled %v; want a refusal that signals nothing", err, k.sent)
 	}
 }
+
+// setState rewrites pid's stat in a stub /proc with the kernel state letter.
+func setState(t *testing.T, root string, pid, ppid int64, state byte) {
+	t.Helper()
+	stat := fmt.Sprintf("%d (p %d) %c %d %d %d 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 %d 0 0\n", pid, pid, state, ppid, pid, pid, 1000+pid)
+	if err := os.WriteFile(filepath.Join(root, strconv.FormatInt(pid, 10), "stat"), []byte(stat), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A process's state is one emoji in status_detail, only when it is worth
+// noticing: a zombie or a stopped process. A running or sleeping one says
+// nothing, and the label is the same whatever the state.
+func TestStateIsQuietAndNeverInTheLabel(t *testing.T) {
+	root := stubProc(t, map[int64]int64{1: 0, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1})
+	setState(t, root, 10, 1, 'R')
+	setState(t, root, 12, 1, 'Z')
+	setState(t, root, 13, 1, 'T')
+	setState(t, root, 14, 1, 't')
+	p := served(t, root, 1)
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"10": "", "11": "", "12": "💀", "13": "⏸", "14": "⏸"}
+	for _, e := range resp.Entries {
+		if e.Kind != "well" {
+			if e.StatusDetail != "" {
+				t.Errorf("%s carries status %q; @info has no state", e.Key, e.StatusDetail)
+			}
+			continue
+		}
+		if e.StatusDetail != want[e.Key] || e.Label != e.Key {
+			t.Errorf("%s → label %q status %q; want label %q status %q", e.Key, e.Label, e.StatusDetail, e.Key, want[e.Key])
+		}
+		delete(want, e.Key)
+	}
+	if len(want) != 0 {
+		t.Errorf("not listed: %v", want)
+	}
+}
