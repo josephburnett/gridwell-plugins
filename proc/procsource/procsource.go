@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // DefaultRoot is the production /proc mount point. Tests pass a temp
@@ -81,6 +82,12 @@ func Children(procRoot string, parentPID int64) ([]Info, error) {
 // or unreadable.
 func Get(procRoot string, pid int64) (Info, error) {
 	return readInfo(procRoot, pid)
+}
+
+// IsGone reports whether err from a read under /proc/<pid> means the process
+// has exited, rather than that it could not be read.
+func IsGone(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH)
 }
 
 // Exists reports whether pid currently has an entry in the host process table

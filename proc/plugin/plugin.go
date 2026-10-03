@@ -150,29 +150,33 @@ func keyPID(key string) (int64, error) {
 }
 
 // List enumerates one process's children plus its @info tile, @info first, so
-// the ids the node mints stay stable. It is never Unavailable: an unreadable
-// process table answers what it could read, non-authoritatively, and the Probe
-// arbitration does the rest.
+// the ids the node mints stay stable. A process table it cannot read is
+// Unavailable: a partial listing would look like the truth.
 func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	pid, err := keyPID(req.Context)
 	if err != nil {
 		return nil, err
 	}
+	up, err := procsource.Exists(p.procRoot, pid)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "proc plugin: pid %d: %v", pid, err)
+	}
 	resp := &pluginv1.ListResponse{Authoritative: false, SourceLabel: req.Context}
-	if _, gerr := procsource.Get(p.procRoot, pid); gerr == nil {
+	if up {
 		resp.Entries = append(resp.Entries, &pluginv1.Entry{
 			Key:  infoKeyPrefix + req.Context,
 			Kind: "text", Label: infoLabel,
 		})
 	}
-	children, cerr := procsource.Children(p.procRoot, pid)
-	if cerr == nil {
-		for _, c := range children {
-			key := strconv.FormatInt(c.PID, 10)
-			resp.Entries = append(resp.Entries, &pluginv1.Entry{
-				Key: key, Kind: "well", Label: key, ChildContext: key,
-			})
-		}
+	children, err := procsource.Children(p.procRoot, pid)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "proc plugin: children of %d: %v", pid, err)
+	}
+	for _, c := range children {
+		key := strconv.FormatInt(c.PID, 10)
+		resp.Entries = append(resp.Entries, &pluginv1.Entry{
+			Key: key, Kind: "well", Label: key, ChildContext: key,
+		})
 	}
 	return resp, nil
 }
@@ -186,9 +190,12 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	if err != nil {
 		return err
 	}
-	info, gerr := procsource.Get(p.procRoot, pid)
-	if gerr != nil {
-		return stream.Send(&pluginv1.ContentChunk{})
+	info, err := procsource.Get(p.procRoot, pid)
+	switch {
+	case procsource.IsGone(err):
+		return status.Errorf(codes.NotFound, "proc plugin: pid %d has exited", pid)
+	case err != nil:
+		return status.Errorf(codes.Unavailable, "proc plugin: pid %d cannot be read: %v", pid, err)
 	}
 	return stream.Send(&pluginv1.ContentChunk{
 		Data:      []byte(procsource.MetadataMarkdown(info)),
