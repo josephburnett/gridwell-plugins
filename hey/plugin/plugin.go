@@ -508,7 +508,7 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 			Data:      []byte("not found"),
 		})
 	}
-	html, err := p.src.ThreadHTML(context.Background(), id)
+	html, err := p.src.ThreadHTML(stream.Context(), id)
 	if err != nil {
 		// The reason travels: the node turns a coded failure into an answer
 		// the user can read, and a silent blank page would look like an email

@@ -44,6 +44,8 @@ type fakeHEY struct {
 	html  map[int64]string
 	// threadErr is what ThreadHTML answers for one thread, over err.
 	threadErr map[int64]error
+	// threadCtx is the context the last ThreadHTML ran under.
+	threadCtx context.Context
 	// boxErr is what Box answers for one box, over err.
 	boxErr map[string]error
 	err    error
@@ -84,9 +86,10 @@ func (f *fakeHEY) Box(ctx context.Context, box string) ([]mail.Thread, bool, err
 	return f.boxes[box], whole, nil
 }
 
-func (f *fakeHEY) ThreadHTML(_ context.Context, id int64) ([]byte, error) {
+func (f *fakeHEY) ThreadHTML(ctx context.Context, id int64) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.threadCtx = ctx
 	f.calls["thread"]++
 	if err := f.threadErr[id]; err != nil {
 		return nil, err
@@ -153,13 +156,19 @@ func (r *reader) Context() context.Context            { return context.Backgroun
 type server struct {
 	pluginv1.Plugin_ServeContentServer
 	chunks []*pluginv1.ServeContentChunk
+	ctx    context.Context // nil is context.Background
 }
 
 func (s *server) Send(c *pluginv1.ServeContentChunk) error {
 	s.chunks = append(s.chunks, c)
 	return nil
 }
-func (s *server) Context() context.Context { return context.Background() }
+func (s *server) Context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
 
 // stable is a plugin whose clock does not move, so nothing refreshes behind a
 // test's back.
@@ -395,6 +404,39 @@ func TestServeContentSaysWhenThereIsNoBody(t *testing.T) {
 
 // A failure to read the email surfaces. A blank page would look like an email
 // with nothing in it.
+func TestServeContentReadsUnderTheRequestsContext(t *testing.T) {
+	f := newFake()
+	p := stable(t, f, Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = p.ServeContent(&pluginv1.ServeContentRequest{Key: "thread:1"}, &server{ctx: ctx})
+	cancel()
+	f.mu.Lock()
+	got := f.threadCtx
+	f.mu.Unlock()
+	if got == nil || got.Err() == nil {
+		t.Fatal("the node hung up and the email's read ran on (rule 13)")
+	}
+}
+
+// A walk is shared by every reader, so it runs under the plugin's life: no
+// reader's hangup ends it, and the plugin's end does.
+func TestAWalkRunsUnderThePluginsLife(t *testing.T) {
+	f := newFake()
+	f.block = make(chan struct{})
+	life := memo.NewLife()
+	p := stable(t, f, Options{Life: life, FirstAnswer: time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+	cancel()
+	if !p.flights.Busy(mail.ImboxContext) {
+		t.Fatal("a reader's hangup ended the walk it shares")
+	}
+	life.End()
+	if p.flights.Busy(mail.ImboxContext) {
+		t.Fatal("the plugin ended and its walk ran on")
+	}
+}
+
 func TestServeContentSurfacesAFailure(t *testing.T) {
 	f := newFake()
 	f.err = status.Error(codes.PermissionDenied, "Not logged in")
