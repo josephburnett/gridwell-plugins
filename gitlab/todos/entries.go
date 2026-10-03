@@ -8,8 +8,7 @@ import (
 )
 
 // RootEntries derives the collection grid: one well per week, newest first,
-// hinted by calendar.WeekCell. Labels carry the counts, so a week's face
-// changes as its todos complete.
+// hinted by calendar.WeekCell and named by its Monday.
 func RootEntries(weeks []WeekSummary) []*pluginv1.Entry {
 	out := make([]*pluginv1.Entry, 0, len(weeks))
 	for _, w := range weeks {
@@ -18,7 +17,7 @@ func RootEntries(weeks []WeekSummary) []*pluginv1.Entry {
 		out = append(out, &pluginv1.Entry{
 			Key:           key,
 			Kind:          "well",
-			Label:         WeekLabel(w.Start, w.Open, w.Done),
+			Label:         WeekLabel(w.Start),
 			ChildContext:  key,
 			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: 1, H: 1},
 		})
@@ -46,7 +45,7 @@ func WeekEntries(start time.Time, todos []Todo) []*pluginv1.Entry {
 			Key:           t.Key(),
 			Kind:          "text",
 			Label:         t.Label(),
-			StatusDetail:  t.State,
+			StatusDetail:  t.StatusDetail(),
 			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: TodoTileW, H: 1},
 		})
 	}

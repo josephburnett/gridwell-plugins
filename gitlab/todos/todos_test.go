@@ -91,10 +91,6 @@ func TestLabelAndRef(t *testing.T) {
 	if mr.Label() != "!42 Fix it" {
 		t.Errorf("label = %q", mr.Label())
 	}
-	mr.State = StateDone
-	if mr.Label() != DoneMark+" !42 Fix it" {
-		t.Errorf("done label = %q", mr.Label())
-	}
 	var commit Todo
 	commit.TargetType, commit.ActionName, commit.Body = "Commit", "build_failed", "pipeline exploded\nmore"
 	if commit.Label() != "pipeline exploded" {
@@ -298,6 +294,25 @@ func TestSyncSinceRefusesEarlyStopOnUnorderedPages(t *testing.T) {
 	}
 }
 
+// A todo's name is its title, done or open; only a done todo carries a
+// status, and it is the one mark.
+func TestDoneIsTheStatusNotTheName(t *testing.T) {
+	start := at("2026-08-17T00:00:00Z")
+	open := mk(1, "2026-08-18T10:00:00Z", StatePending)
+	done := open
+	done.State = StateDone
+	o, d := WeekEntries(start, []Todo{open})[0], WeekEntries(start, []Todo{done})[0]
+	if o.Label != "#1 t1" || d.Label != o.Label {
+		t.Errorf("labels: open %q, done %q", o.Label, d.Label)
+	}
+	if o.StatusDetail != "" || d.StatusDetail != DoneMark {
+		t.Errorf("status: open %q, done %q", o.StatusDetail, d.StatusDetail)
+	}
+	if w := RootEntries([]WeekSummary{{Start: start, Open: 1}})[0].Label; w != RootEntries([]WeekSummary{{Start: start, Done: 1}})[0].Label {
+		t.Errorf("a week's name moved with its counts: %q", w)
+	}
+}
+
 func TestSyncErrorLeavesMemoryUntouched(t *testing.T) {
 	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending)}}
 	m := NewMemory()
@@ -327,15 +342,15 @@ func TestWeeksAndEntries(t *testing.T) {
 	if root[0].Key != "week:2026-08-24" || root[0].ChildContext != root[0].Key || root[0].PlacementHint.X != 3 || root[0].PlacementHint.Y != 0 || root[1].PlacementHint.X != 2 || root[1].PlacementHint.Y != 0 {
 		t.Errorf("root entries = %v", root)
 	}
-	if root[1].Label != "2026-08-17 · 1 open · 2 done" {
+	if root[1].Label != "2026-08-17" {
 		t.Errorf("week label = %q", root[1].Label)
 	}
 	wk := WeekEntries(at("2026-08-17T00:00:00Z"), m.Week(at("2026-08-17T00:00:00Z")))
 	if len(wk) != 3 {
 		t.Fatalf("week entries = %d", len(wk))
 	}
-	if wk[0].ServesPage || wk[0].Kind != "text" || wk[1].Label != DoneMark+" #2 t2" || wk[1].StatusDetail != StateDone {
-		t.Errorf("entry facts = %v", wk[1])
+	if wk[0].ServesPage || wk[0].Kind != "text" {
+		t.Errorf("entry facts = %v", wk[0])
 	}
 }
 

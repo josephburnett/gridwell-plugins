@@ -7,7 +7,6 @@
 package todos
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -107,18 +106,24 @@ func (t *Todo) Action() string {
 	return strings.ReplaceAll(t.ActionName, "_", " ")
 }
 
-// DoneMark is the resolved todo's banner glyph: the filled green checkbox,
-// not a hairline check, because the mark must read at a distance — a week is
-// scanned zoomed out, and done-ness is the one fact worth seeing from there.
+// DoneMark is a resolved todo's status: the filled green checkbox, not a
+// hairline check, because a week is scanned zoomed out and done-ness is the
+// one fact worth seeing from there.
 const DoneMark = "✅"
 
-// Label is the tile's banner: a done mark, who it is from, the short
+// StatusDetail is DoneMark once the todo is done and nothing while it is
+// pending, the normal state.
+func (t *Todo) StatusDetail() string {
+	if t.Done() {
+		return DoneMark
+	}
+	return ""
+}
+
+// Label is the tile's name, the same done or open: who it is from, the short
 // ref, and the title.
 func (t *Todo) Label() string {
 	var b strings.Builder
-	if t.Done() {
-		b.WriteString(DoneMark + " ")
-	}
 	if name := strings.TrimSpace(t.Author.Name); name != "" {
 		b.WriteString(name)
 		b.WriteString(": ")
@@ -180,7 +185,5 @@ func ParseWeekKey(key string) (time.Time, bool) {
 	return t, true
 }
 
-// WeekLabel names a week well by its Monday and its counts.
-func WeekLabel(start time.Time, open, done int) string {
-	return fmt.Sprintf("%s · %d open · %d done", start.UTC().Format("2006-01-02"), open, done)
-}
+// WeekLabel names a week well by its Monday.
+func WeekLabel(start time.Time) string { return start.UTC().Format("2006-01-02") }
