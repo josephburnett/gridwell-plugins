@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/josephburnett/gridwell-plugins/memo/calendar"
 )
 
 func at(s string) time.Time {
@@ -41,18 +43,45 @@ func TestWeekStartIsMondayUTC(t *testing.T) {
 	}
 }
 
-func TestWeekCellIsACalendarPage(t *testing.T) {
-	cell := func(s string) [2]int64 {
-		x, y := WeekCell(at(s))
-		return [2]int64{x, y}
+// A todo's hint is the shared calendar's cell for its creation time, so it
+// reads only the todo: a todo listed earlier in the same week moves nobody.
+func TestTodoHintsAreAFunctionOfTheTodo(t *testing.T) {
+	start := at("2026-08-17T00:00:00Z")
+	later := []Todo{
+		mk(2, "2026-08-18T12:00:00Z", StateDone),
+		mk(3, "2026-08-18T12:30:00Z", StatePending),
+		mk(4, "2026-08-23T10:00:00Z", StatePending),
 	}
-	// August 2026 is row 0: Mondays the 3rd, 10th, 17th, 24th, 31st → x 0..4.
-	if cell("2026-08-03T00:00:00Z") != [2]int64{0, 0} || cell("2026-08-24T00:00:00Z") != [2]int64{3, 0} || cell("2026-08-31T00:00:00Z") != [2]int64{4, 0} {
-		t.Errorf("august cells: %v %v %v", cell("2026-08-03T00:00:00Z"), cell("2026-08-24T00:00:00Z"), cell("2026-08-31T00:00:00Z"))
+	hints := func(ts []Todo) map[string][4]int64 {
+		out := map[string][4]int64{}
+		for _, e := range WeekEntries(start, ts) {
+			h := e.PlacementHint
+			out[e.Key] = [4]int64{h.X, h.Y, h.W, h.H}
+		}
+		return out
 	}
-	// September climbs, July descends; the year boundary keeps counting.
-	if cell("2026-09-07T00:00:00Z") != [2]int64{0, -1} || cell("2026-07-27T00:00:00Z") != [2]int64{3, 1} || cell("2025-12-29T00:00:00Z") != [2]int64{4, 8} {
-		t.Errorf("month rows: %v %v %v", cell("2026-09-07T00:00:00Z"), cell("2026-07-27T00:00:00Z"), cell("2025-12-29T00:00:00Z"))
+	before := hints(later)
+	after := hints(append([]Todo{mk(1, "2026-08-18T09:00:00Z", StatePending)}, later...))
+	for k, h := range before {
+		if after[k] != h {
+			t.Errorf("%s moved from %v to %v when an earlier todo arrived", k, h, after[k])
+		}
+	}
+	for _, td := range later {
+		x, y := calendar.Cell(td.CreatedAt, TodoTileW)
+		if want := [4]int64{x, y, TodoTileW, 1}; before[td.Key()] != want {
+			t.Errorf("%s hint = %v, want the calendar cell %v", td.Key(), before[td.Key()], want)
+		}
+	}
+}
+
+func TestWeekHintsAreTheSharedWeekCell(t *testing.T) {
+	weeks := []WeekSummary{{Start: at("2026-08-24T00:00:00Z")}, {Start: at("2026-07-27T00:00:00Z")}}
+	for i, e := range RootEntries(weeks) {
+		x, y := calendar.WeekCell(weeks[i].Start)
+		if h := e.PlacementHint; h.X != x || h.Y != y || h.W != 1 || h.H != 1 {
+			t.Errorf("%s hint = %v, want (%d,%d)", e.Key, h, x, y)
+		}
 	}
 }
 
@@ -304,15 +333,6 @@ func TestWeeksAndEntries(t *testing.T) {
 	wk := WeekEntries(at("2026-08-17T00:00:00Z"), m.Week(at("2026-08-17T00:00:00Z")))
 	if len(wk) != 3 {
 		t.Fatalf("week entries = %d", len(wk))
-	}
-	if h := wk[0].PlacementHint; h.X != 1*TodoTileW || h.Y != 0 || h.W != TodoTileW {
-		t.Errorf("Tuesday first hint = %+v", h)
-	}
-	if h := wk[1].PlacementHint; h.X != 1*TodoTileW || h.Y != 1 {
-		t.Errorf("Tuesday second hint = %+v", h)
-	}
-	if h := wk[2].PlacementHint; h.X != 6*TodoTileW || h.Y != 0 {
-		t.Errorf("Sunday hint = %+v", h)
 	}
 	if wk[0].ServesPage || wk[0].Kind != "text" || wk[1].Label != DoneMark+" #2 t2" || wk[1].StatusDetail != StateDone {
 		t.Errorf("entry facts = %v", wk[1])
