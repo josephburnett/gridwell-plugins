@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,5 +145,55 @@ func TestTheFullWalkRunsOnItsOwnCadence(t *testing.T) {
 	}
 	if glances == 0 {
 		t.Error("no tick glanced")
+	}
+}
+
+// hanging is a oneShot that, once hang is set, answers nothing until the
+// caller gives up, and says so on hung, then on gaveUp.
+type hanging struct {
+	oneShot
+	hang   atomic.Bool
+	hung   chan struct{}
+	gaveUp chan struct{}
+}
+
+func (h *hanging) Page(ctx context.Context, state string, page int) (todos.Reply, error) {
+	if h.hang.Load() {
+		h.hung <- struct{}{}
+		<-ctx.Done()
+		defer func() { h.gaveUp <- struct{}{} }()
+		return todos.Reply{}, ctx.Err()
+	}
+	return h.oneShot.Page(ctx, state, page)
+}
+
+// A glance cut short because the last stream ended is the refresher
+// stopping, not GitLab failing: the next read answers memory with no error.
+func TestAGlanceCutShortIsNotAFailure(t *testing.T) {
+	src := &hanging{oneShot: oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}},
+		hung: make(chan struct{}, 1), gaveUp: make(chan struct{}, 1)}
+	clock := at("2026-08-25T12:00:00Z")
+	p := New(src, Options{Refresh: MinRefresherInterval, Now: func() time.Time { return clock }})
+	t.Cleanup(p.Close)
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatal(err)
+	}
+	landed(t, p)
+	src.hang.Store(true)
+	w := watching(t, p, nil)
+	select {
+	case <-src.hung:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresher never glanced")
+	}
+	w.cancel()
+	<-src.gaveUp
+	time.Sleep(50 * time.Millisecond) // the glance takes its verdict
+	// Past the window a warm read answers the last failure without waiting
+	// on the walk it starts: there must be none.
+	src.hang.Store(false)
+	clock = clock.Add(DefaultFullRefresh)
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatalf("the read after the stream ended answered %v", err)
 	}
 }
