@@ -1,9 +1,9 @@
-// Package trash moves host files into the freedesktop.org "home trash"
-// instead of unlinking them, so discarding a file (or a directory) through
-// Gridwell is recoverable rather than an irreversible rm -rf. It implements
-// the spec's home trash ($XDG_DATA_HOME/Trash, default ~/.local/share/Trash)
-// directly — no trash CLI is assumed present — so a desktop file manager can
-// list and restore what Gridwell discarded.
+// Package trash moves host files into the user's trash instead of unlinking
+// them, so discarding a file (or a directory) through Gridwell is recoverable
+// rather than an irreversible rm -rf: Finder's ~/.Trash on macOS, and
+// elsewhere the freedesktop.org home trash ($XDG_DATA_HOME/Trash, default
+// ~/.local/share/Trash), implemented directly — no trash CLI is assumed
+// present — so a file manager can list and restore what Gridwell discarded.
 package trash
 
 import (
@@ -13,19 +13,72 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
-// Trash moves path into the freedesktop home trash, writing the matching
-// .trashinfo record. path may be a file, directory, or symlink.
+// Trash moves path into the user's trash. path may be a file, directory, or
+// symlink.
 func Trash(path string) error {
-	dir, err := homeDir()
+	dir, finder, err := place(runtime.GOOS)
 	if err != nil {
 		return err
 	}
+	if finder {
+		return intoFinder(dir, path)
+	}
 	return into(dir, path)
+}
+
+// place is the trash directory for goos, and whether it is Finder's.
+func place(goos string) (dir string, finder bool, err error) {
+	if goos == "darwin" {
+		home, err := os.UserHomeDir()
+		return filepath.Join(home, ".Trash"), true, err
+	}
+	dir, err = homeDir()
+	return dir, false, err
+}
+
+// finderMu makes intoFinder's check for a free name and its move one step
+// within this process; a rename onto a taken name would replace what is
+// there.
+var finderMu sync.Mutex
+
+// intoFinder moves src into Finder's trash under its own name, a clash taking
+// the next free "name N.ext" as Finder names one. The trash keeps no record
+// beside the file: Finder's own "Put Back" record is private to Finder.
+func intoFinder(trashDir, src string) error {
+	abs, err := filepath.Abs(src)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(abs); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(trashDir, 0o700); err != nil {
+		return err
+	}
+	finderMu.Lock()
+	defer finderMu.Unlock()
+	base := filepath.Base(abs)
+	ext := filepath.Ext(base)
+	for i := 1; ; i++ {
+		name := base
+		if i > 1 {
+			name = fmt.Sprintf("%s %d%s", strings.TrimSuffix(base, ext), i, ext)
+		}
+		dst := filepath.Join(trashDir, name)
+		if _, err := os.Lstat(dst); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return moveOrCopy(abs, dst)
+	}
 }
 
 // homeDir resolves the freedesktop home-trash directory. Honors

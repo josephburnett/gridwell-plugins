@@ -170,3 +170,46 @@ func TestTrashNameCollisionDisambiguates(t *testing.T) {
 		t.Errorf("second trashed file not disambiguated: %v", err)
 	}
 }
+
+// macOS has no freedesktop trash: Finder's is ~/.Trash, where a deleted file
+// lands under its own name. Every other OS uses the home trash.
+func TestPlaceFollowsTheOS(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/xdg/data")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	if dir, finder, err := place("darwin"); err != nil || !finder || dir != filepath.Join(home, ".Trash") {
+		t.Errorf("place(darwin) = %q finder %v, %v; want ~/.Trash, Finder's", dir, finder, err)
+	}
+	if dir, finder, err := place("linux"); err != nil || finder || dir != "/xdg/data/Trash" {
+		t.Errorf("place(linux) = %q finder %v, %v; want the freedesktop home trash", dir, finder, err)
+	}
+}
+
+// Finder's trash holds files under their own names, a clash taking the next
+// free "name N.ext", and nothing beside them.
+func TestIntoFinderMovesUnderItsOwnName(t *testing.T) {
+	trashDir := filepath.Join(t.TempDir(), ".Trash")
+	src := t.TempDir()
+	for i := 0; i < 3; i++ {
+		p := filepath.Join(src, "notes.md")
+		if err := os.WriteFile(p, []byte{byte('a' + i)}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := intoFinder(trashDir, p); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Fatalf("source still there after trash #%d: %v", i, err)
+		}
+	}
+	for name, body := range map[string]string{"notes.md": "a", "notes 2.md": "b", "notes 3.md": "c"} {
+		if got, err := os.ReadFile(filepath.Join(trashDir, name)); err != nil || string(got) != body {
+			t.Errorf("%s = %q, %v; want %q", name, got, err, body)
+		}
+	}
+	if entries, _ := os.ReadDir(trashDir); len(entries) != 3 {
+		t.Errorf("Finder's trash holds %d entries, want the 3 files alone", len(entries))
+	}
+}
