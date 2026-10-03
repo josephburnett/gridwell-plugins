@@ -241,7 +241,7 @@ func TestExecRunsTheRealCLI(t *testing.T) {
 	// A refusal prints on STDERR, envelope and all, after the keyring
 	// warning — and --html prints no envelope at all. The reason is what
 	// reaches the user, not the transcript around it.
-	_, _, err = c.Box(context.Background(), "trailbox")
+	_, _, err = c.Box(context.Background(), "lockedbox")
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("a logged-out box = %v, want PermissionDenied", err)
 	}

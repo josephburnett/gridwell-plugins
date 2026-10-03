@@ -132,10 +132,10 @@ func (p *Plugin) apply(ev mail.Event) {
 			return
 		}
 		eff := p.mem.Apply(c.Key, ev)
-		if eff.Changed {
+		if eff.Changed || eff.Everything {
 			p.saveCache()
-			p.changes.publish(c.Key)
 		}
+		p.publish(c.Key, eff)
 		if eff.Rewalk {
 			p.rewalk(c)
 		}
@@ -149,9 +149,12 @@ func (p *Plugin) setLive(live bool) {
 }
 
 // Watch streams a ContextChanged for every collection whose listing changes
-// from now on, by the feed or by a walk. It never sends EntryRemoved: this
-// plugin's listings are not authoritative, and a thread leaving one box is
-// usually in another, so absence is Probe's to settle, not the feed's.
+// from now on, by the feed or by a walk, everything included: a thread's
+// record changing moves everything, which the node passes on to every box
+// that links into it. It never sends EntryRemoved: this plugin's listings
+// are not authoritative, and a thread leaving one box is usually in another,
+// so absence is Probe's to settle, not the feed's. The feed is account-wide,
+// so the scope the node names is not read.
 func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	s := p.changes.subscribe()
 	defer p.changes.unsubscribe(s)
@@ -178,6 +181,9 @@ func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchSer
 				if err := send(c.Key); err != nil {
 					return err
 				}
+			}
+			if err := send(mail.EverythingContext); err != nil {
+				return err
 			}
 		}
 	}

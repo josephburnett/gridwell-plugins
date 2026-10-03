@@ -57,7 +57,7 @@ func (m *Memory) Snapshot() Snapshot {
 
 // Restore folds a snapshot into the memory. It is the boot path only: the
 // membership it carries is taken as read, because it is this plugin's own
-// last word about the same three collections.
+// last word about the same boxes.
 func (m *Memory) Restore(s Snapshot) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

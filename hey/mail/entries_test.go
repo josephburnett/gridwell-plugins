@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/josephburnett/gridwell/api/rpc"
@@ -53,16 +54,18 @@ func TestCollectionEntriesHintAsACalendar(t *testing.T) {
 	}
 }
 
-// Every collection is a menu entry. There is no privileged one, because a
-// plugin is not a place: it contributes doorways, and each collection is one.
+// Every collection is a menu entry, and so is everything. There is no
+// privileged one, because a plugin is not a place: it contributes doorways,
+// and each collection is one.
 func TestMenuEntriesDeclareEveryCollection(t *testing.T) {
 	got := MenuEntries()
-	if len(got) != len(Collections) {
-		t.Fatalf("got %d menu entries, want one per collection (%d)", len(got), len(Collections))
+	want := append(slices.Clone(Collections), Collection{Key: EverythingContext, Label: EverythingLabel})
+	if len(got) != len(want) {
+		t.Fatalf("got %d menu entries, want one per collection and everything (%d)", len(got), len(want))
 	}
 	for i, e := range got {
-		if e.Context != Collections[i].Key || e.Id != Collections[i].Key || e.Label != Collections[i].Label {
-			t.Errorf("entry %d = %+v, want collection %+v", i, e, Collections[i])
+		if e.Context != want[i].Key || e.Id != want[i].Key || e.Label != want[i].Label {
+			t.Errorf("entry %d = %+v, want collection %+v", i, e, want[i])
 		}
 	}
 }

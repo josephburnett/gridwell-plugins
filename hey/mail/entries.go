@@ -34,11 +34,23 @@ func CollectionEntries(threads []Thread) []*pluginv1.Entry {
 	return out
 }
 
+// BoxEntries derives one box's grid: CollectionEntries, each a link to the
+// same thread in everything. The content facts stay, so a node that predates
+// link_target still shows the box as pages of its own.
+func BoxEntries(threads []Thread) []*pluginv1.Entry {
+	out := CollectionEntries(threads)
+	for _, e := range out {
+		e.LinkTarget = &pluginv1.EntryRef{Context: EverythingContext, Key: e.Key}
+	}
+	return out
+}
+
 // MenuEntries declares every collection this plugin serves, one (+) menu
-// entry each. There is no privileged collection and no landing grid: a plugin
-// is not a place, it contributes doorways, and each of these is one.
+// entry each, everything last. There is no privileged collection and no
+// landing grid: a plugin is not a place, it contributes doorways, and each of
+// these is one.
 func MenuEntries() []*pluginv1.MenuEntry {
-	out := make([]*pluginv1.MenuEntry, 0, len(Collections))
+	out := make([]*pluginv1.MenuEntry, 0, len(Collections)+1)
 	for _, c := range Collections {
 		out = append(out, &pluginv1.MenuEntry{
 			Id:      c.Key,
@@ -46,5 +58,5 @@ func MenuEntries() []*pluginv1.MenuEntry {
 			Context: c.Key,
 		})
 	}
-	return out
+	return append(out, &pluginv1.MenuEntry{Id: EverythingContext, Label: EverythingLabel, Context: EverythingContext})
 }
