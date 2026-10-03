@@ -652,8 +652,8 @@ func TestOverTheRealCLIContract(t *testing.T) {
 	if !strings.Contains(e.Label, "Alice") || !strings.Contains(e.Label, "Lunch plans") {
 		t.Errorf("label = %q", e.Label)
 	}
-	if !strings.HasPrefix(e.Label, mail.UnseenMark) {
-		t.Errorf("an unseen thread lost its mark: %q", e.Label)
+	if e.StatusDetail != mail.UnseenMark {
+		t.Errorf("an unseen thread lost its mark: status %q", e.StatusDetail)
 	}
 
 	s := &server{}
