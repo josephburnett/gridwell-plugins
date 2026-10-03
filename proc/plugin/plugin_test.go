@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -240,5 +241,45 @@ func TestEveryTextEntryDeclaresItsPresentation(t *testing.T) {
 		if e.Kind == "text" && e.TextPresentation != "both" {
 			t.Errorf("text entry %q declares %q; want both", e.Key, e.TextPresentation)
 		}
+	}
+}
+
+type killer struct {
+	answer error
+	sent   []int64
+}
+
+func (k *killer) Kill(pid int64, _ syscall.Signal) error {
+	k.sent = append(k.sent, pid)
+	return k.answer
+}
+
+// Deleting a well stops its process. One already gone is done, so the node's
+// probe retires its row; one the user may not signal is refused with a
+// sentence. An @info tile describes a process and is not one: deleting it
+// signals nothing.
+func TestDeleteStopsAProcessAndNeverAnInfoTile(t *testing.T) {
+	ctx := context.Background()
+	root := stubProc(t, map[int64]int64{1: 0, 10: 1})
+	for answer, want := range map[error]codes.Code{
+		nil:            codes.OK,
+		syscall.ESRCH:  codes.OK,
+		syscall.EPERM:  codes.PermissionDenied,
+		syscall.EINVAL: codes.Internal,
+	} {
+		k := &killer{answer: answer}
+		_, err := New(root, 1, k).Delete(ctx, &pluginv1.DeleteRequest{Key: "10"})
+		if status.Code(err) != want || len(k.sent) != 1 || k.sent[0] != 10 {
+			t.Errorf("kill answers %v → Delete %v, signalled %v; want %v after signalling 10", answer, err, k.sent, want)
+		}
+		if want == codes.PermissionDenied && !strings.Contains(status.Convert(err).Message(), "not permitted to stop pid 10") {
+			t.Errorf("EPERM → %q; want a sentence saying the process may not be stopped", status.Convert(err).Message())
+		}
+	}
+
+	k := &killer{}
+	_, err := New(root, 1, k).Delete(ctx, &pluginv1.DeleteRequest{Key: "info:10"})
+	if status.Code(err) != codes.FailedPrecondition || len(k.sent) != 0 {
+		t.Errorf("Delete of info:10 → %v, signalled %v; want a refusal that signals nothing", err, k.sent)
 	}
 }

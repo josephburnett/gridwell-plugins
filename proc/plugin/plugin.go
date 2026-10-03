@@ -252,15 +252,25 @@ func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
 	return &pluginv1.ProbeResponse{Presence: p}
 }
 
-// Delete sends SIGTERM, best-effort; the tile sweeps once the process is
-// definitively gone.
+// Delete sends a well's process SIGTERM; the row retires once Probe says the
+// process is gone, which for one already gone is at once. An @info tile is
+// refused: it describes a process and is not one.
 func (p *Plugin) Delete(_ context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {
-	pid, _, err := parseKey(req.Key)
+	pid, isInfo, err := parseKey(req.Key)
 	if err != nil {
 		return nil, err
 	}
-	if kerr := p.killer.Kill(pid, syscall.SIGTERM); kerr != nil {
-		return nil, status.Errorf(codes.Internal, "proc plugin: kill %d: %v", pid, kerr)
+	if isInfo {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"proc plugin: @info describes pid %d and is not a process; delete the process's own tile to stop it", pid)
 	}
-	return &pluginv1.DeleteResponse{}, nil
+	switch err := p.killer.Kill(pid, syscall.SIGTERM); {
+	case err == nil, errors.Is(err, syscall.ESRCH):
+		return &pluginv1.DeleteResponse{}, nil
+	case errors.Is(err, syscall.EPERM):
+		return nil, status.Errorf(codes.PermissionDenied,
+			"proc plugin: not permitted to stop pid %d: it belongs to another user", pid)
+	default:
+		return nil, status.Errorf(codes.Internal, "proc plugin: kill %d: %v", pid, err)
+	}
 }
