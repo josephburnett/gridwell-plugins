@@ -10,9 +10,8 @@ import (
 
 // watchBuffer bounds one subscriber's backlog: distinct contexts announced and
 // not yet sent. A subscriber that falls this far behind has its backlog
-// collapsed to the root alone, so a slow stream costs memory it can name and
-// never blocks a walk. The weeks it lost repaint on the node's next read of
-// them, as they did before there was a Watch.
+// collapsed to its whole scope, so a slow stream costs memory it can name,
+// never blocks a walk, and loses no change to a context it shows.
 const watchBuffer = 64
 
 // watchers is the fan-out of memory changes to every Watch stream, and the
@@ -30,15 +29,22 @@ type watchers struct {
 // watcher is one Watch stream's backlog: a set of contexts in announcement
 // order, deduplicated, since a context changed twice needs one repaint.
 type watcher struct {
-	wake    chan struct{}
+	wake chan struct{}
+	// scope is what the stream announces when it loses track: the contexts
+	// the node named, or the root when it named none.
+	scope   []string
 	mu      sync.Mutex
 	pending []string
 	queued  map[string]bool
 }
 
-// subscribe opens a stream, starting work under life if it is the first.
-func (w *watchers) subscribe(life context.Context) *watcher {
-	s := &watcher{wake: make(chan struct{}, 1), queued: map[string]bool{}}
+// subscribe opens a stream over scope, starting work under life if it is the
+// first.
+func (w *watchers) subscribe(life context.Context, scope []string) *watcher {
+	if len(scope) == 0 {
+		scope = []string{todos.RootContext}
+	}
+	s := &watcher{wake: make(chan struct{}, 1), scope: scope, queued: map[string]bool{}}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.subs == nil {
@@ -80,10 +86,15 @@ func (s *watcher) add(contexts []string) {
 			continue
 		}
 		if len(s.pending) >= watchBuffer {
-			// The collapse keeps the context being announced: what arrives
-			// after the overflow is exactly what a repaint of the root alone
-			// would miss.
-			s.pending, s.queued = []string{todos.RootContext}, map[string]bool{todos.RootContext: true}
+			// The collapse keeps the context being announced: it may be one
+			// the scope does not name, such as a week first shown since.
+			s.pending, s.queued = nil, map[string]bool{}
+			for _, k := range s.scope {
+				if !s.queued[k] {
+					s.pending = append(s.pending, k)
+					s.queued[k] = true
+				}
+			}
 			if s.queued[c] {
 				continue
 			}
@@ -116,12 +127,13 @@ func (s *watcher) next() (string, bool) {
 
 // Watch streams a ContextChanged for every listing a change to memory moved:
 // a walk landing, or failing having absorbed pages, a glance, and a
-// mark-done. A todo
-// that leaves pending is a ContextChanged for its week, never an
+// mark-done. The to-do list is one account-wide feed, so every change is
+// announced whatever the scope; the scope is what an overflow re-announces. A
+// todo that leaves pending is a ContextChanged for its week, never an
 // EntryRemoved: it stays listed, done-marked (see the package comment), and an
 // EntryRemoved would have the node drop a tile the next listing returns.
-func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
-	s := p.watch.subscribe(p.life)
+func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
+	s := p.watch.subscribe(p.life, req.GetContexts())
 	defer p.watch.unsubscribe(s)
 	// The node counts the stream open when its header arrives, and only then
 	// clears a refusal or catches up after a drop (docs/plugin-authoring.md).

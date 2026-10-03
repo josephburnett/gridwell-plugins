@@ -63,13 +63,20 @@ func TestInfoDeclaresWatch(t *testing.T) {
 	}
 }
 
-// watching subscribes a Watch stream to p and returns it once subscribed.
+// watching subscribes a Watch stream to p with no scope and returns it once
+// subscribed.
 func watching(t *testing.T, p *Plugin, block chan struct{}) *watchStream {
+	t.Helper()
+	return watchingScope(t, p, block, nil)
+}
+
+// watchingScope is watching with the scope the node names.
+func watchingScope(t *testing.T, p *Plugin, block chan struct{}, scope []string) *watchStream {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &watchStream{ctx: ctx, cancel: cancel, sent: make(chan *pluginv1.Change, 1024), block: block}
 	done := make(chan error, 1)
-	go func() { done <- p.Watch(&pluginv1.WatchRequest{}, w) }()
+	go func() { done <- p.Watch(&pluginv1.WatchRequest{Contexts: scope}, w) }()
 	t.Cleanup(func() {
 		cancel()
 		if block != nil {
@@ -186,16 +193,17 @@ func TestAWalkAnnouncesExactlyTheContextsItMoved(t *testing.T) {
 	}
 }
 
-// A subscriber that stops reading never holds up a walk, and when it reads
-// again its overflowed backlog has become the root.
-func TestASlowWatcherNeverBlocksAWalk(t *testing.T) {
+// stall overflows a stream that stops reading: each of more walks than the
+// backlog holds brings a todo in a week of its own, and none may wait on the
+// stream. It answers what the stream hears once it reads again, and the
+// week the last walk brought.
+func stall(t *testing.T, scope ...string) (heard []string, last string) {
+	t.Helper()
 	src := &oneShot{}
 	clock := at("2026-08-25T12:00:00Z")
 	p := New(src, Options{Now: func() time.Time { return clock }})
 	block := make(chan struct{})
-	w := watching(t, p, block)
-	// Each walk brings a todo in a week of its own: more distinct weeks than
-	// the backlog holds.
+	w := watchingScope(t, p, block, scope)
 	monday := at("2026-08-24T10:00:00Z")
 	for i := 0; i < watchBuffer+5; i++ {
 		src.pending = append(src.pending, mk(int64(i+1), monday.AddDate(0, 0, -7*i).Format(time.RFC3339), "pending"))
@@ -213,12 +221,31 @@ func TestASlowWatcherNeverBlocksAWalk(t *testing.T) {
 		}
 	}
 	close(block)
-	// Every walk announced a week of its own and the root: 70 distinct
-	// contexts. The stalled watcher is owed at most the one in flight plus a
-	// full backlog, and still hears the root and the last walk's week.
-	got := changed(t, w, 0)
-	last := todos.WeekKey(todos.WeekStart(monday.AddDate(0, 0, -7*(watchBuffer+4))))
+	return changed(t, w, 0), todos.WeekKey(todos.WeekStart(monday.AddDate(0, 0, -7*(watchBuffer+4))))
+}
+
+// A subscriber that stops reading never holds up a walk, and when it reads
+// again it is owed at most the one in flight plus a full backlog. With no
+// scope its overflowed backlog has become the root, and it still hears the
+// last walk's week.
+func TestASlowWatcherNeverBlocksAWalk(t *testing.T) {
+	got, last := stall(t)
 	if len(got) > watchBuffer+1 || !slices.Contains(got, todos.RootContext) || !slices.Contains(got, last) {
 		t.Errorf("after the stall the watcher heard %d contexts %v", len(got), got)
+	}
+}
+
+// An overflow announces the stream's whole scope: a week shown and announced
+// before the backlog overflowed is told again, not lost with the backlog.
+func TestAnOverflowAnnouncesTheScope(t *testing.T) {
+	first := todos.WeekKey(todos.WeekStart(at("2026-08-24T10:00:00Z")))
+	got, last := stall(t, todos.RootContext, first)
+	for _, want := range []string{todos.RootContext, first, last} {
+		if !slices.Contains(got, want) {
+			t.Errorf("after the overflow the watcher heard %v, missing %s", got, want)
+		}
+	}
+	if len(got) > watchBuffer+1 {
+		t.Errorf("after the overflow the watcher heard %d contexts", len(got))
 	}
 }
