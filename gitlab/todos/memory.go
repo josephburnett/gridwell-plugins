@@ -39,10 +39,9 @@ const walkConcurrency = 4
 // Memory is everything the plugin has seen, keyed by todo id. A todo that
 // vanishes from GitLab keeps its record here and shows as done; nothing is
 // ever removed. It survives a restart through the cache file in the plugin's
-// state directory — see Snapshot and store.go — which holds this plugin's
-// memory of ITS SOURCE and never a node fact. The node keeps its own
-// read-through cache of what the plugin last said; this one only saves the
-// walk.
+// state directory — see Snapshot — which holds this plugin's memory of ITS
+// SOURCE and never a node fact. It is what every listing answers from: the
+// node keeps no copy of what the plugin said.
 type Memory struct {
 	mu    sync.Mutex
 	todos map[int64]*Todo

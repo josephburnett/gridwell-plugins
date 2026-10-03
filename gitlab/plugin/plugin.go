@@ -3,29 +3,27 @@
 // "week:<monday>", lists the todos created that week as markdown text tiles.
 // Keys are GitLab's todo ids, stable forever. Listings are non-authoritative
 // and Probe never answers GONE: a todo never disappears from the grid, it
-// changes state when refreshed, and this plugin's own cache file remembers it
-// across restarts. The one write is
-// Delete, which here means mark-as-done: the trash gesture resolves the todo
-// at GitLab rather than removing anything. The plugin holds
-// no node fact — no id, no layout — only its memory of GitLab, in the private
-// directory the node hands it as `state_dir`.
+// changes state when refreshed. The plugin's memory of GitLab answers every
+// listing and survives a restart through its file in `state_dir`; memo's
+// flights refresh it for reads, and its changes' work while a grid is shown.
+// The one write is Delete, which here means mark-as-done: the trash gesture
+// resolves the todo at GitLab rather than removing anything. The plugin holds
+// no node fact — no id, no layout.
 package plugin
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 	"log"
-	"path/filepath"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/josephburnett/gridwell-plugins/gitlab/todos"
+	"github.com/josephburnett/gridwell-plugins/memo"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
@@ -50,13 +48,9 @@ const DefaultRefresh = 30 * time.Second
 // nothing.
 const DefaultFullRefresh = 10 * time.Minute
 
-// DefaultFirstAnswer bounds how long a cold List — one the memory has nothing
-// to answer with — waits on a walk in flight before answering what memory
-// holds so far. GitLab pages newest-first, so the first answer is the most
-// recent weeks; the walk streams on behind, and the node's refresh paints the
-// rest in as pages land. A real cold walk runs minutes — waiting for all of
-// it showed the user "loading" the whole time.
-const DefaultFirstAnswer = time.Second
+// refreshUnit is the one unit of background work. The to-do list is one
+// account-wide list, so every context a stream shows needs the same refresher.
+const refreshUnit = todos.RootContext
 
 // Marker is the write half of the source: marking one todo done at GitLab.
 // It is a separate interface from Source because the walk and the write have
@@ -66,148 +60,154 @@ type Marker interface {
 	MarkDone(ctx context.Context, id int64) error
 }
 
+// Token is the proof that GitLab takes the plugin's token, asked at Info.
+// *gitlabapi.Client implements it.
+type Token interface {
+	CheckToken(ctx context.Context) error
+}
+
 // Plugin implements pluginv1.PluginServer.
 type Plugin struct {
 	pluginv1.UnimplementedPluginServer
-	src         todos.Source
-	marker      Marker
+	src    todos.Source
+	marker Marker
+	token  Token
+	// proven latches Info's first pass: after it, GitLab failing is weather
+	// that memory answers through, never a refusal.
+	proven      atomic.Bool
 	mem         *todos.Memory
 	refresh     time.Duration
 	fullRefresh time.Duration
-	firstAnswer time.Duration
-	now         func() time.Time
-	// cache is the memory's file in the state directory, "" when the node
-	// handed no state_dir: the plugin then walks GitLab from cold at every
-	// start.
-	cache string
-	// logf is the plugin's one log door, for what must not be swallowed and
-	// must not fail a read: a cache the plugin could not read or write,
-	// GitLab not answering. Each is an episode, logged once when it starts.
-	logf func(format string, args ...any)
-	// unanswered is GitLab failing a walk or a glance; unsaved is the cache
-	// file failing a write.
-	unanswered, unsaved episode
-	// life is the plugin's lifetime: every detached walk runs under it, since
-	// a walk belongs to no reader. Close ends it.
-	life  context.Context
-	close context.CancelFunc
+	clock       memo.Clock
 
-	mu       sync.Mutex
-	syncedAt map[string]time.Time // context → last successful walk
-	// flights are the walks in progress, by context. A List that finds one
-	// joins it instead of starting its own, because the node lists a
-	// context on every GetGrid and GetTile and a burst of reads must cost
-	// GitLab one walk, not one per reader.
-	flights map[string]*flight
-	// failed is the last walk's error, by context, until a walk covering that
-	// context lands. A warm read answers it, having not waited to hear it.
-	failed map[string]error
-
-	watch watchers
-}
-
-// flight is one walk in progress; done closes when err is final.
-type flight struct {
-	done chan struct{}
-	err  error
+	life    *memo.Life
+	file    *memo.File[todos.Snapshot]
+	flights *memo.Flights
+	changes *memo.Changes
 }
 
 // Options tunes a plugin. Zero values take the defaults.
 type Options struct {
 	Refresh     time.Duration
 	FullRefresh time.Duration
+	// FirstAnswer is memo.DefaultFirstAnswer when zero.
 	FirstAnswer time.Duration
-	Now         func() time.Time
+	// Linger is how long the refresher outlives the last Watch stream:
+	// memo.DefaultLinger when zero, none when negative.
+	Linger time.Duration
+	Now    func() time.Time
 	// Marker is the mark-as-done writer. Nil means read-only: Delete answers
 	// Unimplemented and everything else works as before.
 	Marker Marker
+	// Token is asked at Info until it passes once. Nil passes at once.
+	Token Token
 	// StateDir is the private directory the node hands the plugin. Empty
-	// means no cache: the plugin keeps everything in memory for its process
-	// lifetime.
+	// means no file: the plugin keeps its memory for its process lifetime.
 	StateDir string
-	// Logf takes every line the plugin writes: the failures that must not be
-	// swallowed and must not fail a read. It defaults to the standard logger,
-	// which the node captures from the subprocess's stderr.
+	// Logf takes every line the plugin writes. It defaults to the standard
+	// logger, which the node captures from the subprocess's stderr.
 	Logf func(format string, args ...any)
 }
 
 // New builds a plugin over src. Whether there is a source is decided before
 // this point: FromConfig refuses a missing token, and the node shows the
-// plugin broken with its reason. A state directory holding a cache file is loaded
-// here, before the plugin serves its first request, so the first listing is
-// answered from what the last process walked.
+// plugin broken with its reason. The memory's file is loaded here, before the
+// plugin serves its first request, so the first listing is answered from what
+// the last process walked.
 func New(src todos.Source, o Options) *Plugin {
 	p := &Plugin{
 		src:         retrying{src: src, attempts: pageAttempts, backoff: pageBackoff},
 		marker:      o.Marker,
+		token:       o.Token,
 		mem:         todos.NewMemory(),
 		refresh:     o.Refresh,
 		fullRefresh: o.FullRefresh,
-		firstAnswer: o.FirstAnswer,
-		now:         o.Now,
-		logf:        o.Logf,
-		syncedAt:    map[string]time.Time{},
-		flights:     map[string]*flight{},
-		failed:      map[string]error{},
+		clock:       memo.System,
+		life:        memo.NewLife(),
 	}
-	p.life, p.close = context.WithCancel(context.Background())
-	p.watch.work = p.refresher
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
 	}
 	if p.fullRefresh <= 0 {
 		p.fullRefresh = DefaultFullRefresh
 	}
-	if p.firstAnswer <= 0 {
-		p.firstAnswer = DefaultFirstAnswer
+	if o.Now != nil {
+		p.clock = nowClock(o.Now)
 	}
-	if p.now == nil {
-		p.now = time.Now
+	logf := o.Logf
+	if logf == nil {
+		logf = log.Printf
 	}
-	if p.logf == nil {
-		p.logf = log.Printf
-	}
-	if dir := strings.TrimSpace(o.StateDir); dir != "" {
-		p.cache = filepath.Join(dir, todos.CacheFile)
-		p.loadCache()
+	p.file = memo.NewFile[todos.Snapshot](strings.TrimSpace(o.StateDir), todos.CacheFile, todos.CacheVersion, logf)
+	p.flights = memo.NewFlights(p.life, memo.FlightOptions{
+		Name:        "gitlab plugin",
+		Walk:        p.walk,
+		Window:      p.fullRefresh,
+		Covers:      covers,
+		FirstAnswer: o.FirstAnswer,
+		Landed:      p.landed,
+		Clock:       p.clock,
+		Logf:        logf,
+	})
+	p.changes = memo.NewChanges(p.life, memo.ChangeOptions{
+		Unscoped: []string{todos.RootContext},
+		Work:     func(string) []string { return []string{refreshUnit} },
+		Do:       p.refresher,
+		Linger:   o.Linger,
+		Clock:    p.clock,
+	})
+	if snap, ok := p.file.Load(); ok {
+		p.mem.Restore(snap)
+		p.flights.Restore(snap.WalkedAt)
 	}
 	return p
 }
 
-// loadCache folds the last process's walk into memory, its landing time
-// included: a walk is fresh for the full-refresh window whichever process ran it,
-// so a restart inside that window answers every listing from the file without
-// touching GitLab. A missing file is the first boot, which is not news;
-// anything else is reported and the plugin starts cold, because a cache is
-// disposable and a walk rebuilds it, but a cache that cannot be read must not
-// vanish in silence.
-func (p *Plugin) loadCache() {
-	snap, err := todos.LoadCache(p.cache)
-	switch {
-	case err == nil:
-		p.mem.Restore(snap)
-		if !snap.WalkedAt.IsZero() {
-			p.syncedAt[todos.RootContext] = snap.WalkedAt
-		}
-	case errors.Is(err, fs.ErrNotExist):
-	default:
-		p.logf("gitlab plugin: cache: %v (starting cold)", err)
+// nowClock is a memo.Clock whose Now a test sets; its waits are real.
+type nowClock func() time.Time
+
+func (c nowClock) Now() time.Time                       { return c() }
+func (nowClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
+
+// covers is the root walk answering for every week: it reads every page a
+// week walk would.
+func covers(key string) []string {
+	if key == todos.RootContext {
+		return nil
+	}
+	return []string{todos.RootContext}
+}
+
+// since is key's walk window: zero for the root, meaning everything, and the
+// Monday for a week.
+func since(key string) time.Time {
+	start, _ := todos.ParseWeekKey(key)
+	return start
+}
+
+// walk is one flight's refresh. Each page REQUEST is bounded by the API
+// client's own timeout and each PAGE is retried in place a bounded number of
+// times, so a dead source ends the walk with its error rather than hanging it.
+func (p *Plugin) walk(ctx context.Context, key string) error {
+	return p.mem.Sync(ctx, p.src, since(key))
+}
+
+// landed announces what a walk moved, a failed one included, since the pages
+// it absorbed are what reads now answer, and saves what it learned.
+func (p *Plugin) landed(_ string, err error) {
+	if p.announce() || err == nil {
+		p.save()
 	}
 }
 
-// saveCache writes memory back after a successful walk, stamped with when the
-// last root walk landed. A failure is reported and nothing else: the walk
-// succeeded, the answer is good, and only the next restart pays for the lost
-// write.
-func (p *Plugin) saveCache(walkedAt time.Time) {
-	if p.cache == "" {
-		return
-	}
-	snap := p.mem.Snapshot()
-	snap.WalkedAt = walkedAt
-	if err := todos.SaveCache(p.cache, snap); p.unsaved.started(err) {
-		p.logf("gitlab plugin: cache: %v (logged once until a write lands)", err)
-	}
+// save writes memory and the flights' walk stamps to the file. memo.File logs
+// its own failure, once per episode.
+func (p *Plugin) save() {
+	_ = p.file.Save(func() todos.Snapshot {
+		s := p.mem.Snapshot()
+		s.WalkedAt = p.flights.WalkedAt()
+		return s
+	})
 }
 
 // MinRefresherInterval is the fastest the background refresher ticks, whatever
@@ -226,98 +226,57 @@ func (p *Plugin) refresherInterval() time.Duration {
 }
 
 // Close ends the plugin's lifetime: the refresher and every walk stop.
-func (p *Plugin) Close() { p.close() }
+func (p *Plugin) Close() { p.life.End() }
 
-// refresher keeps the memory current until ctx is done, ticking on the
-// refresher's interval so a change has been read before a read asks. It runs
-// only while a Watch stream is open (see watchers.work): GitLab cannot tell,
-// so the clock is the plugin's, and only for as long as someone is looking.
-func (p *Plugin) refresher(ctx context.Context) {
-	t := time.NewTicker(p.refresherInterval())
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			p.tick(ctx)
-		}
-	}
+// refresher is the Changes work. It runs only while a Watch stream shows one
+// of these grids: GitLab cannot tell, so the clock is the plugin's, and only
+// for as long as someone is looking.
+func (p *Plugin) refresher(ctx context.Context, _ string) {
+	memo.Poll(ctx, p.clock, p.refresherInterval(), p.tick)
 }
 
 // tick is the refresher's one rule: a full walk of the root once the last one
 // has aged out of the full-refresh window, else a glance at the newest
-// pending page. It shares the flights and the window with the reads, so a
-// tick after a read's walk only glances, and a tick while a root walk runs
-// does nothing, since that walk reads everything a glance would.
+// pending page. It shares the flights with the reads, so a tick after a
+// read's walk only glances, and a tick while a root walk runs does nothing,
+// since that walk reads everything a glance would.
 func (p *Plugin) tick(ctx context.Context) {
-	p.mu.Lock()
-	_, walking := p.flights[todos.RootContext]
-	fresh := p.freshLocked(todos.RootContext)
-	p.mu.Unlock()
 	switch {
-	case walking:
-	case !fresh:
-		// No verdict to read: the walk logs and records its own, and sync
-		// answers before the walk ends.
-		_ = p.sync(ctx, todos.RootContext, time.Time{})
+	case p.flights.Busy(todos.RootContext):
+	case !p.flights.Fresh(todos.RootContext):
+		p.flights.Rewalk(todos.RootContext)
 	default:
 		p.glance(ctx)
 	}
 }
 
 // glance absorbs what is new at the top of GitLab's pending list and announces
-// it. Its failure is the root's, as a walk's is, so the next read answers it;
-// its success clears that, and only that — a glance runs only while the last
-// root walk is fresh, which is to say it landed. It does not stamp the walk
-// window: it proved nothing about absence. A glance cut short because the
-// refresher stopped heard no verdict from GitLab, so it records none.
+// it. Its outcome is the root's, as a walk's is, so the next read answers its
+// failure; it stamps no freshness, having proved nothing about absence. A
+// glance cut short because the refresher stopped heard no verdict from
+// GitLab, so it records none.
 func (p *Plugin) glance(ctx context.Context) {
 	err := p.mem.Glance(ctx, p.src)
-	p.mu.Lock()
-	switch {
-	case ctx.Err() != nil:
-	case err != nil:
-		p.failed[todos.RootContext] = err
-	default:
-		delete(p.failed, todos.RootContext)
-	}
-	walked := p.syncedAt[todos.RootContext]
-	p.mu.Unlock()
 	if ctx.Err() == nil {
-		p.heard(err)
+		p.flights.Outcome(todos.RootContext, err)
 	}
 	if p.announce() {
-		p.saveCache(walked)
+		p.save()
 	}
 }
 
-// heard takes GitLab's answer to a walk or a glance: a failure is logged
-// once per episode, and an answer ends the episode.
-func (p *Plugin) heard(err error) {
-	if p.unanswered.started(err) {
-		p.logf("gitlab plugin: GitLab did not answer: %v (logged once until it does)", err)
+// Info refuses, with the sentence the node shows, while GitLab refuses the
+// token, and asks again on every call until it passes once (plugin standard
+// rule 2). GitLab not answering is not a refusal: Info passes and the source
+// goes dark until it answers.
+func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	if p.token != nil && !p.proven.Load() {
+		switch err := p.token.CheckToken(ctx); status.Code(err) {
+		case codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.InvalidArgument:
+			return nil, status.Error(codes.FailedPrecondition, status.Convert(err).Message())
+		}
+		p.proven.Store(true)
 	}
-}
-
-// episode is one condition logged once when it starts and again only after
-// it has cleared (plugin standard rule 14).
-type episode struct {
-	mu sync.Mutex
-	on bool
-}
-
-// started records whether the condition holds, err non-nil, and reports
-// whether it has just begun.
-func (e *episode) started(err error) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	was := e.on
-	e.on = err != nil
-	return e.on && !was
-}
-
-func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
@@ -328,142 +287,35 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	}, nil
 }
 
-// freshLocked reports whether ctxKey was walked within the full-refresh window. A
-// root walk covers every week, so a week is fresh under either. A walk stamped
-// in the FUTURE is not fresh: the root stamp can come from the cache file, and
-// a clock that has since stepped back would otherwise freeze the plugin on a
-// stale memory. The caller holds p.mu.
-func (p *Plugin) freshLocked(ctxKey string) bool {
-	now := p.now()
-	for _, k := range []string{ctxKey, todos.RootContext} {
-		if t, ok := p.syncedAt[k]; ok {
-			if d := now.Sub(t); d >= 0 && d < p.fullRefresh {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// sync makes ctxKey answerable: fresh memory as-is, else a walk. since is
-// zero for the root, meaning everything, and the Monday for a week. A walk
-// already in flight for the context, or for the root, which covers every
-// week, is shared — one walk per burst of readers — and no walk belongs to
-// its starter: it runs detached, so no reader's patience or hangup can kill
-// or restart it. A read the memory already Shows something for answers at
-// once, with the last failed read of GitLab's error if there is one: on a
-// real history a walk runs for tens of seconds, and waiting on it would tax
-// every read. Only a cold read waits, at
-// most firstAnswer, then answers what memory holds so far: pages land
-// newest-first, so a partial answer is the most recent weeks, and the node's
-// refresh paints in the rest.
-func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error {
-	warm := p.mem.Shows(since)
-	p.mu.Lock()
-	if p.freshLocked(ctxKey) {
-		p.mu.Unlock()
-		return nil
-	}
-	var f *flight
-	for _, k := range []string{ctxKey, todos.RootContext} {
-		if ex, ok := p.flights[k]; ok {
-			f = ex
-			break
-		}
-	}
-	if f == nil {
-		f = &flight{done: make(chan struct{})}
-		p.flights[ctxKey] = f
-		go p.walk(ctxKey, since, f)
-	}
-	var last error
-	for _, k := range []string{ctxKey, todos.RootContext} {
-		if last = p.failed[k]; last != nil {
-			break
-		}
-	}
-	p.mu.Unlock()
-	if warm {
-		return last
-	}
-
-	select {
-	case <-f.done:
-		return f.err
-	case <-time.After(p.firstAnswer):
-		p.logf("gitlab plugin: %q answering with memory so far; the walk streams on", ctxKey)
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// walk is one detached walk: it owns its flight and outlives every reader.
-// Its context is the plugin's lifetime: each page REQUEST is bounded by the
-// API client's own timeout and each PAGE is retried in place a bounded number
-// of times, so a dead source ends the walk with its error rather than hanging
-// it.
-func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
-	err := p.mem.Sync(p.life, p.src, since)
-	if p.life.Err() == nil {
-		p.heard(err)
-	}
-	p.mu.Lock()
-	if err == nil {
-		p.syncedAt[ctxKey] = p.now()
-		if ctxKey == todos.RootContext {
-			clear(p.failed) // a root walk covers every week
-		} else {
-			delete(p.failed, ctxKey)
-		}
-	} else {
-		p.failed[ctxKey] = err
-	}
-	rootWalk := p.syncedAt[todos.RootContext]
-	delete(p.flights, ctxKey)
-	p.mu.Unlock()
-	// The cache lands before the flight closes: a listing that waited for the
-	// walk is one a restart can repeat, and a listing answered without
-	// waiting becomes repeatable as soon as the walk behind it lands.
-	if err == nil {
-		p.saveCache(rootWalk)
-	}
-	// A failed walk announces too: the pages it absorbed are what reads now
-	// answer.
-	p.announce()
-	f.err = err
-	close(f.done)
-}
-
-// List answers the root, listing weeks, or one week, listing todos. A walk
-// failure with a transport-shaped code leaves the node serving its rows with
-// the source dark; a verdict such as a bad token surfaces.
+// List answers the root, listing weeks, or one week, listing todos. A read
+// memory can answer is answered from memory, with the last refresh's failure
+// as unreachable; only a cold read whose walk failed fails, with the walk's
+// own code.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	switch {
-	case req.Context == todos.RootContext:
-		if err := p.sync(ctx, req.Context, time.Time{}); err != nil {
-			return nil, err
-		}
-		weeks := p.mem.Weeks()
-		open, done := 0, 0
-		for _, w := range weeks {
-			open += w.Open
-			done += w.Done
-		}
-		// The totals ride the grid's source label, so the root says at a
-		// glance what the walk found.
-		return &pluginv1.ListResponse{Entries: todos.RootEntries(weeks), Authoritative: false,
-			SourceLabel: fmt.Sprintf("%s · %d open · %d done", displayName, open, done)}, nil
-	default:
-		start, ok := todos.ParseWeekKey(req.Context)
-		if !ok {
+	if req.Context != todos.RootContext {
+		if _, ok := todos.ParseWeekKey(req.Context); !ok {
 			return nil, status.Errorf(codes.InvalidArgument, "gitlab plugin: unknown context %q", req.Context)
 		}
-		if err := p.sync(ctx, req.Context, start); err != nil {
-			return nil, err
-		}
-		return &pluginv1.ListResponse{Entries: todos.WeekEntries(start, p.mem.Week(start)), Authoritative: false, SourceLabel: req.Context}, nil
 	}
+	start := since(req.Context)
+	unreachable, err := p.flights.Read(ctx, req.Context, p.mem.Shows(start))
+	if err != nil {
+		return nil, err
+	}
+	if req.Context != todos.RootContext {
+		return &pluginv1.ListResponse{Entries: todos.WeekEntries(start, p.mem.Week(start)),
+			SourceLabel: req.Context, Unreachable: unreachable}, nil
+	}
+	weeks := p.mem.Weeks()
+	open, done := 0, 0
+	for _, w := range weeks {
+		open += w.Open
+		done += w.Done
+	}
+	// The totals ride the grid's source label, so the root says at a glance
+	// what the walk found.
+	return &pluginv1.ListResponse{Entries: todos.RootEntries(weeks), Unreachable: unreachable,
+		SourceLabel: fmt.Sprintf("%s · %d open · %d done", displayName, open, done)}, nil
 }
 
 // ReadContent answers the todo's markdown: the text tile's face and rendered
@@ -490,7 +342,7 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 // Delete is what the trash gesture means here: mark the todo done at GitLab.
 // The tile does not vanish — a todo never disappears from the grid, it changes
 // state — so the next listing shows it done and the week's counts move. The
-// flip lands in memory and the cache file only after GitLab accepted the
+// flip lands in memory and its file only after GitLab accepted the
 // write, so a refused write changes nothing anywhere. A week well refuses:
 // one gesture must not resolve a whole week. An already-done todo succeeds
 // without a write — the gesture is idempotent, like fs's already-gone path.
@@ -520,12 +372,9 @@ func (p *Plugin) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*plug
 	}
 	p.mem.MarkDone(id)
 	p.announce()
-	// The flip is worth a restart: save under the standing walk stamp, not a
-	// fresh one — marking done is not a walk and must not extend the window.
-	p.mu.Lock()
-	walked := p.syncedAt[todos.RootContext]
-	p.mu.Unlock()
-	p.saveCache(walked)
+	// The flip is worth a restart. Marking done is not a walk: the save
+	// carries the standing walk stamps, never a new one.
+	p.save()
 	return &pluginv1.DeleteResponse{}, nil
 }
 

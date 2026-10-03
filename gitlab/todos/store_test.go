@@ -2,17 +2,14 @@ package todos
 
 import (
 	"context"
-	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
 
-// A restart is a Save then a Load into a fresh Memory: every listing answers
-// from the file, with the DERIVED state each todo carried, and the done
+// A restart is a snapshot written as JSON and read back into a fresh Memory:
+// every listing answers from it, with the DERIVED state each todo carried, and the done
 // high-water mark comes back so the next walk stops early instead of paging
 // the whole done list again.
 func TestCacheFileCarriesMemoryAcrossARestart(t *testing.T) {
@@ -30,12 +27,12 @@ func TestCacheFileCarriesMemoryAcrossARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(t.TempDir(), CacheFile)
-	if err := SaveCache(path, m.Snapshot()); err != nil {
+	raw, err := json.Marshal(m.Snapshot())
+	if err != nil {
 		t.Fatal(err)
 	}
-	snap, err := LoadCache(path)
-	if err != nil {
+	var snap Snapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
 		t.Fatal(err)
 	}
 	restored := NewMemory()
@@ -78,68 +75,5 @@ func TestRestoreOnlyRaisesDoneComplete(t *testing.T) {
 	}
 	if _, ok := m.Get(2); !ok {
 		t.Error("the second snapshot's todos were dropped")
-	}
-}
-
-// A save leaves the directory holding the cache and nothing else: no temp
-// file survives, on the way in or over an existing cache.
-func TestSaveCacheReplacesInPlaceAndLeavesNoTemp(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "gitlab-state") // not yet minted
-	path := filepath.Join(dir, CacheFile)
-	first := Snapshot{Version: snapshotVersion, Todos: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending)}}
-	if err := SaveCache(path, first); err != nil {
-		t.Fatal(err)
-	}
-	second := Snapshot{Version: snapshotVersion, DoneComplete: true, Todos: []Todo{mk(2, "2026-08-11T10:00:00Z", StateDone)}}
-	if err := SaveCache(path, second); err != nil {
-		t.Fatal(err)
-	}
-	names, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(names) != 1 || names[0].Name() != CacheFile {
-		got := []string{}
-		for _, n := range names {
-			got = append(got, n.Name())
-		}
-		t.Errorf("state dir holds %v, want just %s", got, CacheFile)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("cache mode = %v, want 0600", info.Mode().Perm())
-	}
-	snap, err := LoadCache(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !snap.DoneComplete || len(snap.Todos) != 1 || snap.Todos[0].ID != 2 {
-		t.Errorf("loaded %+v, want the second save", snap)
-	}
-}
-
-// A missing cache is not a failure to report — it is the first boot. A
-// corrupt or future-version one is, and neither is served half-read.
-func TestLoadCacheSeparatesMissingFromUnreadable(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := LoadCache(filepath.Join(dir, CacheFile)); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("missing cache = %v, want fs.ErrNotExist", err)
-	}
-	bad := filepath.Join(dir, "bad.json")
-	if err := os.WriteFile(bad, []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadCache(bad); err == nil || errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("corrupt cache = %v, want a reportable error", err)
-	}
-	future := filepath.Join(dir, "future.json")
-	if err := os.WriteFile(future, []byte(`{"version":99,"todos":[]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadCache(future); err == nil || !strings.Contains(err.Error(), "version 99") {
-		t.Errorf("future cache = %v, want a refusal naming the version", err)
 	}
 }

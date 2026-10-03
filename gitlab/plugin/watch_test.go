@@ -5,7 +5,6 @@ import (
 	"errors"
 	"google.golang.org/grpc/metadata"
 	"reflect"
-	"slices"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -90,10 +89,7 @@ func watchingScope(t *testing.T, p *Plugin, block chan struct{}, scope []string)
 	})
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		p.watch.mu.Lock()
-		n := len(p.watch.subs)
-		p.watch.mu.Unlock()
-		if n > 0 {
+		if p.changes.Watching(refreshUnit) {
 			return w
 		}
 		if time.Now().After(deadline) {
@@ -103,15 +99,13 @@ func watchingScope(t *testing.T, p *Plugin, block chan struct{}, scope []string)
 	}
 }
 
-// unwatched waits until p has let go of every Watch stream.
+// unwatched waits until p's refresher has stopped: every stream has ended
+// and its linger with it.
 func unwatched(t *testing.T, p *Plugin) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		p.watch.mu.Lock()
-		n := len(p.watch.subs)
-		p.watch.mu.Unlock()
-		if n == 0 {
+		if !p.changes.Watching(refreshUnit) {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -190,62 +184,5 @@ func TestAWalkAnnouncesExactlyTheContextsItMoved(t *testing.T) {
 	}
 	if got := changed(t, w, 2); !reflect.DeepEqual(got, []string{"todos", "week:2026-08-24"}) {
 		t.Errorf("mark-done announced %v", got)
-	}
-}
-
-// stall overflows a stream that stops reading: each of more walks than the
-// backlog holds brings a todo in a week of its own, and none may wait on the
-// stream. It answers what the stream hears once it reads again, and the
-// week the last walk brought.
-func stall(t *testing.T, scope ...string) (heard []string, last string) {
-	t.Helper()
-	src := &oneShot{}
-	clock := at("2026-08-25T12:00:00Z")
-	p := New(src, Options{Now: func() time.Time { return clock }})
-	block := make(chan struct{})
-	w := watchingScope(t, p, block, scope)
-	monday := at("2026-08-24T10:00:00Z")
-	for i := 0; i < watchBuffer+5; i++ {
-		src.pending = append(src.pending, mk(int64(i+1), monday.AddDate(0, 0, -7*i).Format(time.RFC3339), "pending"))
-		clock = clock.Add(DefaultFullRefresh + time.Second)
-		walked := make(chan struct{})
-		go func() {
-			_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})
-			landed(t, p)
-			close(walked)
-		}()
-		select {
-		case <-walked:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("walk %d waited on a watcher that is not reading", i)
-		}
-	}
-	close(block)
-	return changed(t, w, 0), todos.WeekKey(todos.WeekStart(monday.AddDate(0, 0, -7*(watchBuffer+4))))
-}
-
-// A subscriber that stops reading never holds up a walk, and when it reads
-// again it is owed at most the one in flight plus a full backlog. With no
-// scope its overflowed backlog has become the root, and it still hears the
-// last walk's week.
-func TestASlowWatcherNeverBlocksAWalk(t *testing.T) {
-	got, last := stall(t)
-	if len(got) > watchBuffer+1 || !slices.Contains(got, todos.RootContext) || !slices.Contains(got, last) {
-		t.Errorf("after the stall the watcher heard %d contexts %v", len(got), got)
-	}
-}
-
-// An overflow announces the stream's whole scope: a week shown and announced
-// before the backlog overflowed is told again, not lost with the backlog.
-func TestAnOverflowAnnouncesTheScope(t *testing.T) {
-	first := todos.WeekKey(todos.WeekStart(at("2026-08-24T10:00:00Z")))
-	got, last := stall(t, todos.RootContext, first)
-	for _, want := range []string{todos.RootContext, first, last} {
-		if !slices.Contains(got, want) {
-			t.Errorf("after the overflow the watcher heard %v, missing %s", got, want)
-		}
-	}
-	if len(got) > watchBuffer+1 {
-		t.Errorf("after the overflow the watcher heard %d contexts", len(got))
 	}
 }

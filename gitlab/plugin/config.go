@@ -1,12 +1,11 @@
 package plugin
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"strings"
 	"time"
+
+	"google.golang.org/grpc/status"
 
 	"github.com/josephburnett/gridwell-plugins/gitlab/gitlabapi"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
@@ -20,7 +19,8 @@ const DefaultURL = "https://gitlab.com"
 // derivation, so the subprocess main and a bundled binary compose exactly the
 // same plugin. A missing or unreadable token is a refusal: the error is the
 // verdict, the node shows the plugin broken with it instead of serving an
-// empty grid, and guest.Main asks again until the token file is fixed.
+// empty grid, and guest.Main asks again until the token file is fixed. A
+// token GitLab refuses is Info's refusal (see Plugin.Info).
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	base := strings.TrimSpace(cfg["url"])
 	if base == "" {
@@ -44,23 +44,15 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	}
 	tokenFile := strings.TrimSpace(cfg["token_file"])
 	if tokenFile == "" {
-		return nil, errors.New("gitlab plugin: token_file not configured (a file holding a read_api personal access token)")
+		return nil, fmt.Errorf("gitlab plugin: token_file not configured (a file holding a read_api personal access token)")
 	}
-	raw, err := os.ReadFile(tokenFile)
-	if err != nil {
-		var pe *fs.PathError
-		if errors.As(err, &pe) {
-			err = pe.Err
-		}
-		return nil, fmt.Errorf("gitlab plugin: token_file %s cannot be read: %v", tokenFile, err)
+	if _, err := gitlabapi.ReadToken(tokenFile); err != nil {
+		return nil, fmt.Errorf("gitlab plugin: %s", status.Convert(err).Message())
 	}
-	token := strings.TrimSpace(string(raw))
-	if token == "" {
-		return nil, fmt.Errorf("gitlab plugin: token_file %s is empty", tokenFile)
-	}
-	api := gitlabapi.New(base, token, nil)
-	// The API client is both halves: the pager the walk reads, and the
-	// mark-as-done writer the trash gesture becomes.
-	opts.Marker = api
+	api := gitlabapi.NewWithTokenFile(base, tokenFile, nil)
+	// The API client is all three halves: the pager the walk reads, the
+	// mark-as-done writer the trash gesture becomes, and the token check
+	// Info makes.
+	opts.Marker, opts.Token = api, api
 	return New(api, opts), nil
 }
