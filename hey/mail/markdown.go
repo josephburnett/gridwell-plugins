@@ -39,9 +39,9 @@ func (t *Thread) Sender() string {
 }
 
 // Markdown renders the thread as its tile content: the subject as the
-// heading, who it is from and when, the collection it sits in, and the
-// preview. It carries no link: the email is what the tile opens into, and a
-// markdown link would open a second, weaker copy of it.
+// heading, who it is from and when, the collection it sits in, the preview,
+// and a link to the thread in HEY's own app, in the form the GitLab card
+// links its target.
 func Markdown(t *Thread) []byte {
 	var b strings.Builder
 	head := t.Title()
@@ -69,8 +69,9 @@ func Markdown(t *Thread) []byte {
 		fmt.Fprintf(&b, "%s\n\n", line)
 	}
 	if s := t.Snippet(); s != "" {
-		fmt.Fprintf(&b, "> %s\n", s)
+		fmt.Fprintf(&b, "> %s\n\n", s)
 	}
+	fmt.Fprintf(&b, "[Open in HEY](%s)\n", AppURL(t.TopicID))
 	return []byte(b.String())
 }
 

@@ -129,6 +129,7 @@ func TestMarkdownIsACardAboutTheEmail(t *testing.T) {
 		"2026-01-05 14:03 UTC",
 		"reply later",
 		"> Are you free friday?",
+		"[Open in HEY](https://app.hey.com/topics/7)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("markdown missing %q:\n%s", want, got)
