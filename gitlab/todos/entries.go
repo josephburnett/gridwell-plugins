@@ -42,11 +42,12 @@ func WeekEntries(start time.Time, todos []Todo) []*pluginv1.Entry {
 		}
 		x, y := calendar.Cell(t.CreatedAt, TodoTileW)
 		out = append(out, &pluginv1.Entry{
-			Key:           t.Key(),
-			Kind:          "text",
-			Label:         t.Label(),
-			StatusDetail:  t.StatusDetail(),
-			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: TodoTileW, H: 1},
+			Key:              t.Key(),
+			Kind:             "text",
+			TextPresentation: TextPresentation,
+			Label:            t.Label(),
+			StatusDetail:     t.StatusDetail(),
+			PlacementHint:    &pluginv1.PlacementHint{X: x, Y: y, W: TodoTileW, H: 1},
 		})
 	}
 	return out

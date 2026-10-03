@@ -313,6 +313,21 @@ func TestDoneIsTheStatusNotTheName(t *testing.T) {
 	}
 }
 
+// Every text entry declares its presentation: the body is markdown, so both.
+func TestEveryTextEntryDeclaresItsPresentation(t *testing.T) {
+	start := at("2026-08-17T00:00:00Z")
+	ts := []Todo{mk(1, "2026-08-18T10:00:00Z", StatePending), mk(2, "2026-08-19T10:00:00Z", StateDone)}
+	entries := append(WeekEntries(start, ts), RootEntries([]WeekSummary{{Start: start}})...)
+	for _, e := range entries {
+		if e.Kind == "text" && e.TextPresentation != TextPresentation {
+			t.Errorf("%s declares %q", e.Key, e.TextPresentation)
+		}
+	}
+	if TextPresentation != "both" {
+		t.Errorf("a markdown body presents both, not %q", TextPresentation)
+	}
+}
+
 func TestSyncErrorLeavesMemoryUntouched(t *testing.T) {
 	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending)}}
 	m := NewMemory()
