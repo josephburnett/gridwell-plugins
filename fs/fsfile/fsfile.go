@@ -4,15 +4,21 @@ package fsfile
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	iofs "io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/josephburnett/gridwell-plugins/fs/fssource"
 	gridwellv1 "github.com/josephburnett/gridwell/api/gen/gridwell/v1"
@@ -184,28 +190,34 @@ type ServeChunkSender interface {
 // file itself; a non-empty subpath is a page-relative resource resolved
 // against the file's directory and confined to that directory's subtree, which
 // is the plugin-side guarantee, independent of the door's URL grammar. Absence
-// answers a 404 page, never an error.
+// answers a 404 page; a file that is there and cannot be read is an error
+// that says why.
 func ServeFile(stream ServeChunkSender, dirPath, name, subpath string) error {
 	target := filepath.Join(dirPath, name)
+	served := name
 	if subpath != "" {
 		target = filepath.Join(dirPath, filepath.FromSlash(subpath))
+		served = subpath
 		if !UnderRoot(dirPath, target) {
 			return notFoundPage(stream)
 		}
 	}
 	f, err := os.Open(target)
-	if err != nil {
+	if errors.Is(err, iofs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 		return notFoundPage(stream)
 	}
+	if err != nil {
+		return unreadable(served, err)
+	}
 	defer f.Close()
-	if fi, err := f.Stat(); err != nil || fi.IsDir() {
+	fi, err := f.Stat()
+	if err != nil {
+		return unreadable(served, err)
+	}
+	if fi.IsDir() {
 		return notFoundPage(stream)
 	}
 
-	served := name
-	if subpath != "" {
-		served = subpath
-	}
 	mediaType := PageMediaType(served)
 	buf := make([]byte, serveChunkBytes)
 	n, readErr := io.ReadFull(f, buf)
@@ -232,6 +244,14 @@ func ServeFile(stream ServeChunkSender, dirPath, name, subpath string) error {
 		return nil
 	}
 	return readErr
+}
+
+func unreadable(served string, err error) error {
+	code := codes.Internal
+	if errors.Is(err, iofs.ErrPermission) {
+		code = codes.PermissionDenied
+	}
+	return status.Errorf(code, "fs plugin: cannot read %s: %v", served, err)
 }
 
 func notFoundPage(stream ServeChunkSender) error {
