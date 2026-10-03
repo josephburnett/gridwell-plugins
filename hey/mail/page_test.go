@@ -57,17 +57,15 @@ func TestPageInjectsItsOwnStylesheetAndViewport(t *testing.T) {
 	}
 }
 
-// The page names the thread and carries the one way back to HEY's own app.
+// The page names the thread and carries the one way back to HEY's own app,
+// opened as a new window so Gridwell opens it below and the page stays put.
 func TestPageHeadsTheThreadWithItsTitleAndAnOpenInHEYLink(t *testing.T) {
 	got := page(t, doc(article("1", "2026-01-05T14:03", "<div>x</div>")))
 	if !strings.Contains(got, "<h1>Picnic plans</h1>") {
 		t.Errorf("no title heading:\n%s", got)
 	}
-	if !strings.Contains(got, `<a href="https://app.hey.com/topics/42">Open in HEY</a>`) {
-		t.Errorf("no plain Open in HEY link:\n%s", got)
-	}
-	if strings.Contains(got, "target=") {
-		t.Errorf("the link carries a target:\n%s", got)
+	if !strings.Contains(got, `<a href="https://app.hey.com/topics/42" target="_blank">Open in HEY</a>`) {
+		t.Errorf("no target=_blank Open in HEY link:\n%s", got)
 	}
 }
 

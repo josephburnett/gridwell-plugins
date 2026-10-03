@@ -269,7 +269,7 @@ func threadHeader(title string, topicID int64) *html.Node {
 		h1.AppendChild(text(title))
 		h.AppendChild(h1)
 	}
-	a := elem(atom.A, "href", AppURL(topicID))
+	a := elem(atom.A, "href", AppURL(topicID), "target", "_blank")
 	a.AppendChild(text("Open in HEY"))
 	h.AppendChild(a)
 	return h
