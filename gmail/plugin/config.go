@@ -96,6 +96,7 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	if err != nil {
 		return nil, err
 	}
+	opts.Reauth = fmt.Sprintf("gridwell-plugin-gmail -auth -credentials %s -token %s", credentials, tokenPath)
 	p := New(src, opts)
 	// The refresher lives as long as the process does: a plugin subprocess is
 	// stopped by the node killing it, and there is nothing else to unwind.

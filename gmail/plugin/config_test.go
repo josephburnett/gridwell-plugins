@@ -144,9 +144,15 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 	}
 
 	// state_dir is the node's key, beside uuid and kind. A node that hands
-	// none is no error: the plugin then keeps its memory in process.
+	// none is no error: the plugin then keeps its memory in process. Info
+	// asks for the profile, so this one reads a local Gmail, never Google.
+	profile := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		w.Write([]byte(`{"emailAddress":"me@example.com","historyId":"1"}`))
+	}))
+	defer profile.Close()
 	impl, err = FromConfig(map[string]string{
-		"credentials": credentials(), "token": aToken(t), "refresh": "1h"})
+		"credentials": credentials(), "token": aToken(t), "refresh": "1h", "endpoint": profile.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +161,8 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 	}
 	// The user-facing name is server.yaml's label; the plugin's own
 	// DisplayName is only the fallback.
-	info, _ := impl.Info(context.Background(), &pluginv1.InfoRequest{})
-	if info.DisplayName != displayName || info.Kind != Kind {
-		t.Errorf("info = %v", info)
+	info, err := impl.Info(context.Background(), &pluginv1.InfoRequest{})
+	if err != nil || info.DisplayName != displayName || info.Kind != Kind {
+		t.Errorf("info = %v, %v", info, err)
 	}
 }

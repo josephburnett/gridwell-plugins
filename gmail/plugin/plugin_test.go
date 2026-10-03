@@ -62,6 +62,32 @@ type fakeGmail struct {
 	hid     uint64
 	floor   uint64
 	log     []change
+	// ctxs is the context each kind of call ("label", "headers", "html",
+	// "profile") was last made under.
+	ctxs map[string]context.Context
+}
+
+func (f *fakeGmail) saw(kind string, ctx context.Context) {
+	f.ctxs[kind] = ctx
+}
+
+// ctxOf is the context the last call of kind was made under.
+func (f *fakeGmail) ctxOf(kind string) context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ctxs[kind]
+}
+
+// waitCtx waits for a call of kind and answers its context.
+func (f *fakeGmail) waitCtx(t *testing.T, kind string) context.Context {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if ctx := f.ctxOf(kind); ctx != nil {
+			return ctx
+		}
+	}
+	t.Fatalf("no %s call", kind)
+	return nil
 }
 
 // change is one entry in the fake's history.
@@ -73,7 +99,8 @@ type change struct {
 
 func newFake() *fakeGmail {
 	return &fakeGmail{labels: map[string][]string{}, whole: map[string]bool{},
-		recs: map[string]mailbox.Message{}, html: map[string]string{}, calls: map[string]int{}, hid: 100}
+		recs: map[string]mailbox.Message{}, html: map[string]string{}, calls: map[string]int{}, hid: 100,
+		ctxs: map[string]context.Context{}}
 }
 
 func (f *fakeGmail) hold(collection string, ms ...mailbox.Message) {
@@ -87,8 +114,9 @@ func (f *fakeGmail) hold(collection string, ms ...mailbox.Message) {
 	f.labels[collection] = ids
 }
 
-func (f *fakeGmail) Label(_ context.Context, labelIDs []string, limit int) ([]string, bool, error) {
+func (f *fakeGmail) Label(ctx context.Context, labelIDs []string, limit int) ([]string, bool, error) {
 	f.mu.Lock()
+	f.saw("label", ctx)
 	block := f.block
 	f.mu.Unlock()
 	if block != nil {
@@ -115,9 +143,10 @@ func (f *fakeGmail) Label(_ context.Context, labelIDs []string, limit int) ([]st
 	return ids, whole, nil
 }
 
-func (f *fakeGmail) Headers(_ context.Context, id string) (mailbox.Message, []string, error) {
+func (f *fakeGmail) Headers(ctx context.Context, id string) (mailbox.Message, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.saw("headers", ctx)
 	f.calls["headers"]++
 	if f.err != nil {
 		return mailbox.Message{}, nil, f.err
@@ -145,9 +174,10 @@ func (f *fakeGmail) Headers(_ context.Context, id string) (mailbox.Message, []st
 	return m, labels, nil
 }
 
-func (f *fakeGmail) HistoryID(context.Context) (uint64, error) {
+func (f *fakeGmail) HistoryID(ctx context.Context) (uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.saw("profile", ctx)
 	f.calls["profile"]++
 	if f.err != nil {
 		return 0, f.err
@@ -205,9 +235,10 @@ func (f *fakeGmail) deleted(id string) {
 	f.log = append(f.log, change{hid: f.hid, id: id, deleted: true})
 }
 
-func (f *fakeGmail) HTML(_ context.Context, id string) ([]byte, string, error) {
+func (f *fakeGmail) HTML(ctx context.Context, id string) ([]byte, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.saw("html", ctx)
 	f.calls["html"]++
 	if f.err != nil {
 		return nil, "", f.err
@@ -230,9 +261,10 @@ type reader struct {
 func (r *reader) Send(c *pluginv1.ContentChunk) error { r.chunks = append(r.chunks, c); return nil }
 func (r *reader) Context() context.Context            { return context.Background() }
 
-// server collects a ServeContent stream.
+// server collects a ServeContent stream made under ctx, Background if nil.
 type server struct {
 	pluginv1.Plugin_ServeContentServer
+	ctx    context.Context
 	chunks []*pluginv1.ServeContentChunk
 }
 
@@ -240,7 +272,13 @@ func (s *server) Send(c *pluginv1.ServeContentChunk) error {
 	s.chunks = append(s.chunks, c)
 	return nil
 }
-func (s *server) Context() context.Context { return context.Background() }
+
+func (s *server) Context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
 
 // stable is a plugin whose clock does not move, so nothing refreshes behind a
 // test's back.

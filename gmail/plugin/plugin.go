@@ -28,12 +28,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/josephburnett/gridwell-plugins/gmail/mailbox"
+	"github.com/josephburnett/gridwell-plugins/memo"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
@@ -102,10 +104,19 @@ type Plugin struct {
 	// cache is the memory's file in the state directory, "" when the node
 	// handed no state_dir — then the plugin runs cold at every start.
 	cache string
-	// logf is the plugin's one log door: the refresh's narration, and what
-	// must not be swallowed and must not fail a read — a cache it could not
-	// read or write, a metadata fetch that failed.
-	logf func(format string, args ...any)
+	// logf is the plugin's one log door: what must not be swallowed and must
+	// not fail a read — a cache it could not read or write, a metadata fetch
+	// that failed — once per episode (episodes).
+	logf     func(format string, args ...any)
+	episodes episodes
+	// reauth is the command that writes a token Google accepts, which Info's
+	// refusal names.
+	reauth string
+	// served latches the first Info that passed: a token refused later is a
+	// source gone dark, which the reads report.
+	served atomic.Bool
+	// life is the plugin's lifetime: every refresh runs under it.
+	life *memo.Life
 
 	// A refresh is of the whole account, never of one collection: Gmail's
 	// history is account-wide, and one history id is current to every
@@ -144,6 +155,9 @@ type Options struct {
 	// Logf takes every line the plugin writes. It defaults to the standard
 	// logger, which the node captures from the subprocess's stderr.
 	Logf func(format string, args ...any)
+	// Reauth is the command that writes a new token, which Info names when
+	// Google refuses the one it has.
+	Reauth string
 }
 
 // New builds a plugin over src. A state directory holding a cache file is
@@ -158,6 +172,8 @@ func New(src Source, o Options) *Plugin {
 		max:         o.MaxMessages,
 		now:         o.Now,
 		logf:        o.Logf,
+		reauth:      o.Reauth,
+		life:        memo.NewLife(),
 	}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
@@ -174,6 +190,7 @@ func New(src Source, o Options) *Plugin {
 	if p.logf == nil {
 		p.logf = log.Printf
 	}
+	p.episodes.logf = p.logf
 	if dir := strings.TrimSpace(o.StateDir); dir != "" {
 		p.cache = filepath.Join(dir, mailbox.CacheFile)
 		p.loadCache()
@@ -251,7 +268,18 @@ func (p *Plugin) Run(ctx context.Context) {
 	}
 }
 
-func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+// Info asks Google for the account's profile until it has once answered, and
+// refuses while Google refuses the token: that config cannot serve, and the
+// fix is a command. Anything else — Google out of reach — passes, and the
+// reads say the source is dark. After the first pass Info asks nothing.
+func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	if !p.served.Load() {
+		if _, err := p.src.HistoryID(ctx); status.Code(err) == codes.PermissionDenied {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"gmail plugin: Google refused the stored token (%s); run: %s", memo.Reason(err), p.reauth)
+		}
+		p.served.Store(true)
+	}
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
@@ -289,8 +317,9 @@ func (p *Plugin) kick() (*flight, error) {
 		return nil, nil
 	}
 	if p.flight == nil {
-		p.flight = &flight{done: make(chan struct{})}
-		go p.refreshFlight(p.flight)
+		f := &flight{done: make(chan struct{})}
+		p.flight = f
+		p.life.Go(func(ctx context.Context) { p.refreshFlight(ctx, f) })
 	}
 	return p.flight, p.failed
 }
@@ -313,7 +342,6 @@ func (p *Plugin) sync(ctx context.Context, key string) error {
 	case <-f.done:
 		return f.err
 	case <-time.After(p.firstAnswer):
-		p.logf("gmail plugin: %q answering with memory so far; the refresh runs on", key)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -324,15 +352,10 @@ func (p *Plugin) sync(ctx context.Context, key string) error {
 // every reader. Its context is the plugin's lifetime — every Gmail call is
 // bounded by the client's own timeout, so a dead source ends the refresh
 // with its error rather than hanging it.
-func (p *Plugin) refreshFlight(f *flight) {
-	start := time.Now()
+func (p *Plugin) refreshFlight(ctx context.Context, f *flight) {
 	before := p.faces()
-	swept, err := p.catchUpOrSweep(context.Background())
-	how := "history"
-	if swept {
-		how = "full walk"
-	}
-	p.logf("gmail plugin: refresh (%s) finished in %s: err=%v", how, time.Since(start).Round(time.Millisecond), err)
+	swept, err := p.catchUpOrSweep(ctx)
+	p.episodes.note("refresh", err, "gmail plugin: refresh failed: %v", err)
 	p.mu.Lock()
 	if err == nil {
 		p.syncedAt = p.now()
@@ -382,9 +405,7 @@ func (p *Plugin) catchUpOrSweep(ctx context.Context) (swept bool, err error) {
 // its answer: the id is how memory keeps up cheaply, never what it shows.
 func (p *Plugin) sweep(ctx context.Context) error {
 	id, err := p.src.HistoryID(ctx)
-	if err != nil {
-		p.logf("gmail plugin: history id: %v (the next refresh walks again)", err)
-	}
+	p.episodes.note("history id", err, "gmail plugin: history id: %v (each refresh walks until Gmail gives one)", err)
 	for _, c := range mailbox.Collections {
 		if _, err := p.walk(ctx, c); err != nil {
 			return err
@@ -411,6 +432,9 @@ func (p *Plugin) catchUp(ctx context.Context) error {
 	failed := 0
 	for _, id := range d.Touched {
 		m, labels, err := p.src.Headers(ctx, id)
+		if status.Code(err) != codes.NotFound {
+			p.episodes.note("message "+id, err, "gmail plugin: message %s: %v", id, err)
+		}
 		switch {
 		case status.Code(err) == codes.NotFound:
 			deleted = append(deleted, id)
@@ -419,7 +443,6 @@ func (p *Plugin) catchUp(ctx context.Context) error {
 				firstErr = err
 			}
 			failed++
-			p.logf("gmail plugin: history: message %s: %v", id, err)
 		default:
 			fetched = append(fetched, mailbox.Labelled{Message: m, Labels: labels})
 		}
@@ -459,6 +482,7 @@ func (p *Plugin) walk(ctx context.Context, c mailbox.Collection) (int, error) {
 	var firstErr error
 	for _, id := range missing {
 		m, _, err := p.src.Headers(ctx, id)
+		p.episodes.note("message "+id, err, "gmail plugin: message %s: %v", id, err)
 		if err != nil {
 			// One message the metadata read could not reach costs a tile this
 			// pass, not the walk: the id stays in the membership, so nothing
@@ -466,7 +490,6 @@ func (p *Plugin) walk(ctx context.Context, c mailbox.Collection) (int, error) {
 			if firstErr == nil {
 				firstErr = err
 			}
-			p.logf("gmail plugin: %q message %s: %v", c.Key, id, err)
 			continue
 		}
 		fetched = append(fetched, m)
@@ -584,7 +607,7 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 			Data:      []byte("not found"),
 		})
 	}
-	body, media, err := p.src.HTML(context.Background(), id)
+	body, media, err := p.src.HTML(stream.Context(), id)
 	if err != nil {
 		// The reason travels: the node turns a coded failure into an answer
 		// the user can read, and a silent blank page would look like an email
