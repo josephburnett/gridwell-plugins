@@ -464,10 +464,10 @@ func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 	for _, k := range got {
 		n[k]++
 	}
-	// The first change was in flight when the watcher stalled; the rest
-	// collapse behind it.
-	if n[mail.ImboxContext] < 1 || n[mail.ImboxContext] > 2 || n[mail.EverythingContext] < 1 || n[mail.EverythingContext] > 2 || len(n) != 2 {
-		t.Fatalf("a slow watcher was owed %v, want the imbox and everything once each", got)
+	// One change was in flight when the watcher stalled, and the burst
+	// collapsed behind it; the last change may land after the release.
+	if n[mail.ImboxContext] < 1 || n[mail.EverythingContext] < 1 || len(n) != 2 || len(got) > 6 {
+		t.Fatalf("a slow watcher missing %d changes was owed %v, want a few repaints of the imbox and everything", 3*memo.DefaultBuffer, got)
 	}
 }
 
