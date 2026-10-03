@@ -165,7 +165,7 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 	if up {
 		resp.Entries = append(resp.Entries, &pluginv1.Entry{
 			Key:  infoKeyPrefix + req.Context,
-			Kind: "text", Label: infoLabel,
+			Kind: "text", Label: infoLabel, TextPresentation: "both",
 		})
 	}
 	children, err := procsource.Children(p.procRoot, pid)

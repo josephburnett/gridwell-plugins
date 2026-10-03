@@ -178,3 +178,18 @@ func TestReadingInfoOfAGoneOrUnreadableProcessIsAVerdict(t *testing.T) {
 		t.Errorf("an unreadable process → %v, %v; want Unavailable", got, err)
 	}
 }
+
+// @info's body is markdown, so it declares the document renderer with the
+// toggle to its source; every text entry the plugin lists declares one.
+func TestEveryTextEntryDeclaresItsPresentation(t *testing.T) {
+	p := served(t, stubProc(t, map[int64]int64{1: 0, 10: 1}), 1)
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range resp.Entries {
+		if e.Kind == "text" && e.TextPresentation != "both" {
+			t.Errorf("text entry %q declares %q; want both", e.Key, e.TextPresentation)
+		}
+	}
+}
