@@ -5,12 +5,12 @@ go 1.27.1
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/josephburnett/gridwell-plugins/guest v0.1.0
-	github.com/josephburnett/gridwell/api v0.3.0
+	github.com/josephburnett/gridwell/api v0.5.0
 	google.golang.org/grpc v1.84.0
 )
 
 require (
-	connectrpc.com/connect v1.20.0 // indirect
+	connectrpc.com/connect v1.21.0 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
@@ -22,6 +22,6 @@ require (
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260831171406-18b4a7587f8a // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
