@@ -1,7 +1,7 @@
 // Package plugin is the fs content plugin: a stateless projection of a
 // directory tree. Keys are slash-relative paths under the configured root, and
 // a directory's key is its context, "." the root's. Every derivation and
-// byte-level answer comes from plugins/fs/fsfile. There is no database, no
+// byte-level answer comes from fs/fsfile. There is no database, no
 // ids, and no layout; the node owns those.
 package plugin
 
@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -162,10 +163,16 @@ func pathErr(err error) error {
 	return err
 }
 
-// List enumerates one directory context. A definitively missing directory is
-// an authoritative empty listing, because its entries are gone; a directory
-// that exists but cannot be read answers Unavailable, meaning "not right now",
-// which the node's read-through cache degrades to the remembered answer.
+// gone reports whether err says definitively that the path is not there: it
+// does not exist, or something on the way is a file. Any other error is a
+// source that cannot answer right now, which reads as Unavailable.
+func gone(err error) bool {
+	return errors.Is(err, iofs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// List enumerates one directory context. A directory that is gone, or is now
+// a file, is an authoritative empty listing; one that cannot be read answers
+// Unavailable, and the node serves its rows with the source dark.
 func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	dir, err := p.abs(req.Context)
 	if err != nil {
@@ -173,7 +180,7 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 	}
 	entries, readErr := fssource.Read(dir)
 	if readErr != nil {
-		if errors.Is(readErr, iofs.ErrNotExist) {
+		if gone(readErr) {
 			return &pluginv1.ListResponse{Authoritative: true, SourceLabel: dir}, nil
 		}
 		return nil, status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", dir, readErr)
@@ -213,9 +220,12 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	if err != nil {
 		return err
 	}
-	if fi, statErr := os.Lstat(filepath.Join(dir, name)); statErr != nil || fi.IsDir() {
-		// A directory or a vanished file has no document body: an empty
-		// chunk, never an error.
+	fi, statErr := os.Lstat(filepath.Join(dir, name))
+	if statErr != nil && !gone(statErr) {
+		return status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", req.Key, pathErr(statErr))
+	}
+	if statErr != nil || fi.IsDir() {
+		// A directory or a vanished file has no document body.
 		return stream.Send(&pluginv1.ContentChunk{})
 	}
 	data, mediaType := fsfile.Body(dir, name)
@@ -260,7 +270,7 @@ func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1
 	switch {
 	case statErr == nil:
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
-	case os.IsNotExist(statErr):
+	case gone(statErr):
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
 	default:
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
@@ -275,8 +285,11 @@ func (p *Plugin) Delete(_ context.Context, req *pluginv1.DeleteRequest) (*plugin
 		return nil, err
 	}
 	info, statErr := os.Lstat(full)
-	if statErr != nil {
+	switch {
+	case gone(statErr):
 		return &pluginv1.DeleteResponse{}, nil
+	case statErr != nil:
+		return nil, status.Errorf(codes.Unavailable, "fs plugin: delete %s: %v", req.Key, pathErr(statErr))
 	}
 	if info.IsDir() {
 		if err := p.host.RemoveAll(full); err != nil {
