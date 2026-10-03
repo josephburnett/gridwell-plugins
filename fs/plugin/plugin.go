@@ -331,7 +331,15 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 		return stream.Send(&pluginv1.ContentChunk{})
 	}
 	data, mediaType := fsfile.Body(filepath.Dir(real), filepath.Base(real))
-	return stream.Send(&pluginv1.ContentChunk{Data: data, MediaType: mediaType})
+	chunk := &pluginv1.ContentChunk{MediaType: mediaType}
+	for {
+		n := min(len(data), fsfile.ChunkBytes)
+		chunk.Data, data = data[:n], data[n:]
+		if err := stream.Send(chunk); err != nil || len(data) == 0 {
+			return err
+		}
+		chunk = &pluginv1.ContentChunk{}
+	}
 }
 
 // serveStream adapts the plugin chunk stream to fsfile's sender; the two chunk

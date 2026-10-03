@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/josephburnett/gridwell-plugins/fs/fsfile"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
@@ -228,6 +229,32 @@ func TestDeleteTrashesFilesAndDirectoriesAlike(t *testing.T) {
 	}
 	if want := []string{filepath.Join(root, "d"), filepath.Join(root, "f.md")}; strings.Join(h.trashed, ",") != strings.Join(want, ",") {
 		t.Errorf("trashed %v, want %v", h.trashed, want)
+	}
+}
+
+// A body as large as the cap fits the node's message limit only in chunks:
+// each one at most fsfile.ChunkBytes, the media type on the first.
+func TestReadContentChunksALargeBody(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "big.log"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(filepath.Join(root, "big.log"), 5<<20); err != nil {
+		t.Fatal(err)
+	}
+	s := &contentStream{}
+	if err := New(root, nil).ReadContent(&pluginv1.ReadContentRequest{Key: "big.log"}, s); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for i, c := range s.chunks {
+		total += len(c.Data)
+		if len(c.Data) > fsfile.ChunkBytes || (i == 0) != (c.MediaType != "") {
+			t.Fatalf("chunk %d = %d bytes, media type %q", i, len(c.Data), c.MediaType)
+		}
+	}
+	if total != 4<<20 {
+		t.Errorf("read %d bytes in %d chunks, want the 4 MiB cap", total, len(s.chunks))
 	}
 }
 
