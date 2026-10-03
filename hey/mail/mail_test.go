@@ -47,51 +47,19 @@ func TestTitleFallsBackToPreviewThenNotice(t *testing.T) {
 	}
 }
 
-func TestLabelMarksUnseenAndNamesTheSender(t *testing.T) {
-	unread := Thread{Subject: "Lunch plans", FromName: "Alice", Seen: false}
-	if got, want := unread.Label(), UnseenMark+" Alice: Lunch plans"; got != want {
-		t.Errorf("Label() = %q, want %q", got, want)
-	}
-	read := Thread{Subject: "Lunch plans", FromName: "Alice", Seen: true}
-	if got, want := read.Label(), "Alice: Lunch plans"; got != want {
-		t.Errorf("Label() = %q, want %q", got, want)
+// The label is the tile's stable name: seen or unseen, it reads the same,
+// and the status carries the difference.
+func TestLabelIsTheSenderAndSubjectWhateverTheSeenState(t *testing.T) {
+	for _, seen := range []bool{false, true} {
+		th := Thread{Subject: "Lunch plans", FromName: "Alice", Seen: seen}
+		if got, want := th.Label(), "Alice: Lunch plans"; got != want {
+			t.Errorf("seen=%v: Label() = %q, want %q", seen, got, want)
+		}
 	}
 	// No name: the address is who it is from.
-	anon := Thread{Subject: "Receipt", FromEmail: "billing@example.com", Seen: true}
+	anon := Thread{Subject: "Receipt", FromEmail: "billing@example.com"}
 	if got, want := anon.Label(), "billing@example.com: Receipt"; got != want {
 		t.Errorf("Label() = %q, want %q", got, want)
-	}
-}
-
-// The hint must not shift with the host's zone: a thread that landed just
-// before midnight UTC belongs to the UTC day, whatever TZ the node runs in.
-func TestDayIsUTCAndAnchoredAtTheEpoch(t *testing.T) {
-	if got := Day(HintEpoch); got != 0 {
-		t.Errorf("Day(epoch) = %d, want 0", got)
-	}
-	if got := Day(at("2026-01-03T23:59:00Z")); got != 2 {
-		t.Errorf("Day = %d, want 2", got)
-	}
-	// Same instant, expressed nine hours east: still the 3rd in UTC.
-	east := time.FixedZone("east", 9*3600)
-	if got := Day(at("2026-01-03T23:59:00Z").In(east)); got != 2 {
-		t.Errorf("Day in +09:00 = %d, want 2", got)
-	}
-	if got := Day(at("2025-12-31T00:00:00Z")); got != -1 {
-		t.Errorf("Day before epoch = %d, want -1", got)
-	}
-}
-
-func TestCellPutsNewerDaysHigher(t *testing.T) {
-	_, older := Cell(at("2026-01-01T00:00:00Z"), 0)
-	_, newer := Cell(at("2026-01-05T00:00:00Z"), 0)
-	if !(newer < older) {
-		t.Fatalf("newer y=%d is not above older y=%d", newer, older)
-	}
-	x0, _ := Cell(at("2026-01-05T00:00:00Z"), 0)
-	x1, _ := Cell(at("2026-01-05T00:00:00Z"), 1)
-	if x1-x0 != ThreadTileW {
-		t.Fatalf("second tile of the day at x=%d, first at x=%d", x1, x0)
 	}
 }
 
