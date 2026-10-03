@@ -781,10 +781,10 @@ func TestDeleteIsRefusedWithItsReason(t *testing.T) {
 	}
 }
 
-// The grid is bounded, and a bounded read is not a whole read: the messages
-// below the cap keep their tiles rather than being retired by a read that
-// never reached them.
-func TestTheGridIsBoundedAndACappedReadNeverRetires(t *testing.T) {
+// The cap bounds the WALK, not the grid: a capped read is not a whole read,
+// so the messages below it keep their tiles rather than being retired by a
+// read that never reached them, and the grid holds what memory holds.
+func TestTheCapBoundsTheWalkAndACappedReadNeverRetires(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX",
 		msg("a", "one", "2026-01-05T09:00:00Z"),
@@ -799,7 +799,7 @@ func TestTheGridIsBoundedAndACappedReadNeverRetires(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(resp.Entries) != 2 {
-		t.Fatalf("a grid bounded at 2 held %d", len(resp.Entries))
+		t.Fatalf("a first walk capped at 2 read %d", len(resp.Entries))
 	}
 	// The newest two are what a person is looking at.
 	if resp.Entries[0].Key != "msg:b" || resp.Entries[1].Key != "msg:c" {
@@ -814,6 +814,18 @@ func TestTheGridIsBoundedAndACappedReadNeverRetires(t *testing.T) {
 	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:b"})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_PRESENT {
 		t.Errorf("a message on the grid probed %v", got.Presence)
+	}
+
+	// A new message: the next walk reads the newest two, c and d, and b,
+	// below them, stays on a grid now longer than the cap.
+	f.hold("INBOX",
+		msg("a", "one", "2026-01-05T09:00:00Z"),
+		msg("b", "two", "2026-01-05T10:00:00Z"),
+		msg("c", "three", "2026-01-05T11:00:00Z"),
+		msg("d", "four", "2026-01-05T12:00:00Z"))
+	refreshed(t, p, &clock, 2*time.Minute)
+	if got := keys(t, p, mailbox.InboxContext); got != "msg:b,msg:c,msg:d" {
+		t.Errorf("inbox after a second capped walk = %s, want what memory holds", got)
 	}
 }
 
