@@ -790,3 +790,49 @@ func TestInfoRefusesWhileTheCLIIsMissing(t *testing.T) {
 		t.Errorf("a served CLI that went missing → Info %v, want a dark source that reads report", err)
 	}
 }
+
+// A walk that works says nothing; a walk that fails says so once per
+// episode, and the walk that ends the episode says so once.
+func TestAWalkLogsOnlyTheEdgesOfAFailure(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, format)
+	}
+	f := newFake()
+	p := stable(f, Options{Logf: logf})
+	c := mail.Collections[0]
+	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: c.Key})
+	idle(t, p)
+	mu.Lock()
+	n := len(logs)
+	mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a walk that worked logged %v", logs)
+	}
+	f.mu.Lock()
+	f.err = errors.New("no network")
+	f.mu.Unlock()
+	for i := 0; i < 2; i++ {
+		p.rewalk(c)
+		idle(t, p)
+	}
+	mu.Lock()
+	n = len(logs)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("two failed walks logged %d lines, want 1: %v", n, logs)
+	}
+	f.mu.Lock()
+	f.err = nil
+	f.mu.Unlock()
+	p.rewalk(c)
+	idle(t, p)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logs) != 2 || !strings.Contains(logs[1], "reads again") {
+		t.Fatalf("the recovery was not logged once: %v", logs)
+	}
+}

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -38,11 +39,18 @@ const SubscriberBuffer = 64
 // (watchErr) until a feed reaches ready.
 func (p *Plugin) watch(ctx context.Context) {
 	backoff := p.watchBackoff
+	// failing is the log's one episode: the first end is said, every retry
+	// until the feed is live again is not.
+	failing := false
 	for {
 		live, err := p.watchOnce(ctx)
 		p.setLive(false)
 		if ctx.Err() != nil {
 			return
+		}
+		if live && failing {
+			failing = false
+			p.logf("hey plugin: watch is live again")
 		}
 		switch status.Code(err) {
 		case codes.InvalidArgument:
@@ -57,7 +65,10 @@ func (p *Plugin) watch(ctx context.Context) {
 		if live {
 			backoff = p.watchBackoff
 		}
-		p.logf("hey plugin: watch ended: %v; restarting in %s", err, backoff)
+		if !failing && !errors.Is(err, context.Canceled) {
+			failing = true
+			p.logf("hey plugin: watch ended: %v; restarting in %s", err, backoff)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -79,9 +90,13 @@ func (p *Plugin) watchOnce(ctx context.Context) (live bool, err error) {
 			stalled.Stop()
 		}
 	}()
+	skipped := false
 	err = p.src.Watch(ctx, func(ev mail.Event, perr error) {
 		if perr != nil {
-			p.logf("hey plugin: watch: %v (line skipped)", perr)
+			if !skipped {
+				skipped = true
+				p.logf("hey plugin: watch: %v (line skipped; later ones are not logged)", perr)
+			}
 			return
 		}
 		switch ev.Change {

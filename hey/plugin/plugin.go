@@ -347,7 +347,6 @@ func (p *Plugin) sync(ctx context.Context, c mail.Collection) error {
 	case <-f.done:
 		return f.err
 	case <-time.After(p.firstAnswer):
-		p.logf("hey plugin: %q answering with memory so far; the walk runs on", c.Key)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -385,12 +384,8 @@ func (p *Plugin) startLocked(c mail.Collection) *flight {
 // gen is the feed's ready count when the walk started: a walk that began
 // after a ready is that ready's catch-up.
 func (p *Plugin) walk(c mail.Collection, f *flight, gen int) {
-	p.logf("hey plugin: walk %q starting", c.Key)
-	start := time.Now()
 	p.mem.BeginWalk(c.Key)
 	threads, whole, err := p.src.Box(context.Background(), c.Box)
-	p.logf("hey plugin: walk %q finished in %s: %d threads, whole=%v, err=%v",
-		c.Key, time.Since(start).Round(time.Millisecond), len(threads), whole, err)
 	var eff mail.Effect
 	if err == nil {
 		eff = p.mem.Absorb(c.Key, threads, whole)
@@ -398,12 +393,21 @@ func (p *Plugin) walk(c mail.Collection, f *flight, gen int) {
 		p.mem.EndWalk(c.Key)
 	}
 	p.mu.Lock()
+	// A log line is for a human: the first failure of an episode and the walk
+	// that ends it. A walk that works says nothing.
+	_, failing := p.failed[c.Key]
 	if err == nil {
 		p.walkedAt[c.Key] = p.now()
 		p.caughtUp[c.Key] = gen
 		delete(p.failed, c.Key)
+		if failing {
+			p.logf("hey plugin: %q reads again", c.Key)
+		}
 	} else {
 		p.failed[c.Key] = err
+		if !failing {
+			p.logf("hey plugin: %q cannot be read: %v", c.Key, err)
+		}
 	}
 	delete(p.flights, c.Key)
 	if p.again[c.Key] {

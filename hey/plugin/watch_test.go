@@ -537,3 +537,50 @@ func TestAFeedVerdictSurfacesOnTheNextRead(t *testing.T) {
 		t.Fatalf("a feed that is live again left the verdict standing: %v", err)
 	}
 }
+
+// A feed that keeps ending is one episode in the log: the first end is said,
+// the retries are not, and the feed reaching ready again is said once.
+func TestAFeedThatKeepsEndingLogsOnce(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, format)
+	}
+	f := newFake()
+	f.feed = newFeed()
+	p := stable(f, Options{Refresh: time.Hour, WatchBackoff: 10 * time.Millisecond, Logf: logf})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	count := func(sub string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, l := range logs {
+			if strings.Contains(l, sub) {
+				n++
+			}
+		}
+		return n
+	}
+	<-f.feed.starts
+	for i := 0; i < 3; i++ {
+		f.feed.exit <- status.Error(codes.Unavailable, "network")
+		<-f.feed.starts
+	}
+	if n := count("watch ended"); n != 1 {
+		t.Fatalf("three ends logged %d times, want once", n)
+	}
+	send(t, f.feed, mail.Event{Change: mail.ChangeReady})
+	eventually(t, "the feed is live", func() bool { return isLive(p) })
+	f.feed.exit <- status.Error(codes.Unavailable, "network")
+	<-f.feed.starts
+	if n := count("live again"); n != 1 {
+		t.Fatalf("the recovery was logged %d times, want once", n)
+	}
+	if n := count("watch ended"); n != 2 {
+		t.Fatalf("a new episode after a live feed logged %d ends in total, want 2", n)
+	}
+}
