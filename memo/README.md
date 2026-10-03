@@ -63,6 +63,23 @@ the File is nil and both are no-ops.
 `NewLife()` in `FromConfig`. Walks and work run under `life.Context()`, never
 `context.Background()`. A test calls `End` to stop them.
 
+## calendar
+
+`memo/calendar` is the one placement rule for things with a creation time
+(`docs/plugin-standard.md` rule 10): the hint is a function of the time
+alone, never of list position.
+
+- `Cell(created, w)`: x is the local day since `Epoch` times `w`, newest to
+  the right; y is the local hour, 0 to 23. Things from the same hour share a
+  cell and the node stacks them. `w` is the tile's width, so neighbouring
+  days never overlap.
+- `WeekCell(monday)`: one row per month, newest at the top, weeks left to
+  right, for a calendar of weeks.
+- `Epoch` is 2026-08-24, fixed forever: moving it moves every untouched tile.
+
+Local time, because a calendar means the user's day. A tile the user has
+touched keeps its place whatever the zone.
+
 ## Adopting it
 
 1. Require `github.com/josephburnett/gridwell-plugins/memo` (tagged
