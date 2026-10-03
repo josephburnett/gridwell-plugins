@@ -477,10 +477,10 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	return stream.Send(&pluginv1.ContentChunk{Data: mail.Markdown(&t), MediaType: "text/markdown"})
 }
 
-// ServeContent is the email. Subpath "" is the thread, as the HTML HEY
-// served; any other subpath is a resource the email named by a relative URL,
-// and there are none — an email's own images and links are absolute or
-// embedded — so it is an ordinary 404 rather than an error. The document is
+// ServeContent is the email. Subpath "" is the thread, as mail.Page presents
+// the HTML HEY served; any other subpath is a resource named by a relative
+// URL, and those are paths in HEY's own app that this door cannot serve, so it
+// is an ordinary 404 rather than an error. The document is
 // fetched on descent and never remembered: a mailbox listing is small and a
 // mailbox's bodies are not.
 func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1.Plugin_ServeContentServer) error {
@@ -510,7 +510,7 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 	return stream.Send(&pluginv1.ServeContentChunk{
 		Status:    200,
 		MediaType: "text/html; charset=utf-8",
-		Data:      html,
+		Data:      mail.Page(html, id),
 	})
 }
 

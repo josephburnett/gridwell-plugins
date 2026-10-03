@@ -319,8 +319,8 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 	if len(s.chunks) != 1 || s.chunks[0].Status != 200 || !strings.HasPrefix(s.chunks[0].MediaType, "text/html") {
 		t.Fatalf("chunks = %+v", s.chunks)
 	}
-	if string(s.chunks[0].Data) != f.html[1] {
-		t.Errorf("page = %q", s.chunks[0].Data)
+	if got := string(s.chunks[0].Data); !strings.Contains(got, "<article>lunch</article>") || !strings.Contains(got, "<style>") || !strings.Contains(got, mail.AppURL(1)) {
+		t.Errorf("page = %q", got)
 	}
 }
 
@@ -341,7 +341,8 @@ func TestServeContentAnswers404ForASubpath(t *testing.T) {
 	}
 }
 
-// A thread HEY served no body for gets a page that says so, not a blank one.
+// A thread HEY served no body for gets a page that says so, not a blank one,
+// dressed like every other.
 func TestServeContentSaysWhenThereIsNoBody(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
@@ -357,7 +358,7 @@ func TestServeContentSaysWhenThereIsNoBody(t *testing.T) {
 		t.Fatalf("chunks = %+v", s.chunks)
 	}
 	body := string(s.chunks[0].Data)
-	if !strings.Contains(body, "lunch") || !strings.Contains(body, "no body") {
+	if !strings.Contains(body, "<h1>lunch</h1>") || !strings.Contains(body, "no body") || !strings.Contains(body, "<style>") {
 		t.Errorf("page = %q", body)
 	}
 }

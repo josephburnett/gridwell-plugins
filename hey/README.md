@@ -79,9 +79,23 @@ fields and ignores the rest:
   and nothing is ever reported gone on the strength of it.
 
 `thread read --html` answers no envelope: a bare HTML5 document, one
-`<article data-entry-id=… data-body-state=…>` per entry, oldest first, each
-holding the message exactly as HEY served it. The plugin serves those bytes
-through the content door untouched; the node sandboxes them.
+`<article data-entry-id=… data-created-at=… data-body-state=…>` per entry,
+oldest first, each opening with a `<header>From: … — <time></header>` line.
+It carries HEY's markup but not HEY's stylesheet or scripts. Quoted text, an
+HTML message's whole body, and attached files arrive as empty
+`<figure data-trix-attachment="{json}">` blocks: the JSON's `content` holds
+HTML behind `<shadow-content><template>`, with `<action-text-attachment>`
+elements for its images, and a file's figure has `filename`, `filesize`,
+`contentType` and a `url` relative to HEY's app instead.
+
+The page the plugin serves is that document made readable (`mail.Page`): a
+stylesheet of its own, light and dark, that loads nothing; the subject as a
+heading with an "Open in HEY" link to `https://app.hey.com/topics/<id>`; a
+header line on any entry without one; quoted text in a closed
+`<details>`; an HTML message's body shown in place on a light panel; images
+inline when their address is absolute and a caption saying so when it is
+not; files as a labelled list at the end of their entry. Any other figure is
+unwrapped to its content. The node sandboxes the result.
 
 `watch` answers no envelope: one JSON object per line, until interrupted.
 The plugin reads exactly these fields:

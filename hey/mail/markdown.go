@@ -81,12 +81,10 @@ func GoneMarkdown(key string) []byte {
 	return []byte("_This thread (`" + key + "`) is not in the imbox, reply later or set aside, or has not been seen since the plugin started._\n")
 }
 
-// NoticeHTML is the page for a thread whose HTML the CLI would not answer —
-// one the plugin has never seen, or one HEY served no body for. It is a whole
-// document because that is what the content door serves, and it says which
-// thread and why rather than showing an empty frame.
+// NoticeHTML is the document for a thread HEY served no body for. It says
+// which thread and why rather than showing an empty frame; Page heads it
+// with its title like any thread.
 func NoticeHTML(title, detail string) []byte {
 	return []byte("<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">\n<title>" +
-		html.EscapeString(title) + "</title></head>\n<body>\n<h1>" +
-		html.EscapeString(title) + "</h1>\n<p>" + html.EscapeString(detail) + "</p>\n</body>\n</html>\n")
+		html.EscapeString(title) + "</title></head>\n<body>\n<p>" + html.EscapeString(detail) + "</p>\n</body>\n</html>\n")
 }
