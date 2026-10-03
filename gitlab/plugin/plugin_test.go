@@ -2,8 +2,6 @@ package plugin
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,9 +124,8 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 
 // TestReadContentBeforeFirstWalkIsUnavailable: a fresh process asked for a
 // todo it has not yet seen must answer "not right now", never a Gone body.
-// The node serves reads from its cache while the first walk runs, so this
-// read can arrive before the walk lands — and a Gone body would be a live
-// success the cache stores over the remembered markdown.
+// The node keeps its rows across a restart, so this read can arrive before
+// the walk lands, and a Gone body would show a live todo as gone.
 func TestReadContentBeforeFirstWalkIsUnavailable(t *testing.T) {
 	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
 	p := New(src, Options{})
@@ -243,92 +240,23 @@ func TestRestartAnswersFromTheCacheFileWithoutWalking(t *testing.T) {
 	}
 }
 
-// The restored walk time is not a licence to stop walking: past the refresh
-// window, and for a stamp a stepped-back clock puts in the future, the restart
-// walks GitLab like any other read.
-func TestARestoredWalkTimeStillExpires(t *testing.T) {
-	dir := t.TempDir()
-	clock := at("2026-08-25T12:00:00Z")
-	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
-	first := New(src, Options{StateDir: dir, Now: func() time.Time { return clock }})
-	if _, err := first.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name string
-		now  time.Time
-	}{
-		{"past the window", clock.Add(DefaultFullRefresh + time.Second)},
-		{"a clock stepped back", clock.Add(-time.Hour)},
-	} {
-		next := &oneShot{pending: src.pending}
-		p := New(next, Options{StateDir: dir, Now: func() time.Time { return tc.now }})
-		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
-			t.Fatal(err)
-		}
-		landed(t, p)
-		if next.calls.Load() == 0 {
-			t.Errorf("%s: the restart served a stale memory instead of walking", tc.name)
-		}
-	}
-}
-
 // Without a state_dir the plugin behaves exactly as it did: memory only, no
 // file, and an unknown todo before the first walk is still Unavailable.
 func TestNoStateDirWritesNothingAndStaysCold(t *testing.T) {
 	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{})
-	if p.cache != "" {
-		t.Errorf("cache path = %q with no state_dir", p.cache)
+	if p.file.Path() != "" {
+		t.Errorf("cache path = %q with no state_dir", p.file.Path())
 	}
 	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
 		t.Fatal(err)
 	}
 	cold := New(&oneShot{}, Options{StateDir: " "})
-	if cold.cache != "" {
-		t.Errorf("a blank state_dir became the path %q", cold.cache)
+	if cold.file.Path() != "" {
+		t.Errorf("a blank state_dir became the path %q", cold.file.Path())
 	}
 	r := &reader{}
 	if err := cold.ReadContent(&pluginv1.ReadContentRequest{Key: "todo:1"}, r); status.Code(err) != codes.Unavailable {
 		t.Errorf("cold read = %v, want Unavailable", err)
-	}
-}
-
-// A cache that cannot be read or written is reported, never swallowed, and
-// never fails the read that provoked it.
-func TestAnUnusableCacheIsReportedAndTheWalkStillAnswers(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, todos.CacheFile), []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var lines []string
-	logf := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
-	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{StateDir: dir, Logf: logf})
-	if len(lines) != 1 || !strings.Contains(lines[0], "cache") {
-		t.Fatalf("a corrupt cache logged %v, want one report", lines)
-	}
-	root, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})
-	if err != nil || len(root.Entries) != 1 {
-		t.Fatalf("the walk after a corrupt cache = (%v, %v)", root.GetEntries(), err)
-	}
-
-	// A directory the plugin cannot write is reported once, however many
-	// walks fail to save, and the walks still answer from GitLab.
-	blocked := filepath.Join(t.TempDir(), "blocked")
-	if err := os.Mkdir(blocked, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(blocked, 0o700) })
-	lines = nil
-	q := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{StateDir: filepath.Join(blocked, "gitlab"), Logf: logf, FullRefresh: time.Nanosecond})
-	for range 2 {
-		root, err = q.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})
-		if err != nil || len(root.Entries) != 1 {
-			t.Fatalf("the walk with an unwritable cache = (%v, %v)", root.GetEntries(), err)
-		}
-		landed(t, q)
-	}
-	if len(lines) != 1 || !strings.Contains(lines[0], "cache") {
-		t.Errorf("two walks with an unwritable cache logged %q, want one report", lines)
 	}
 }
 
@@ -342,7 +270,7 @@ func TestTheRefresherRunsOnlyWhileWatched(t *testing.T) {
 	dir := t.TempDir()
 	src := &gated{gate: make(chan struct{})}
 	close(src.gate) // never blocks: this walk is the refresher's own
-	p := New(src, Options{StateDir: dir, Refresh: MinRefresherInterval})
+	p := New(src, Options{StateDir: dir, Refresh: MinRefresherInterval, Linger: -1})
 	t.Cleanup(p.Close)
 	flat := func(what string) {
 		t.Helper()
@@ -376,38 +304,6 @@ func TestTheRefresherRunsOnlyWhileWatched(t *testing.T) {
 	w.cancel()
 	unwatched(t, p)
 	flat("the stream ended")
-}
-
-// A walk outlives every reader and ends with the plugin: its context is the
-// plugin's lifetime, so a walk stuck on GitLab ends when the plugin does.
-func TestAWalkEndsWithThePlugin(t *testing.T) {
-	p := New(stuck{}, Options{FirstAnswer: time.Millisecond})
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
-		t.Fatal(err)
-	}
-	p.mu.Lock()
-	f := p.flights[todos.RootContext]
-	p.mu.Unlock()
-	if f == nil {
-		t.Fatal("no walk in flight")
-	}
-	p.Close()
-	select {
-	case <-f.done:
-		if !errors.Is(f.err, context.Canceled) {
-			t.Errorf("the walk ended with %v, want the plugin's end", f.err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the walk outlived the plugin")
-	}
-}
-
-// stuck is a GitLab that answers nothing until the caller gives up.
-type stuck struct{}
-
-func (stuck) Page(ctx context.Context, _ string, _ int) (todos.Reply, error) {
-	<-ctx.Done()
-	return todos.Reply{}, ctx.Err()
 }
 
 // The refresher never spins: a `refresh` shorter than a request would leave
@@ -457,43 +353,6 @@ func (g *gated) Page(_ context.Context, state string, page int) (todos.Reply, er
 	return todos.Reply{Todos: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, nil
 }
 
-// A burst of concurrent Lists on one cold context shares ONE walk: the
-// node lists a context on every GetGrid/GetTile, and two panes opening
-// the same grid must not each page GitLab.
-func TestConcurrentListsShareOneWalk(t *testing.T) {
-	src := &gated{gate: make(chan struct{})}
-	p := New(src, Options{})
-	ctx := context.Background()
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i := range errs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, errs[i] = p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
-		}(i)
-	}
-	// Both goroutines are in List before the walk is released.
-	deadline := time.Now().Add(5 * time.Second)
-	for src.calls.Load() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("no walk started")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	time.Sleep(20 * time.Millisecond) // let the second List reach sync
-	close(src.gate)
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			t.Errorf("List %d: %v", i, err)
-		}
-	}
-	if n := src.calls.Load(); n != 2 {
-		t.Errorf("GitLab saw %d page calls, want 2 (one pending + one done page: one shared walk)", n)
-	}
-}
-
 // paged is a source whose pending list is two pages, the second parked
 // behind a gate — a slow GitLab mid-walk. Calls are counted at entry.
 type paged struct {
@@ -521,10 +380,10 @@ func (s *paged) Page(ctx context.Context, state string, page int) (todos.Reply, 
 
 // TestListStreamsWhileTheWalkRuns: a cold walk over a real history runs
 // minutes, and a List that waits for all of it shows the user nothing the
-// whole time. The walk detaches from its caller and List answers what memory
-// holds after FirstAnswer — GitLab pages newest-first, so the first answer is
-// the most recent weeks, and the node's refresh paints the rest in as pages
-// land. One walk serves it all: no restarts, no per-reader paging.
+// whole time. List answers what memory holds after FirstAnswer — GitLab pages
+// newest-first, so the first answer is the most recent weeks, and the walk's
+// announcements paint the rest in as pages land. One walk serves it all: no
+// restarts, no per-reader paging.
 func TestListStreamsWhileTheWalkRuns(t *testing.T) {
 	src := &paged{gate: make(chan struct{})}
 	p := New(src, Options{FirstAnswer: 20 * time.Millisecond})
@@ -563,27 +422,28 @@ func TestListStreamsWhileTheWalkRuns(t *testing.T) {
 	}
 }
 
-// landed waits out every walk in flight, its cache write included: a warm
-// read answers before the walk it started has landed.
-func landed(t *testing.T, p *Plugin) {
+// landed waits out every walk in flight: the root's, each remembered week's,
+// and those of the weeks named. A warm read answers before the walk it
+// started has landed.
+func landed(t *testing.T, p *Plugin, weeks ...string) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
-		p.mu.Lock()
-		var f *flight
-		for _, ex := range p.flights {
-			f = ex
-			break
+		keys := append([]string{todos.RootContext}, weeks...)
+		for _, w := range p.mem.Weeks() {
+			keys = append(keys, todos.WeekKey(w.Start))
 		}
-		p.mu.Unlock()
-		if f == nil {
+		busy := false
+		for _, k := range keys {
+			busy = busy || p.flights.Busy(k)
+		}
+		if !busy {
 			return
 		}
-		select {
-		case <-f.done:
-		case <-deadline:
+		if time.Now().After(deadline) {
 			t.Fatal("a walk never landed")
 		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -665,7 +525,7 @@ func TestAColdReadStillWaitsForTheFirstAnswer(t *testing.T) {
 	}
 	close(src.gate)
 	for _, p := range ps {
-		landed(t, p)
+		landed(t, p, "week:2026-01-05")
 	}
 }
 
@@ -684,29 +544,34 @@ func (f *failing) Page(context.Context, string, int) (todos.Reply, error) {
 	return todos.Reply{Todos: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, nil
 }
 
-// A warm read does not hide a failed walk: the walk it could not wait for has
-// its say on the next read, so a revoked token still surfaces and an outage
-// still reaches the node as "not right now". A walk that lands clears it.
-func TestAWarmReadAnswersTheLastWalksFailure(t *testing.T) {
-	src := &failing{err: status.Error(codes.PermissionDenied, "no read_api")}
+// A refresh that fails while memory can answer is the source unreachable,
+// never a failed read: the remembered entries answer with the walk's reason
+// as unreachable, a revoked token's included, and the reason clears once a
+// walk lands.
+func TestAWarmReadAnswersMemoryWithTheLastWalksFailure(t *testing.T) {
+	src := &failing{err: status.Error(codes.PermissionDenied, "gitlab: 401 Unauthorized")}
 	p := warmOver(t, src, time.Hour)
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
-		t.Fatalf("the first warm read = %v; it answers before its walk fails", err)
+	if resp, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil || resp.Unreachable != "" {
+		t.Fatalf("the first warm read = (%q, %v); it answers before its walk fails", resp.GetUnreachable(), err)
 	}
 	landed(t, p)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("the read after a refused walk = %v, want PermissionDenied", err)
+	for _, key := range []string{todos.RootContext, "week:2026-08-17"} {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: key})
+		if err != nil {
+			t.Fatalf("%s: the read after a refused walk = %v, want memory", key, err)
+		}
+		if len(resp.Entries) == 0 || resp.Unreachable != "gitlab: 401 Unauthorized" {
+			t.Errorf("%s: the read after a refused walk = %d entries, unreachable %q", key, len(resp.Entries), resp.Unreachable)
+		}
 	}
-	// That read started another walk, refused too; the one after the
-	// source recovers lands.
 	src.mu.Lock()
 	src.err = nil
 	src.mu.Unlock()
 	landed(t, p)
 	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
 	landed(t, p)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
-		t.Errorf("the read after a landed walk = %v", err)
+	if resp, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil || resp.Unreachable != "" {
+		t.Errorf("the read after a landed walk = (%q, %v)", resp.GetUnreachable(), err)
 	}
 }

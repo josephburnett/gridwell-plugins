@@ -31,13 +31,11 @@ type Client struct {
 	http  *http.Client
 }
 
-// DefaultTimeout bounds one page request end to end. http.DefaultClient has
-// no timeout, and a GitLab response that stalls mid-body would park the walk
-// forever — the plugin's shared flight then holds every reader on that one
-// hung request, and the UI says "loading" for the life of the process with
-// no error to surface. A timeout turns the stall into Unavailable, "not
-// right now", and the node serves its remembered listing until the next
-// walk.
+// DefaultTimeout bounds one request end to end. http.DefaultClient has no
+// timeout, and a GitLab response that stalls mid-body would park the shared
+// walk forever, with no failure to report. A timeout turns the stall into
+// Unavailable, "not right now", and memory answers with that reason until a
+// walk lands.
 const DefaultTimeout = 30 * time.Second
 
 // New builds a client. A nil httpClient gets a default with DefaultTimeout.
@@ -48,10 +46,10 @@ func New(base, token string, httpClient *http.Client) *Client {
 	return &Client{base: strings.TrimRight(base, "/"), token: token, http: httpClient}
 }
 
-// Page implements todos.Source. Failures map to gRPC codes the node
-// understands: a network failure, a 5xx, or a 429 is Unavailable, meaning "not
-// right now", so the node serves its remembered listing stamped stale; a 401
-// or 403 is PermissionDenied, a verdict, and it surfaces.
+// Page implements todos.Source. A network failure, a 5xx, or a 429 is
+// Unavailable, "not right now", which a walk retries; a 401 or 403 is
+// PermissionDenied, which it does not. Either way a read memory can answer is
+// answered, with the failure as its unreachable reason.
 func (c *Client) Page(ctx context.Context, state string, page int) (todos.Reply, error) {
 	q := url.Values{}
 	q.Set("state", state)

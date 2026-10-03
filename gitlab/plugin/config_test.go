@@ -41,15 +41,15 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 	}
 	// state_dir is the node's key, beside uuid and kind. A node that hands
 	// none is no error: the plugin then keeps its memory in process.
-	if p.cache != "" {
-		t.Errorf("cache path = %q with no state_dir in the config", p.cache)
+	if p.file.Path() != "" {
+		t.Errorf("cache path = %q with no state_dir in the config", p.file.Path())
 	}
 	dir := t.TempDir()
 	impl, err = FromConfig(map[string]string{"token_file": writeTemp(t, "tok"), "state_dir": dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := impl.(*Plugin).cache, filepath.Join(dir, todos.CacheFile); got != want {
+	if got, want := impl.(*Plugin).file.Path(), filepath.Join(dir, todos.CacheFile); got != want {
 		t.Errorf("cache path = %q, want %q", got, want)
 	}
 	// The user-facing name is server.yaml's `name` (the registry label);

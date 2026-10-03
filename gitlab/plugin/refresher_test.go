@@ -88,9 +88,7 @@ func TestATickAbsorbsNewTodosWithoutAWalk(t *testing.T) {
 	if err != nil || len(wk.Entries) != 1 || wk.Entries[0].Key != "todo:3" {
 		t.Fatalf("the new todo's week = (%v, %v)", wk.GetEntries(), err)
 	}
-	p.mu.Lock()
-	walked := p.syncedAt[todos.RootContext]
-	p.mu.Unlock()
+	walked := p.flights.WalkedAt()[todos.RootContext]
 	if !walked.Equal(at("2026-08-25T12:00:00Z")) {
 		t.Errorf("a glance moved the walk stamp to %v", walked)
 	}
