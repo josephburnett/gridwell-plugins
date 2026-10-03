@@ -3,7 +3,7 @@
 // children; tile keys are pid strings, plus "info:<pid>" for the @info
 // metadata tile. Listings are non-authoritative — a child unreadable this pass
 // is not gone — and the node arbitrates absence through Probe. There is no
-// database: the process table is the source.
+// database: the process table is the source, and Watch polls it (watch.go).
 package plugin
 
 import (
@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/josephburnett/gridwell-plugins/memo"
 	"github.com/josephburnett/gridwell-plugins/proc/procsource"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
@@ -52,6 +53,12 @@ type Plugin struct {
 	// served latches the first Info that found the process; see fs's
 	// Plugin.served for why the check stops there.
 	served atomic.Bool
+	// scan is the one read of a process's children, for List and the poll;
+	// a test counts it.
+	scan    func(ctx context.Context, pid int64) ([]procsource.Stat, error)
+	clock   memo.Clock
+	life    *memo.Life
+	changes *memo.Changes
 }
 
 // FromConfig builds the production plugin from the shared config vocabulary.
@@ -76,6 +83,10 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 // New builds a plugin. An empty procRoot uses /proc, a rootPID of 0 or less
 // uses pid 1, and a nil killer signals real processes.
 func New(procRoot string, rootPID int64, killer Killer) *Plugin {
+	return newPlugin(procRoot, rootPID, killer, memo.System)
+}
+
+func newPlugin(procRoot string, rootPID int64, killer Killer, clock memo.Clock) *Plugin {
 	if procRoot == "" {
 		procRoot = procsource.DefaultRoot
 	}
@@ -85,7 +96,12 @@ func New(procRoot string, rootPID int64, killer Killer) *Plugin {
 	if killer == nil {
 		killer = sysKiller{}
 	}
-	return &Plugin{procRoot: procRoot, rootPID: rootPID, killer: killer}
+	p := &Plugin{procRoot: procRoot, rootPID: rootPID, killer: killer, clock: clock, life: memo.NewLife()}
+	p.scan = func(ctx context.Context, pid int64) ([]procsource.Stat, error) {
+		return procsource.Children(ctx, p.procRoot, pid)
+	}
+	p.changes = memo.NewChanges(p.life, memo.ChangeOptions{Clock: clock, Do: p.follow})
+	return p
 }
 
 // Info refuses while the configured process is not there to project: a pid
@@ -117,6 +133,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		// The process table is host state, projected: declaring it is what
 		// earns these grids the host treatment on the client.
 		HostContent: true,
+		Watch:       true,
 	}, nil
 }
 
@@ -183,7 +200,7 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 			Kind: "text", Label: infoLabel, TextPresentation: "both",
 		})
 	}
-	children, err := procsource.Children(ctx, p.procRoot, pid)
+	children, err := p.scan(ctx, pid)
 	if ctx.Err() != nil {
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
@@ -194,9 +211,23 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		key := strconv.FormatInt(c.PID, 10)
 		resp.Entries = append(resp.Entries, &pluginv1.Entry{
 			Key: key, Kind: "well", Label: key, ChildContext: key,
+			StatusDetail: stateMark(c.State),
 		})
 	}
 	return resp, nil
+}
+
+// stateMark is a process's status_detail: one emoji for the states worth
+// noticing, a zombie (💀) or a process stopped by a signal or a tracer (⏸),
+// and nothing for every other state.
+func stateMark(state byte) string {
+	switch state {
+	case 'Z':
+		return "💀"
+	case 'T', 't':
+		return "⏸"
+	}
+	return ""
 }
 
 func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {

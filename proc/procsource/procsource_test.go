@@ -73,7 +73,7 @@ func TestChildrenReadsOnlyStat(t *testing.T) {
 		}
 	}
 	kids, err := Children(context.Background(), root, 1)
-	if err != nil || len(kids) != 1 || kids[0] != (Stat{PID: 7, PPID: 1, StartTime: 1007}) {
+	if err != nil || len(kids) != 1 || kids[0] != (Stat{PID: 7, PPID: 1, State: 'S', StartTime: 1007}) {
 		t.Errorf("Children(1) = %+v, %v; want pid 7 from its stat alone", kids, err)
 	}
 }
