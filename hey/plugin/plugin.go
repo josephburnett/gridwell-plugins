@@ -529,8 +529,8 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 	})
 }
 
-// Probe is the one place that decides a thread has left, and it answers for
-// the context asked. A box: PRESENT while it holds the thread, GONE once a
+// Probe settles a thread a listing did not show, for the context asked. A
+// box: PRESENT while it holds the thread, GONE once a
 // whole walk did not list it or the feed moved it out (mail.InBox). The
 // thread is usually in another box, and its tile in everything stays.
 // Everything: PRESENT while some box holds it, else HEY's own word on the

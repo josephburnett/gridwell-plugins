@@ -5,8 +5,9 @@ thread, in **everything**, and HEY's six boxes — the Imbox, Reply Later, Set
 Aside, the Feed, the Paper Trail and Bubble Up — as grids of links to those
 tiles. The (+) menu offers four of them: imbox, reply later, set aside and
 everything. The Feed, the Paper Trail and Bubble Up are walked into
-everything but are not menu entries. A tile's face is the thread's sender and subject; descending into it
-opens the email itself, as HEY's own HTML, through the node's content door.
+everything but are not menu entries. A tile is named for the thread's sender
+and subject; descending into it opens the email itself, as HEY's own HTML,
+through the node's content door.
 
 Nothing here writes to your mail. There is no delete, no archive, no reply.
 
@@ -33,7 +34,7 @@ Two optional keys:
 | key | default | meaning |
 |---|---|---|
 | `binary` | `hey` on PATH | the CLI to run |
-| `refresh` | `1m` | how often one collection is re-walked while the live feed is down |
+| `refresh` | `1m` | how long a walk answers reads while the live feed is not live |
 
 A CLI that cannot be found refuses the plugin's handshake with that reason, so
 its row shows it broken until the CLI is installed. One that goes missing after
@@ -146,48 +147,63 @@ about the host is never the reason a command refused.
 
 Exit status is the whole error vocabulary (`hey help exit-codes`): 2 not
 found, 3 auth required, 4 forbidden, 5 rate limited, 6 network, 7 server or
-local, 1 and 8 usage. 5, 6 and 7 become `Unavailable` — "not right now", and
-the node serves what it has, stamped stale. The rest are verdicts and surface,
-so "not signed in" reaches the user instead of an empty grid.
+local, 1 and 8 usage. 5, 6 and 7 become `Unavailable`, the rest verdicts
+(3 and 4 `PermissionDenied`). Neither refuses a listing: memory answers, and
+the reason rides `ListResponse.unreachable`, which the node shows as the
+plugin's health while it keeps serving the rows. So "not signed in" reaches
+the user without blanking a grid. An email's page answers the code itself.
 
 Every run carries `HEY_NONINTERACTIVE=1` and no stdin: a prompt with nothing
-to read it would hang the sweep, and signing in is the user's own gesture.
+to read it would hang the walk, and signing in is the user's own gesture.
 
 `heycli/testdata/fake-hey` is this contract, executable. If a CLI release
 changes any shape above, that script and its test are where it shows.
 
 ## Live changes
 
-The plugin runs one `hey watch` for its whole life. Every line lands in
-memory at once, and a line that changes a collection's listing tells the node
-through the plugin's `Watch` stream, so new mail reaches the grid in seconds.
-`resync` re-reads its box. `ready` re-reads every box: the feed says nothing
-about the time before it was live, so the first `ready` and every one after a
-reconnect is a catch-up.
+Nothing runs for nobody. A walk runs because a listing asked for it, and
+`hey watch` runs while the node holds a `Watch` stream — which it does while a
+client shows one of the plugin's grids. The feed is account-wide, so any
+stream starts it; it stops 10s after the last one closes, so a stream the
+node reopens with a new scope does not cost a restart. With no stream open,
+no feed runs and nothing walks on a clock.
+
+Every line of the feed lands in memory at once, and a line that changes a
+collection's listing tells the node through the `Watch` stream, so new mail
+reaches the grid in seconds. `resync` re-reads its box. `ready` re-reads
+every box: the feed says nothing about the time before it was live, so the
+first `ready` and every one after a reconnect is a catch-up.
 
 A feed that ends is started again after 1s, doubling to 5m, and starting over
 once one reaches `ready`. `disconnected` is not an error — the CLI reconnects
 by itself — but one that has not said `ready` within 2m is restarted. A CLI
 that refuses `watch` as usage (exit 1 or 8: it has no such command) is not
-restarted; the log says so and the plugin keeps memory by walking instead.
+restarted; the log says so and reads walk on the `refresh` window instead.
 
-While the feed is live, and a collection's catch-up walk has landed, nothing
-walks that collection on a clock: the feed keeps it. While the feed is down —
-not started, disconnected, restarting, or refused — `refresh` rules again:
-each collection is re-walked when its last walk is older than that.
+While the feed is live, and a collection's catch-up walk has landed, a read
+of it walks nothing: the feed keeps it. While the feed is not live — not
+started, disconnected, restarting, or refused — `refresh` rules: a read of a
+collection whose last walk is older than that walks it.
 
 A read answers from memory at once whenever memory has a listing of the
-collection, even while a walk it started runs behind it; it carries the last
-failed walk's error until a walk lands, and the verdict the feed ended on
-(not signed in) until the feed is live again. Only a read with no listing to
-answer — the first ever — waits for the walk, at most 2s.
+collection, even while a walk it started runs behind it. Only a read with no
+listing to answer — the first ever — waits for the walk, at most 2s. A read
+never fails because HEY did not answer: the last failed walk's reason, or the
+verdict the feed ended on (not signed in), is the listing's `unreachable`
+until a walk lands or the feed is live again. Each edge of a failure tells the
+node, so the reason reaches an open grid and leaves it without a gesture.
 
 `Watch` sends only `ContextChanged`, one per collection whose listing changed,
-whether the feed or a walk changed it. It never sends `EntryRemoved`: the
-listings are not authoritative, and a thread that leaves one box is usually
-in another, so whether it is gone is `Probe`'s to say. A subscriber that falls
-64 changes behind never holds the feed up: its changes are dropped, and when
-it reads again it is told every collection changed.
+whether the feed or a walk changed it. A burst is one change per collection:
+a stream that falls behind is owed each context once, never once per line,
+and the feed never waits on it.
+
+A box's listing is authoritative when it is definitive: its last walk read
+the whole box, the feed is live, and that walk is the catch-up of the feed's
+latest `ready` with no `resync` since. The node then retires the links to
+threads that left, which costs nothing: each thread's tile is in everything.
+A capped walk, a feed that is down, or a re-read not yet landed is silence,
+and absence is never inferred from silence.
 
 ## Everything and the boxes
 
@@ -207,15 +223,28 @@ or the feed moved its posting out, otherwise "cannot say". In everything:
 present while some box holds it, otherwise `hey thread read` decides — gone
 only when the CLI says the thread does not exist (exit 2).
 
+Everything is never authoritative: a thread in no box may still be in HEY,
+and only `Probe` asks. One box that cannot be read costs everything only that
+box's news: it lists what memory holds for every box, with the failing box's
+reason as its `unreachable`, so every email's page keeps serving.
+
 `Watch` announces everything whenever a thread's record or the union
 changes, and the node passes that on to every box that links into it.
 
 ## State
 
-`state_dir` holds one file, `mail.json`: the threads the plugin has seen and
-each collection's membership, so a restart answers instantly. The feed's
-first `ready` then walks every box behind that answer, because nothing says
-what changed while no plugin was running. It is disposable — delete it any
-time; the next sweep rewarms it. No credential is ever written there.
+`state_dir` holds one file, `mail.json`: the threads the plugin has seen,
+each collection's membership and when each was last walked, so a restart
+answers instantly, and inside the `refresh` window without running the CLI.
+The feed's first `ready` then walks every box behind that answer, because
+nothing says what changed while no plugin was running. It is disposable —
+delete it any time; the next walks rewarm it. A file from an older plugin is
+a cold start, once. No credential is ever written there.
+
+A thread that leaves every box is remembered, so its tile still reads as the
+email it was, until HEY says it no longer has it: each walk asks `hey thread
+read` about at most 16 such threads, forgets one the CLI says does not exist
+(exit 2), keeps one HEY still has without asking again, and asks again next
+walk on any other answer.
 
 Email bodies are not cached. A listing is small; a mailbox's bodies are not.
