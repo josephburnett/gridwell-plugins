@@ -14,7 +14,7 @@ import (
 )
 
 // EntryKind classifies a directory entry: a subdirectory, which the fs plugin
-// projects as a well, or a file, projected as a text tile. The string values
+// projects as a well, or a file, projected as a text or url tile. The string values
 // are internal markers; callers compare by constant.
 type EntryKind string
 
