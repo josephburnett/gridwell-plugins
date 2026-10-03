@@ -53,6 +53,15 @@ func TestWatchSendsItsHeaderOnAccept(t *testing.T) {
 	}
 }
 
+// The node opens Watch only on the declaration, so a Watch left undeclared
+// leaves a todo finished at GitLab open on screen until the user reads again.
+func TestInfoDeclaresWatch(t *testing.T) {
+	info, err := New(&oneShot{}, Options{}).Info(context.Background(), &pluginv1.InfoRequest{})
+	if err != nil || !info.GetWatch() {
+		t.Fatalf("Info = (%v, %v), want watch declared", info, err)
+	}
+}
+
 // watching subscribes a Watch stream to p and returns it once subscribed.
 func watching(t *testing.T, p *Plugin, block chan struct{}) *watchStream {
 	t.Helper()

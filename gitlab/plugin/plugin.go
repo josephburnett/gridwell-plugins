@@ -1,10 +1,10 @@
 // Package plugin is the gitlab todos plugin: the wire half over
-// plugins/gitlab/todos. The one context, "todos", lists weeks; a week,
+// gitlab/todos. The one context, "todos", lists weeks; a week,
 // "week:<monday>", lists the todos created that week as markdown text tiles.
 // Keys are GitLab's todo ids, stable forever. Listings are non-authoritative
 // and Probe never answers GONE: a todo never disappears from the grid, it
-// changes state when refreshed, and both the node's read-through cache and
-// this plugin's own cache file remember it across restarts. The one write is
+// changes state when refreshed, and this plugin's own cache file remembers it
+// across restarts. The one write is
 // Delete, which here means mark-as-done: the trash gesture resolves the todo
 // at GitLab rather than removing anything. The plugin holds
 // no node fact — no id, no layout — only its memory of GitLab, in the private
@@ -33,7 +33,7 @@ import (
 const Kind = "gitlab"
 
 // displayName is the plugin's own name for itself. The name the user sees is
-// server.yaml's `name`, the registry label; this is the fallback when none is
+// the plugin's `label` in server.yaml; this is the fallback when none is
 // configured, and the root grid's source label.
 const displayName = "gitlab todos"
 
@@ -77,8 +77,8 @@ type Plugin struct {
 	firstAnswer time.Duration
 	now         func() time.Time
 	// cache is the memory's file in the state directory, "" when the node
-	// handed no state_dir — then the plugin runs as it always did, walking
-	// GitLab from cold at every start.
+	// handed no state_dir: the plugin then walks GitLab from cold at every
+	// start.
 	cache string
 	// logf is the plugin's one log door: the walk's narration, and what must
 	// not be swallowed and must not fail a read — a cache the plugin could
@@ -116,7 +116,7 @@ type Options struct {
 	Marker Marker
 	// StateDir is the private directory the node hands the plugin. Empty
 	// means no cache: the plugin keeps everything in memory for its process
-	// lifetime, as it did before the node handed one out.
+	// lifetime.
 	StateDir string
 	// Logf takes every line the plugin writes: the walk's narration, and the
 	// failures that must not be swallowed and must not fail a read. It
@@ -282,6 +282,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		// The one collection this plugin serves: the todo list. It declares no
 		// label, so the swatch reads as the configured instance.
 		MenuEntries: []*pluginv1.MenuEntry{{Id: todos.RootContext, Context: todos.RootContext}},
+		Watch:       true,
 	}, nil
 }
 
@@ -393,8 +394,8 @@ func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
 }
 
 // List answers the root, listing weeks, or one week, listing todos. A walk
-// failure with a transport-shaped code degrades at the node to the remembered
-// listing, stamped stale; a verdict such as a bad token surfaces.
+// failure with a transport-shaped code leaves the node serving its rows with
+// the source dark; a verdict such as a bad token surfaces.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	switch {
 	case req.Context == todos.RootContext:
@@ -434,9 +435,8 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	t, known := p.mem.Get(id)
 	if !known {
 		// Before the first completed walk, "not in memory" means "not yet",
-		// not "gone" — and it must answer Unavailable, transport-shaped, so
-		// the node's cache serves the remembered body instead of storing a
-		// Gone body over it while the walk is still running.
+		// not "gone": Unavailable, transport-shaped, reads at the node as the
+		// source dark while the walk runs, not as the todo gone.
 		if !p.mem.Walked() {
 			return status.Error(codes.Unavailable, "gitlab plugin: the first walk has not completed")
 		}
