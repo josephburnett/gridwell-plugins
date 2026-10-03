@@ -166,22 +166,12 @@ func TestAnEnvelopeOnStdoutIsReadToo(t *testing.T) {
 	}
 }
 
-// The binary is not there: a configuration verdict, not weather. Answering
-// Unavailable would make the node serve a stale grid forever and say nothing.
-func TestAMissingBinaryIsAVerdict(t *testing.T) {
+// A CLI that cannot be run is weather, not a verdict: a read runs only after
+// Info's Installed check passed, which is the verdict on a missing CLI, and a
+// verdict here would refuse every grid the node could still serve rows for.
+func TestAMissingBinaryIsUnavailable(t *testing.T) {
 	e := Exec{Binary: filepath.Join(t.TempDir(), "no-such-hey")}
 	_, _, err := New(e).Box(context.Background(), "imbox")
-	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition (%v)", got, err)
-	}
-}
-
-// A cancelled context is weather, whatever the run failed with.
-func TestACancelledRunIsWeather(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	e := Exec{Binary: filepath.Join(t.TempDir(), "no-such-hey")}
-	_, _, err := New(e).Box(ctx, "imbox")
 	if got := status.Code(err); got != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable (%v)", got, err)
 	}
@@ -409,10 +399,10 @@ func TestExecStreamsTheFeedUntilCancelled(t *testing.T) {
 	}
 }
 
-func TestAFeedWithNoCLIIsAVerdict(t *testing.T) {
+func TestAFeedWithNoCLIIsUnavailable(t *testing.T) {
 	err := New(Exec{Binary: filepath.Join(t.TempDir(), "no-such-hey")}).Watch(context.Background(), func(mail.Event, error) {})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("err = %v, want FailedPrecondition", err)
+	if status.Code(err) != codes.Unavailable {
+		t.Errorf("err = %v, want Unavailable", err)
 	}
 }
 

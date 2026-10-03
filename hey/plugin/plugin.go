@@ -92,8 +92,8 @@ type Plugin struct {
 	// failed is the last walk's error, by collection, until one lands; a
 	// warm read answers it, having not waited to hear it.
 	failed map[string]error
-	// watchErr is the verdict the feed last ended on — not signed in, no
-	// CLI — until a feed reaches ready. Every read answers it: with the feed
+	// watchErr is the verdict the feed last ended on — not signed in —
+	// until a feed reaches ready. Every read answers it: with the feed
 	// down, memory is only as current as the walks.
 	watchErr error
 	// flights are the walks in progress, by collection. A List that finds one

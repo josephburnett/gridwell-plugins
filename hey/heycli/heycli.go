@@ -328,7 +328,7 @@ func (c *Client) Watch(ctx context.Context, on func(mail.Event, error)) error {
 	case ctx.Err() != nil:
 		return status.Errorf(codes.Unavailable, "hey plugin: watch: %v", ctx.Err())
 	case err != nil:
-		return status.Errorf(codes.FailedPrecondition, "hey plugin: watch: %v", err)
+		return notRunnable("watch", err)
 	case code == 0:
 		return status.Error(codes.Unavailable, "hey plugin: watch: the CLI ended the feed")
 	}
@@ -341,17 +341,20 @@ func (c *Client) Watch(ctx context.Context, on func(mail.Event, error)) error {
 func (c *Client) read(ctx context.Context, what string, args ...string) ([]byte, error) {
 	out, errText, code, err := c.run.Run(ctx, args...)
 	if err != nil {
-		// The CLI could not be run at all: a missing binary is a
-		// configuration verdict, and a context that ended is weather.
-		if ctx.Err() != nil {
-			return nil, status.Errorf(codes.Unavailable, "hey plugin: %s: %v", what, err)
-		}
-		return nil, status.Errorf(codes.FailedPrecondition, "hey plugin: %s: %v", what, err)
+		return nil, notRunnable(what, err)
 	}
 	if code == 0 {
 		return out, nil
 	}
 	return nil, refusal(what, out, errText, code)
+}
+
+// notRunnable is a CLI that could not be run at all: Unavailable, because
+// Info's Installed check is the one verdict on a missing CLI, and once Info
+// has passed a CLI that goes missing is a source not answering, whose rows the
+// node keeps serving.
+func notRunnable(what string, err error) error {
+	return status.Errorf(codes.Unavailable, "hey plugin: %s: the hey CLI could not be run: %v", what, err)
 }
 
 // refusal maps the CLI's exit status onto the node's error vocabulary. The
