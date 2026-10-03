@@ -1,15 +1,19 @@
 package mail
 
+import "slices"
+
 // CacheFile is the plugin's cache file in the private directory the node
 // hands it as `state_dir` (memo.File owns its contract). It holds this
 // plugin's memory of ITS SOURCE, never a node fact.
 const CacheFile = "mail.json"
 
 // Snapshot is the memory as the cache file holds it: every thread the memory
-// has seen, and each collection's membership.
+// has seen, each collection's membership, and the strays not yet asked
+// about.
 type Snapshot struct {
 	Threads     []Thread                `json:"threads"`
 	Collections map[string]CollectionIn `json:"collections"`
+	Strays      []int64                 `json:"strays,omitempty"`
 }
 
 // CollectionIn is one collection's remembered membership: what it held, and
@@ -31,7 +35,12 @@ func (m *Memory) Snapshot() Snapshot {
 		copy(out, ids)
 		cols[key] = CollectionIn{Complete: m.complete[key], TopicIDs: out}
 	}
-	return Snapshot{Threads: threads, Collections: cols}
+	strays := make([]int64, 0, len(m.strays))
+	for id := range m.strays {
+		strays = append(strays, id)
+	}
+	slices.Sort(strays)
+	return Snapshot{Threads: threads, Collections: cols, Strays: strays}
 }
 
 // Restore folds a snapshot into the memory. It is the boot path only: the
@@ -51,5 +60,8 @@ func (m *Memory) Restore(s Snapshot) {
 		if in.Complete {
 			m.complete[key] = true
 		}
+	}
+	for _, id := range s.Strays {
+		m.strays[id] = true
 	}
 }

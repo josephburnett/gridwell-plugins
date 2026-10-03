@@ -334,7 +334,28 @@ func (p *Plugin) walk(ctx context.Context, key string) error {
 	}
 	p.effects[key] = merge(p.effects[key], eff)
 	p.mu.Unlock()
+	p.prune(ctx)
 	return nil
+}
+
+// PrunePerWalk bounds how many threads one walk asks HEY about.
+const PrunePerWalk = 16
+
+// prune asks HEY about threads that left every box, and forgets each one
+// `thread read` says does not exist. One HEY still has (archived) is kept and
+// not asked about again; any other answer is doubt, and the thread waits for
+// the next walk. It runs inside a walk, so it is bounded by one and runs only
+// when something asked for that walk.
+func (p *Plugin) prune(ctx context.Context) {
+	for _, id := range p.mem.TakeStrays(PrunePerWalk) {
+		_, err := p.src.ThreadHTML(ctx, id)
+		switch {
+		case status.Code(err) == codes.NotFound:
+			p.mem.Forget(id)
+		case err != nil:
+			p.mem.Stray(id)
+		}
+	}
 }
 
 // landed is memo.Flights' Landed: the cache lands before any waiting reader

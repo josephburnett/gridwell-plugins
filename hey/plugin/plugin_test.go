@@ -598,6 +598,45 @@ func TestAWarmReadAnswersMemoryAndTheLastFailure(t *testing.T) {
 	}
 }
 
+// Memory forgets a thread once it is in no box AND `hey thread read` says
+// HEY no longer has it, asked by a walk; never on doubt, and a thread HEY
+// still has (archived) is kept and not asked about again.
+func TestMemoryForgetsOnlyWhatHEYNoLongerHas(t *testing.T) {
+	f := newFake()
+	f.boxes["imbox"] = []mail.Thread{
+		th(1, "gone", "2026-01-01T09:00:00Z"), th(2, "archived", "2026-01-02T09:00:00Z"),
+		th(3, "doubt", "2026-01-03T09:00:00Z"), th(4, "stays", "2026-01-04T09:00:00Z")}
+	f.threadErr[1] = status.Error(codes.NotFound, "hey plugin: thread read 1: Thread not found")
+	f.html[2] = "<!doctype html>"
+	f.threadErr[3] = status.Error(codes.Unavailable, "hey plugin: thread read 3: network")
+	p := stable(t, f, Options{})
+	walk := func() {
+		t.Helper()
+		p.flights.Rewalk(mail.ImboxContext)
+		idle(t, p)
+	}
+	walk()
+	if n := f.count("thread"); n != 0 {
+		t.Fatalf("a walk that lost nothing asked HEY about %d threads", n)
+	}
+	f.setBox("imbox", th(4, "stays", "2026-01-04T09:00:00Z"))
+	walk()
+	for id, want := range map[int64]bool{1: false, 2: true, 3: true, 4: true} {
+		if _, ok := p.mem.Get(id); ok != want {
+			t.Errorf("thread %d remembered = %v, want %v", id, ok, want)
+		}
+	}
+	asked := f.count("thread")
+	f.mu.Lock()
+	delete(f.threadErr, 3)
+	f.html[3] = "<!doctype html>"
+	f.mu.Unlock()
+	walk()
+	if n := f.count("thread") - asked; n != 1 {
+		t.Errorf("the next walk asked about %d threads, want only the one in doubt", n)
+	}
+}
+
 func TestDeleteIsRefusedWithItsReason(t *testing.T) {
 	p := stable(t, newFake(), Options{})
 	_, err := p.Delete(context.Background(), &pluginv1.DeleteRequest{Key: "thread:1"})

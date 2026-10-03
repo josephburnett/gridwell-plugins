@@ -16,9 +16,10 @@ import (
 // and only merged into by one that did not: a box listing is a live
 // membership, so a thread archived at HEY must leave the grid, but a walk
 // that stopped short proves nothing about what it did not reach. Between
-// walks, the CLI's live feed moves it one posting at a time (Apply). The
-// thread record itself is never removed, so a tile whose thread has left still reads
-// as the email it was.
+// walks, the CLI's live feed moves it one posting at a time (Apply). A
+// thread's record outlives its membership, so a tile whose thread has left
+// every box still reads as the email it was, until HEY says the thread is
+// gone (Forget).
 type Memory struct {
 	mu      sync.Mutex
 	threads map[int64]*Thread
@@ -41,6 +42,9 @@ type Memory struct {
 	// delete of the posting that held them. It is how a box no walk reads
 	// whole (a capped one) can still say a thread is not in it.
 	left map[string]map[int64]bool
+	// strays are threads that left every box and have not been asked about
+	// since: the candidates to forget, once HEY says it no longer has them.
+	strays map[int64]bool
 }
 
 // NewMemory builds an empty memory.
@@ -52,6 +56,7 @@ func NewMemory() *Memory {
 		complete: map[string]bool{},
 		journal:  map[string][]Event{},
 		left:     map[string]map[int64]bool{},
+		strays:   map[int64]bool{},
 	}
 }
 
@@ -109,8 +114,7 @@ func (m *Memory) Absorb(collection string, read []Thread, whole bool) Effect {
 		m.applyLocked(collection, ev)
 	}
 	delete(m.journal, collection)
-	return Effect{Changed: !sameListing(before, m.collectionLocked(collection)),
-		Everything: !sameListing(beforeAll, m.everythingLocked())}
+	return m.effectLocked(collection, before, beforeAll)
 }
 
 // Apply folds one added, updated or deleted event about one collection in.
@@ -126,8 +130,66 @@ func (m *Memory) Apply(collection string, ev Event) Effect {
 	if j, open := m.journal[collection]; open {
 		m.journal[collection] = append(j, ev)
 	}
+	eff := m.effectLocked(collection, before, beforeAll)
+	eff.Rewalk = rewalk
+	return eff
+}
+
+// effectLocked is what a change to one collection did, measured against
+// the listings from before it. A thread that left everything becomes a
+// stray; one that came back is none.
+func (m *Memory) effectLocked(collection string, before, beforeAll []Thread) Effect {
+	all := m.everythingLocked()
+	in := make(map[int64]bool, len(all))
+	for i := range all {
+		in[all[i].TopicID] = true
+		delete(m.strays, all[i].TopicID)
+	}
+	for i := range beforeAll {
+		if id := beforeAll[i].TopicID; !in[id] {
+			m.strays[id] = true
+		}
+	}
 	return Effect{Changed: !sameListing(before, m.collectionLocked(collection)),
-		Everything: !sameListing(beforeAll, m.everythingLocked()), Rewalk: rewalk}
+		Everything: !sameListing(beforeAll, all)}
+}
+
+// TakeStrays hands out at most n threads that left every box and have not
+// been asked about since. The caller asks HEY whether each still exists and
+// answers with Forget or Stray.
+func (m *Memory) TakeStrays(n int) []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int64, 0, min(n, len(m.strays)))
+	for id := range m.strays {
+		if len(out) == n {
+			break
+		}
+		out = append(out, id)
+		delete(m.strays, id)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Stray hands a thread back to be asked about again: the answer was doubt.
+func (m *Memory) Stray(topicID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, known := m.threads[topicID]; known && !m.memberLocked(topicID) {
+		m.strays[topicID] = true
+	}
+}
+
+// Forget drops a thread's record once HEY said it no longer has it. A thread
+// some box has listed again since is kept.
+func (m *Memory) Forget(topicID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.memberLocked(topicID) {
+		delete(m.threads, topicID)
+		delete(m.strays, topicID)
+	}
 }
 
 // applyLocked is Apply without the bookkeeping; it reports whether only a
@@ -319,11 +381,13 @@ func (m *Memory) Get(topicID int64) (Thread, bool) {
 func (m *Memory) Member(topicID int64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.memberLocked(topicID)
+}
+
+func (m *Memory) memberLocked(topicID int64) bool {
 	for _, ids := range m.members {
-		for _, id := range ids {
-			if id == topicID {
-				return true
-			}
+		if slices.Contains(ids, topicID) {
+			return true
 		}
 	}
 	return false

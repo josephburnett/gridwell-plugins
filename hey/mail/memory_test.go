@@ -108,6 +108,31 @@ func TestCollectionIsOldestFirstAndTotal(t *testing.T) {
 	}
 }
 
+// A thread that leaves every box is a stray until it is asked about or
+// listed again, across a restart too; one still in another box is none.
+func TestAThreadInNoBoxIsAStray(t *testing.T) {
+	m := NewMemory()
+	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ReplyLaterContext, []Thread{thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ImboxContext, nil, true)
+	back := NewMemory()
+	back.Restore(m.Snapshot())
+	if got := back.TakeStrays(10); !reflect.DeepEqual(got, []int64{1}) {
+		t.Fatalf("strays = %v, want the thread in no box", got)
+	}
+	if got := back.TakeStrays(10); len(got) != 0 {
+		t.Fatalf("a stray handed out twice: %v", got)
+	}
+	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
+	if got := m.TakeStrays(10); len(got) != 0 {
+		t.Fatalf("a thread listed again is still a stray: %v", got)
+	}
+	m.Forget(1)
+	if _, ok := m.Get(1); !ok {
+		t.Error("a thread a box holds was forgotten")
+	}
+}
+
 func TestSnapshotRoundTrips(t *testing.T) {
 	m := NewMemory()
 	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
