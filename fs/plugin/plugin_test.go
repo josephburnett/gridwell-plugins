@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -65,13 +66,13 @@ func TestAbsUnderRootSlash(t *testing.T) {
 	}
 }
 
-func TestAbsStillRefusesEscapes(t *testing.T) {
-	p := New("/home/joe", nil)
-	for _, key := range []string{"../etc/passwd", "sub/../../etc"} {
-		if got, err := p.abs(key); err != nil {
-			t.Fatalf("abs(%q): anchored cleanup should confine, got error %v", key, err)
-		} else if got != "/home/joe/etc/passwd" && got != "/home/joe/etc" {
-			t.Fatalf("abs(%q) = %q escaped the root", key, got)
+// A key that escapes the root by name is not in the tree: never a path, in
+// the root or out of it. A dead link targets such a key (linkEntry).
+func TestAbsRefusesEscapes(t *testing.T) {
+	p := New(t.TempDir(), nil)
+	for _, key := range []string{"../etc/passwd", "sub/../../etc", "..", "/etc"} {
+		if got, err := p.abs(key); !errors.Is(err, errOutside) {
+			t.Errorf("abs(%q) = %q, %v; want errOutside", key, got, err)
 		}
 	}
 }

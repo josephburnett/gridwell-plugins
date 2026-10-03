@@ -78,12 +78,12 @@ func TestServeFileTellsUnreadableFromAbsent(t *testing.T) {
 	}
 
 	var missing chunks
-	if err := ServeFile(&missing, dir, "gone.html", ""); err != nil || len(missing) != 1 || missing[0].Status != 404 {
+	if err := ServeFile(&missing, dir, dir, "gone.html", ""); err != nil || len(missing) != 1 || missing[0].Status != 404 {
 		t.Errorf("absent file = %v, %v; want one 404 page", missing, err)
 	}
 
 	var locked chunks
-	err := ServeFile(&locked, dir, "locked.html", "")
+	err := ServeFile(&locked, dir, dir, "locked.html", "")
 	if status.Code(err) != codes.PermissionDenied || len(locked) != 0 {
 		t.Errorf("unreadable file = %v, %v; want PermissionDenied and no page", locked, err)
 	}

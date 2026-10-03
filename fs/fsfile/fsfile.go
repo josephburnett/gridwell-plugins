@@ -187,22 +187,34 @@ type ServeChunkSender interface {
 }
 
 // ServeFile streams a file's raw bytes as web content. subpath "" is the named
-// file itself; a non-empty subpath is a page-relative resource resolved
-// against the file's directory and confined to that directory's subtree, which
-// is the plugin-side guarantee, independent of the door's URL grammar. Absence
+// file itself, confined to root; a non-empty subpath is a page-relative
+// resource resolved against the file's directory and confined to that
+// directory's subtree, which is the plugin-side guarantee, independent of the
+// door's URL grammar. Both confinements see through symlinks (Resolve). A
+// named file that links out of the root is refused with that reason, a
+// resource that does is a 404 page like any other it cannot have. Absence
 // answers a 404 page; a file that is there and cannot be read is an error
 // that says why.
-func ServeFile(stream ServeChunkSender, dirPath, name, subpath string) error {
+func ServeFile(stream ServeChunkSender, root, dirPath, name, subpath string) error {
 	target := filepath.Join(dirPath, name)
-	served := name
+	served, confine := name, root
 	if subpath != "" {
 		target = filepath.Join(dirPath, filepath.FromSlash(subpath))
-		served = subpath
+		served, confine = subpath, dirPath
 		if !UnderRoot(dirPath, target) {
 			return notFoundPage(stream)
 		}
 	}
-	f, err := os.Open(target)
+	real, err := Resolve(confine, target)
+	switch {
+	case errors.Is(err, ErrOutside) && subpath == "":
+		return status.Errorf(codes.FailedPrecondition, "fs plugin: %s %v", served, err)
+	case errors.Is(err, ErrOutside), errors.Is(err, iofs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		return notFoundPage(stream)
+	case err != nil:
+		return unreadable(served, err)
+	}
+	f, err := os.Open(real)
 	if errors.Is(err, iofs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 		return notFoundPage(stream)
 	}
