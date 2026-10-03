@@ -1,7 +1,6 @@
 package plugin
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,8 +15,8 @@ import (
 // DefaultURL is the GitLab instance when config names none.
 const DefaultURL = "https://gitlab.com"
 
-// FromConfig builds the production plugin from the shared config vocabulary
-// and starts its refresher. It is the one owner of the config-to-plugin
+// FromConfig builds the production plugin from the shared config
+// vocabulary. It is the one owner of the config-to-plugin
 // derivation, so the subprocess main and a bundled binary compose exactly the
 // same plugin. A missing or unreadable token is a refusal: the error is the
 // verdict, the node shows the plugin broken with it instead of serving an
@@ -63,9 +62,5 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	// The API client is both halves: the pager the walk reads, and the
 	// mark-as-done writer the trash gesture becomes.
 	opts.Marker = api
-	p := New(api, opts)
-	// The refresher lives as long as the process does: a plugin subprocess is
-	// stopped by the node killing it, and there is nothing else to unwind.
-	go p.Run(context.Background())
-	return p, nil
+	return New(api, opts), nil
 }

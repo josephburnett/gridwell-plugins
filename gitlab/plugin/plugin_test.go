@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -328,22 +329,34 @@ func TestAnUnusableCacheIsReportedAndTheWalkStillAnswers(t *testing.T) {
 	}
 }
 
-// The refresher walks on its own, so a memory is warm because the interval
-// came round, not because a read paid for it — and the cache file is warm
-// with it, so the next restart answers from disk.
-func TestRunWalksOnTheIntervalAndWritesTheCache(t *testing.T) {
+// The refresher runs only while a Watch stream is open, since the node holds
+// one only while one of these grids is shown: with none open, refresh windows
+// pass and GitLab hears nothing; with one open, a memory is warm because the
+// interval came round, not because a read paid for it, and the cache file is
+// warm with it; once the stream ends GitLab hears nothing again.
+func TestTheRefresherRunsOnlyWhileWatched(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := &gated{gate: make(chan struct{})}
 	close(src.gate) // never blocks: this walk is the refresher's own
 	p := New(src, Options{StateDir: dir, Refresh: MinRefresherInterval})
-	ctx, cancel := context.WithCancel(context.Background())
-	go p.Run(ctx)
+	t.Cleanup(p.Close)
+	flat := func(what string) {
+		t.Helper()
+		time.Sleep(100 * time.Millisecond) // a request already sent lands
+		n := src.calls.Load()
+		time.Sleep(3 * MinRefresherInterval)
+		if got := src.calls.Load(); got != n {
+			t.Fatalf("%s: GitLab heard %d requests across three refresh windows", what, got-n)
+		}
+	}
+	flat("no stream open")
 
+	w := watching(t, p, nil)
 	deadline := time.Now().Add(5 * time.Second)
 	for src.calls.Load() == 0 {
 		if time.Now().After(deadline) {
-			cancel()
-			t.Fatal("the refresher never walked")
+			t.Fatal("the refresher never walked while watched")
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -352,26 +365,46 @@ func TestRunWalksOnTheIntervalAndWritesTheCache(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			cancel()
 			t.Fatal("the refresher walked but wrote no cache")
 		}
 		time.Sleep(time.Millisecond)
 	}
-	// Cancelling stops it: the walks end with the process's context.
-	cancel()
-	deadline = time.Now().Add(5 * time.Second)
-	var stopped int32
-	for time.Now().Before(deadline) {
-		n := src.calls.Load()
-		time.Sleep(20 * time.Millisecond)
-		if src.calls.Load() == n {
-			stopped = n
-			break
+
+	w.cancel()
+	unwatched(t, p)
+	flat("the stream ended")
+}
+
+// A walk outlives every reader and ends with the plugin: its context is the
+// plugin's lifetime, so a walk stuck on GitLab ends when the plugin does.
+func TestAWalkEndsWithThePlugin(t *testing.T) {
+	p := New(stuck{}, Options{FirstAnswer: time.Millisecond})
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	f := p.flights[todos.RootContext]
+	p.mu.Unlock()
+	if f == nil {
+		t.Fatal("no walk in flight")
+	}
+	p.Close()
+	select {
+	case <-f.done:
+		if !errors.Is(f.err, context.Canceled) {
+			t.Errorf("the walk ended with %v, want the plugin's end", f.err)
 		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the walk outlived the plugin")
 	}
-	if stopped == 0 {
-		t.Error("the refresher kept walking after its context was done")
-	}
+}
+
+// stuck is a GitLab that answers nothing until the caller gives up.
+type stuck struct{}
+
+func (stuck) Page(ctx context.Context, _ string, _ int) (todos.Reply, error) {
+	<-ctx.Done()
+	return todos.Reply{}, ctx.Err()
 }
 
 // The refresher never spins: a `refresh` shorter than a request would leave

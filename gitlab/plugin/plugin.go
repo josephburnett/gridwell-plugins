@@ -39,8 +39,8 @@ const displayName = "gitlab todos"
 
 // DefaultRefresh is how often the refresher glances at GitLab's newest
 // pending page (config `refresh`): the delay before a new todo shows. GitLab
-// pushes nothing about a user's todos, so the plugin polls, and a glance is
-// one request.
+// pushes nothing about a user's todos, so the plugin polls while one of its
+// grids is shown, and a glance is one request.
 const DefaultRefresh = 30 * time.Second
 
 // DefaultFullRefresh is how long a full walk stays fresh (config
@@ -84,6 +84,10 @@ type Plugin struct {
 	// not be swallowed and must not fail a read — a cache the plugin could
 	// not read or write, a walk that failed.
 	logf func(format string, args ...any)
+	// life is the plugin's lifetime: every detached walk runs under it, since
+	// a walk belongs to no reader. Close ends it.
+	life  context.Context
+	close context.CancelFunc
 
 	mu       sync.Mutex
 	syncedAt map[string]time.Time // context → last successful walk
@@ -144,6 +148,8 @@ func New(src todos.Source, o Options) *Plugin {
 		flights:     map[string]*flight{},
 		failed:      map[string]error{},
 	}
+	p.life, p.close = context.WithCancel(context.Background())
+	p.watch.work = p.refresher
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
 	}
@@ -217,10 +223,14 @@ func (p *Plugin) refresherInterval() time.Duration {
 	return p.refresh
 }
 
-// Run keeps the memory current until ctx is done: one goroutine ticking on
-// the refresher's interval, so a change has been read before a read asks
-// rather than because one did. FromConfig starts it.
-func (p *Plugin) Run(ctx context.Context) {
+// Close ends the plugin's lifetime: the refresher and every walk stop.
+func (p *Plugin) Close() { p.close() }
+
+// refresher keeps the memory current until ctx is done, ticking on the
+// refresher's interval so a change has been read before a read asks. It runs
+// only while a Watch stream is open (see watchers.work): GitLab cannot tell,
+// so the clock is the plugin's, and only for as long as someone is looking.
+func (p *Plugin) refresher(ctx context.Context) {
 	t := time.NewTicker(p.refresherInterval())
 	defer t.Stop()
 	for {
@@ -357,14 +367,14 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 }
 
 // walk is one detached walk: it owns its flight and outlives every reader.
-// Its context is the plugin's lifetime — each page REQUEST is bounded by the
+// Its context is the plugin's lifetime: each page REQUEST is bounded by the
 // API client's own timeout and each PAGE is retried in place a bounded number
 // of times, so a dead source ends the walk with its error rather than hanging
 // it.
 func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
 	p.logf("gitlab plugin: walk %q starting (since=%s)", ctxKey, since.Format("2006-01-02"))
 	start := time.Now()
-	err := p.mem.Sync(context.Background(), p.src, since)
+	err := p.mem.Sync(p.life, p.src, since)
 	p.logf("gitlab plugin: walk %q finished in %s: err=%v", ctxKey, time.Since(start).Round(time.Millisecond), err)
 	p.mu.Lock()
 	if err == nil {

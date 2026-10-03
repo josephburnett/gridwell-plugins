@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"sync"
 
 	"github.com/josephburnett/gridwell-plugins/gitlab/todos"
@@ -14,10 +15,16 @@ import (
 // them, as they did before there was a Watch.
 const watchBuffer = 64
 
-// watchers is the fan-out of memory changes to every Watch stream.
+// watchers is the fan-out of memory changes to every Watch stream, and the
+// owner of whether any is open: the node holds one only while a client shows
+// one of these grids, so work runs from the first stream's open until the
+// last one's end, and never else.
 type watchers struct {
+	work func(context.Context)
+
 	mu   sync.Mutex
 	subs map[*watcher]struct{}
+	idle context.CancelFunc // ends work; nil while no stream is open
 }
 
 // watcher is one Watch stream's backlog: a set of contexts in announcement
@@ -29,7 +36,8 @@ type watcher struct {
 	queued  map[string]bool
 }
 
-func (w *watchers) subscribe() *watcher {
+// subscribe opens a stream, starting work under life if it is the first.
+func (w *watchers) subscribe(life context.Context) *watcher {
 	s := &watcher{wake: make(chan struct{}, 1), queued: map[string]bool{}}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -37,13 +45,23 @@ func (w *watchers) subscribe() *watcher {
 		w.subs = map[*watcher]struct{}{}
 	}
 	w.subs[s] = struct{}{}
+	if w.idle == nil && w.work != nil {
+		var ctx context.Context
+		ctx, w.idle = context.WithCancel(life)
+		go w.work(ctx)
+	}
 	return s
 }
 
+// unsubscribe ends a stream, and work with the last one.
 func (w *watchers) unsubscribe(s *watcher) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	delete(w.subs, s)
+	if len(w.subs) == 0 && w.idle != nil {
+		w.idle()
+		w.idle = nil
+	}
 }
 
 // publish queues contexts on every subscriber without waiting on any.
@@ -103,7 +121,7 @@ func (s *watcher) next() (string, bool) {
 // EntryRemoved: it stays listed, done-marked (see the package comment), and an
 // EntryRemoved would have the node drop a tile the next listing returns.
 func (p *Plugin) Watch(_ *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
-	s := p.watch.subscribe()
+	s := p.watch.subscribe(p.life)
 	defer p.watch.unsubscribe(s)
 	// The node counts the stream open when its header arrives, and only then
 	// clears a refusal or catches up after a drop (docs/plugin-authoring.md).

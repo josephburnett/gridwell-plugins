@@ -45,9 +45,7 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 		t.Errorf("cache path = %q with no state_dir in the config", p.cache)
 	}
 	dir := t.TempDir()
-	// A long refresh: FromConfig starts the refresher, and this test has no
-	// GitLab for it to walk.
-	impl, err = FromConfig(map[string]string{"token_file": writeTemp(t, "tok"), "state_dir": dir, "refresh": "1h"})
+	impl, err = FromConfig(map[string]string{"token_file": writeTemp(t, "tok"), "state_dir": dir})
 	if err != nil {
 		t.Fatal(err)
 	}

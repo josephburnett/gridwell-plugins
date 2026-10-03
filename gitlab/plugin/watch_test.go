@@ -20,6 +20,7 @@ import (
 type watchStream struct {
 	pluginv1.Plugin_WatchServer
 	ctx    context.Context
+	cancel context.CancelFunc // the node ending the stream
 	sent   chan *pluginv1.Change
 	block  chan struct{}
 	header atomic.Bool
@@ -66,7 +67,7 @@ func TestInfoDeclaresWatch(t *testing.T) {
 func watching(t *testing.T, p *Plugin, block chan struct{}) *watchStream {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &watchStream{ctx: ctx, sent: make(chan *pluginv1.Change, 1024), block: block}
+	w := &watchStream{ctx: ctx, cancel: cancel, sent: make(chan *pluginv1.Change, 1024), block: block}
 	done := make(chan error, 1)
 	go func() { done <- p.Watch(&pluginv1.WatchRequest{}, w) }()
 	t.Cleanup(func() {
@@ -90,6 +91,24 @@ func watching(t *testing.T, p *Plugin, block chan struct{}) *watchStream {
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("Watch never subscribed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// unwatched waits until p has let go of every Watch stream.
+func unwatched(t *testing.T, p *Plugin) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.watch.mu.Lock()
+		n := len(p.watch.subs)
+		p.watch.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Watch never let go of its stream")
 		}
 		time.Sleep(time.Millisecond)
 	}
