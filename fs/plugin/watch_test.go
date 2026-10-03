@@ -140,7 +140,8 @@ func (p *Plugin) watchedDirs() map[string]bool {
 	defer p.watch.mu.Unlock()
 	out := map[string]bool{}
 	for d := range p.watch.watched {
-		rel, _ := filepath.Rel(p.root, d)
+		root, _ := p.realRoot()
+		rel, _ := filepath.Rel(root, d)
 		out[rel] = true
 	}
 	return out

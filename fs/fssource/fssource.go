@@ -13,29 +13,30 @@ import (
 	"time"
 )
 
-// EntryKind classifies a directory entry: a subdirectory, which the fs plugin
-// projects as a well, or a file, projected as a text or url tile. The string values
-// are internal markers; callers compare by constant.
+// EntryKind classifies a directory entry. The string values are internal
+// markers; callers compare by constant.
 type EntryKind string
 
 const (
 	KindDir  EntryKind = "dir"
 	KindFile EntryKind = "file"
+	// KindLink is a symlink, listed as itself and never followed.
+	KindLink EntryKind = "link"
 )
 
-// Entry is one synthesized item from a directory listing. Name is the
-// basename within the parent directory; AbsPath is the resolved absolute
-// path (parent + "/" + Name). Size and ModTime come straight from
-// os.FileInfo. Symlinks are followed when they resolve; broken links
-// surface as Kind=KindFile with IsBrokenSymlink=true and Size=0.
+// Entry is one item from a directory listing. AbsPath is parent + "/" + Name.
+// Size and ModTime are the entry's own, from Lstat.
 type Entry struct {
-	Name            string
-	AbsPath         string
-	Kind            EntryKind
-	Size            int64
-	ModTime         time.Time
-	IsSymlink       bool
-	IsBrokenSymlink bool
+	Name    string
+	AbsPath string
+	Kind    EntryKind
+	Size    int64
+	ModTime time.Time
+	// Target is where a link lands with every symlink followed. A link that
+	// does not land (TargetKind "") names where it points instead; see
+	// brokenTarget.
+	Target     string
+	TargetKind EntryKind
 }
 
 // Read lists dir, sorts results alphabetically (so the auto-grid layout
@@ -61,48 +62,68 @@ func Read(dir string) ([]Entry, error) {
 	return out, nil
 }
 
-// entryFromFileInfo projects one os.FileInfo into an Entry. Symlinks
-// are dereferenced via os.Stat (vs Lstat) — directory or file kind
-// follows the target, and the IsSymlink flag is set either way.
+// entryFromFileInfo projects one Lstat answer into an Entry.
 func entryFromFileInfo(dir string, info os.FileInfo) Entry {
 	name := info.Name()
-	abs := filepath.Join(dir, name)
-	mode := info.Mode()
 	e := Entry{
 		Name:    name,
-		AbsPath: abs,
+		AbsPath: filepath.Join(dir, name),
+		Kind:    KindFile,
 		Size:    info.Size(),
 		ModTime: info.ModTime(),
 	}
-	if mode&os.ModeSymlink != 0 {
-		e.IsSymlink = true
-		target, err := os.Stat(abs)
-		if err != nil {
-			e.IsBrokenSymlink = true
-			e.Kind = KindFile
-			e.Size = 0
-			return e
-		}
-		if target.IsDir() {
-			e.Kind = KindDir
-		} else {
-			e.Kind = KindFile
-			e.Size = target.Size()
-		}
-		return e
-	}
-	if mode.IsDir() {
+	switch mode := info.Mode(); {
+	case mode&os.ModeSymlink != 0:
+		e.Kind = KindLink
+		e.Target, e.TargetKind = linkTarget(e.AbsPath)
+	case mode.IsDir():
 		e.Kind = KindDir
-		return e
 	}
-	e.Kind = KindFile
 	return e
 }
 
+func linkTarget(link string) (string, EntryKind) {
+	real, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		return brokenTarget(link), ""
+	}
+	fi, err := os.Stat(real)
+	switch {
+	case err != nil:
+		return brokenTarget(link), ""
+	case fi.IsDir():
+		return real, KindDir
+	default:
+		return real, KindFile
+	}
+}
+
+// brokenTarget is the path a link that does not land points at, one hop, with
+// its directory resolved: the link goes live when that path appears. When
+// that path is itself a link, the chain loops or dangles further on, and
+// naming it would make this link a link to a link; the answer is then the
+// path through the link itself, which never resolves.
+func brokenTarget(link string) string {
+	through := filepath.Join(link, filepath.Base(link))
+	dest, err := os.Readlink(link)
+	if err != nil {
+		return through
+	}
+	if !filepath.IsAbs(dest) {
+		dest = filepath.Join(filepath.Dir(link), dest)
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(dest)); err == nil {
+		dest = filepath.Join(dir, filepath.Base(dest))
+	}
+	if _, err := os.Lstat(dest); err == nil {
+		return through
+	}
+	return filepath.Clean(dest)
+}
+
 // Stat builds an Entry for a single path: the single-item counterpart to Read,
-// used to regenerate a file tile's metadata body lazily. Symlink and kind
-// handling match Read exactly, so a path listed by Read and stat'd here
-// project identically.
+// used to regenerate a file tile's metadata body lazily. A path listed by
+// Read and stat'd here project identically.
 func Stat(path string) (Entry, error) {
 	path = filepath.Clean(path)
 	info, err := os.Lstat(path)
@@ -120,13 +141,6 @@ func MetadataMarkdown(e Entry) string {
 	b.WriteString("# ")
 	b.WriteString(e.Name)
 	b.WriteString("\n\n")
-	if e.IsSymlink {
-		if e.IsBrokenSymlink {
-			b.WriteString("_broken symlink_\n\n")
-		} else {
-			b.WriteString("_symlink_\n\n")
-		}
-	}
 	if e.Kind == KindDir {
 		b.WriteString("directory\n\n")
 	}

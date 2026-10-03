@@ -147,16 +147,15 @@ func PreviewStamp(dirPath, name string) int64 {
 }
 
 // renderableBodyCap bounds how much of a file the descent body carries: a
-// document view, not a file transfer. A file past the cap falls back to the
-// metadata summary.
+// document view, not a file transfer. A file past the cap shows its
+// beginning.
 const renderableBodyCap = 4 << 20
 
 // Body returns a file's descent body in the media type its TextPresentation
-// names: real bytes for a renderable or plain file under the cap, and the
-// metadata summary otherwise. The summary is markdown that reads as itself
-// verbatim, so a plain file past the cap answers it as text/plain and its
-// declaration holds. A missing or unstattable file returns (nil, ""), and the
-// caller decides what absence means.
+// names: the bytes, up to the cap, of a renderable or plain file, and the
+// metadata summary of any other. The summary is markdown that reads as itself
+// verbatim, so it holds under either declaration. A missing or unstattable
+// file returns (nil, ""), and the caller decides what absence means.
 func Body(dirPath, name string) (data []byte, mediaType string) {
 	fullPath := filepath.Join(dirPath, name)
 	entry, err := fssource.Stat(fullPath)
@@ -167,8 +166,8 @@ func Body(dirPath, name string) (data []byte, mediaType string) {
 	if TextPresentation(name) == rpc.TextPresentationPlain {
 		mediaType = "text/plain"
 	}
-	if (Renderable(name) || IsPlainText(name)) && entry.Size <= renderableBodyCap {
-		if body, readErr := os.ReadFile(fullPath); readErr == nil {
+	if Renderable(name) || IsPlainText(name) {
+		if body, readErr := readHead(fullPath, renderableBodyCap); readErr == nil {
 			return body, mediaType
 		}
 		// Unreadable despite the stat: the metadata summary still tells the
@@ -177,9 +176,18 @@ func Body(dirPath, name string) (data []byte, mediaType string) {
 	return []byte(fssource.MetadataMarkdown(entry)), mediaType
 }
 
-// serveChunkBytes keeps each ServeContent message far under gRPC's 4 MiB
+func readHead(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, limit))
+}
+
+// ChunkBytes keeps each content message, served or read, far under gRPC's 4 MiB
 // default limit.
-const serveChunkBytes = 256 * 1024
+const ChunkBytes = 256 * 1024
 
 // ServeChunkSender is the streaming half the caller provides.
 type ServeChunkSender interface {
@@ -187,22 +195,34 @@ type ServeChunkSender interface {
 }
 
 // ServeFile streams a file's raw bytes as web content. subpath "" is the named
-// file itself; a non-empty subpath is a page-relative resource resolved
-// against the file's directory and confined to that directory's subtree, which
-// is the plugin-side guarantee, independent of the door's URL grammar. Absence
+// file itself, confined to root; a non-empty subpath is a page-relative
+// resource resolved against the file's directory and confined to that
+// directory's subtree, which is the plugin-side guarantee, independent of the
+// door's URL grammar. Both confinements see through symlinks (Resolve). A
+// named file that links out of the root is refused with that reason, a
+// resource that does is a 404 page like any other it cannot have. Absence
 // answers a 404 page; a file that is there and cannot be read is an error
 // that says why.
-func ServeFile(stream ServeChunkSender, dirPath, name, subpath string) error {
+func ServeFile(stream ServeChunkSender, root, dirPath, name, subpath string) error {
 	target := filepath.Join(dirPath, name)
-	served := name
+	served, confine := name, root
 	if subpath != "" {
 		target = filepath.Join(dirPath, filepath.FromSlash(subpath))
-		served = subpath
+		served, confine = subpath, dirPath
 		if !UnderRoot(dirPath, target) {
 			return notFoundPage(stream)
 		}
 	}
-	f, err := os.Open(target)
+	real, err := Resolve(confine, target)
+	switch {
+	case errors.Is(err, ErrOutside) && subpath == "":
+		return status.Errorf(codes.FailedPrecondition, "fs plugin: %s %v", served, err)
+	case errors.Is(err, ErrOutside), errors.Is(err, iofs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		return notFoundPage(stream)
+	case err != nil:
+		return unreadable(served, err)
+	}
+	f, err := os.Open(real)
 	if errors.Is(err, iofs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 		return notFoundPage(stream)
 	}
@@ -219,7 +239,7 @@ func ServeFile(stream ServeChunkSender, dirPath, name, subpath string) error {
 	}
 
 	mediaType := PageMediaType(served)
-	buf := make([]byte, serveChunkBytes)
+	buf := make([]byte, ChunkBytes)
 	n, readErr := io.ReadFull(f, buf)
 	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
 		return readErr

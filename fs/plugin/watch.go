@@ -37,13 +37,18 @@ const SubscriberBuffer = 64
 // may have changed. It never sends EntryRemoved: the node treats that as
 // ContextChanged for the context and retires the key by the listing's sweep,
 // so naming the key would add nothing. Empty contexts is a node from before
-// scopes, and no directory is cheap to watch, so it watches none.
+// scopes, and no directory is cheap to watch, so it watches none. A context
+// not in the tree, such as a dead link's target, never changes and is not
+// watched.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	scope := map[string]string{}
 	for _, key := range req.GetContexts() {
-		dir, err := p.abs(key)
+		dir, err := p.dir(key)
+		if errors.Is(err, errOutside) {
+			continue
+		}
 		if err != nil {
-			return err
+			return status.Errorf(codes.Unavailable, "fs plugin: watch %s: %v", key, pathErr(err))
 		}
 		scope[dir] = key
 	}

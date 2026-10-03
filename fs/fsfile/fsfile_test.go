@@ -1,6 +1,7 @@
 package fsfile
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,23 @@ import (
 	gridwellv1 "github.com/josephburnett/gridwell/api/gen/gridwell/v1"
 	"github.com/josephburnett/gridwell/api/rpc"
 )
+
+// A text file past the cap shows its first renderableBodyCap bytes, in its
+// declared presentation: a long log reads as its beginning, not as a summary
+// of itself.
+func TestBodyPastTheCapIsTheFilesBeginning(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"big.log", "big.md"} {
+		content := bytes.Repeat([]byte("0123456789abcdef"), renderableBodyCap/16+1)
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := Body(dir, name)
+		if !bytes.Equal(data, content[:renderableBodyCap]) {
+			t.Errorf("Body(%s) = %d bytes starting %q, want its first %d bytes", name, len(data), data[:min(len(data), 16)], renderableBodyCap)
+		}
+	}
+}
 
 // Every name declares a presentation; a name with no family of its own
 // renders, which is what its metadata body needs.
@@ -78,12 +96,12 @@ func TestServeFileTellsUnreadableFromAbsent(t *testing.T) {
 	}
 
 	var missing chunks
-	if err := ServeFile(&missing, dir, "gone.html", ""); err != nil || len(missing) != 1 || missing[0].Status != 404 {
+	if err := ServeFile(&missing, dir, dir, "gone.html", ""); err != nil || len(missing) != 1 || missing[0].Status != 404 {
 		t.Errorf("absent file = %v, %v; want one 404 page", missing, err)
 	}
 
 	var locked chunks
-	err := ServeFile(&locked, dir, "locked.html", "")
+	err := ServeFile(&locked, dir, dir, "locked.html", "")
 	if status.Code(err) != codes.PermissionDenied || len(locked) != 0 {
 		t.Errorf("unreadable file = %v, %v; want PermissionDenied and no page", locked, err)
 	}

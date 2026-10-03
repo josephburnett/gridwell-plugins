@@ -70,26 +70,87 @@ func New(root string, host Host) *Plugin {
 	return &Plugin{root: filepath.Clean(root), host: host, watch: newWatcher()}
 }
 
-// abs resolves a relative key under the root, refusing escapes. Keys are
-// node-supplied (from this plugin's own earlier answers), so an escape
-// is a bug or an attack either way — refuse loudly.
+// errOutside is a key that names nothing in the tree: it escapes the root by
+// name, or a directory on its way is a symlink, which this plugin lists as a
+// link and never enters (linkEntry). No listing holds such a key, so it
+// probes gone, and a call for its bytes is refused with the reason.
+var errOutside = errors.New("is not in the tree under the root")
+
+func escapes(clean string) bool {
+	return clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean)
+}
+
+// realRoot is the root with its own symlinks resolved, the base every key is
+// spelled from. A root that is not there answers its configured path, so a
+// listing finds it gone.
+func (p *Plugin) realRoot() (string, error) {
+	root, err := filepath.EvalSymlinks(p.root)
+	if gone(err) {
+		return p.root, nil
+	}
+	return root, err
+}
+
+// abs maps a key to its path under the real root, errOutside unless every
+// directory on the way is a real one. The last element may be anything, a
+// link included, so Probe and Delete act on a link itself.
 func (p *Plugin) abs(key string) (string, error) {
-	clean := path.Clean("/" + key) // the leading "/" anchors the cleanup
-	full := filepath.Join(p.root, filepath.FromSlash(strings.TrimPrefix(clean, "/")))
-	if !fsfile.UnderRoot(p.root, full) {
-		return "", status.Errorf(codes.InvalidArgument, "fs plugin: key %q escapes the root", key)
+	clean := path.Clean(key)
+	if escapes(clean) {
+		return "", errOutside
+	}
+	root, err := p.realRoot()
+	if err != nil {
+		return "", err
+	}
+	if dir := path.Dir(clean); dir != "." {
+		at := root
+		for _, part := range strings.Split(dir, "/") {
+			at = filepath.Join(at, part)
+			fi, err := os.Lstat(at)
+			switch {
+			case gone(err):
+				return filepath.Join(root, filepath.FromSlash(clean)), nil
+			case err != nil:
+				return "", err
+			case fi.Mode()&os.ModeSymlink != 0:
+				return "", errOutside
+			}
+		}
+	}
+	return filepath.Join(root, filepath.FromSlash(clean)), nil
+}
+
+// dir is abs for a context, which must not be a link itself either.
+func (p *Plugin) dir(context string) (string, error) {
+	full, err := p.abs(context)
+	if err != nil {
+		return "", err
+	}
+	if fi, err := os.Lstat(full); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", errOutside
 	}
 	return full, nil
 }
 
-// keyDirName splits a file key into its directory's absolute path and
-// the file's name.
-func (p *Plugin) keyDirName(key string) (dir, name string, err error) {
+// content is where a key's bytes live: its path with every link followed,
+// fsfile.ErrOutside when that leaves the root.
+func (p *Plugin) content(key string) (string, error) {
 	full, err := p.abs(key)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	return filepath.Dir(full), filepath.Base(full), nil
+	return fsfile.Resolve(p.root, full)
+}
+
+// refusal answers a content verb for a key it cannot read: one outside the
+// tree is a verdict with the reason, anything else a source that cannot
+// answer right now.
+func refusal(key string, err error) error {
+	if errors.Is(err, errOutside) || errors.Is(err, fsfile.ErrOutside) {
+		return status.Errorf(codes.FailedPrecondition, "fs plugin: %q %v", key, err)
+	}
+	return status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", key, pathErr(err))
 }
 
 func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
@@ -168,13 +229,17 @@ func gone(err error) bool {
 	return errors.Is(err, iofs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
-// List enumerates one directory context. A directory that is gone, or is now
-// a file, is an authoritative empty listing; one that cannot be read answers
-// Unavailable, and the node serves its rows with the source dark.
+// List enumerates one directory context. A directory that is gone, is now a
+// file, or is not in the tree (errOutside) is an authoritative empty listing;
+// one that cannot be read answers Unavailable, and the node serves its rows
+// with the source dark.
 func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	dir, err := p.abs(req.Context)
+	dir, err := p.dir(req.Context)
+	if errors.Is(err, errOutside) {
+		return &pluginv1.ListResponse{Authoritative: true}, nil
+	}
 	if err != nil {
-		return nil, err
+		return nil, status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", req.Context, pathErr(err))
 	}
 	entries, readErr := fssource.Read(dir)
 	if readErr != nil {
@@ -183,6 +248,10 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 		}
 		return nil, status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", dir, readErr)
 	}
+	root, err := p.realRoot()
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", dir, pathErr(err))
+	}
 	resp := &pluginv1.ListResponse{Authoritative: true, SourceLabel: dir}
 	for _, e := range entries {
 		key := e.Name
@@ -190,44 +259,87 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 			key = req.Context + "/" + e.Name
 		}
 		out := &pluginv1.Entry{Key: key, Label: e.Name}
-		if e.Kind == fssource.KindDir {
+		switch e.Kind {
+		case fssource.KindDir:
 			out.Kind = "well"
 			out.ChildContext = key
-			resp.Entries = append(resp.Entries, out)
-			continue
-		}
-		out.PreviewStamp = fsfile.PreviewStamp(dir, e.Name)
-		if fsfile.ServesPage(e.Name) {
-			// A file the browser presents whole is a url entry, and the node
-			// derives its address at the /content/ door, so there is none to
-			// declare. It carries no text body: a url entry has no document
-			// face beside the page.
-			out.Kind = "url"
-			out.ServesPage = true
-		} else {
-			out.Kind = "text"
-			out.TextPresentation = fsfile.TextPresentation(e.Name)
+		case fssource.KindLink:
+			linkEntry(out, root, e)
+		default:
+			fileFacts(out, dir, e.Name)
 		}
 		resp.Entries = append(resp.Entries, out)
 	}
 	return resp, nil
 }
 
+// fileFacts declares a file's content facts from its name. dir "" is a file
+// this plugin will not read, which has no picture.
+func fileFacts(out *pluginv1.Entry, dir, name string) {
+	out.PreviewStamp = fsfile.PreviewStamp(dir, name)
+	if fsfile.ServesPage(name) {
+		// A file the browser presents whole is a url entry, and the node
+		// derives its address at the /content/ door, so there is none to
+		// declare. It carries no text body: a url entry has no document
+		// face beside the page.
+		out.Kind = "url"
+		out.ServesPage = true
+		return
+	}
+	out.Kind = "text"
+	out.TextPresentation = fsfile.TextPresentation(name)
+}
+
+// linkEntry lists a symlink as a link to where it lands, so a thing reached
+// two ways is one key: a directory as a well onto the directory's own
+// context, so a link back up the tree is one grid rather than an endless
+// descent, and a file as an entry whose link_target is the file's key. A link
+// that lands outside the root, or nowhere, targets the key of where it points,
+// which no listing holds, so the node reads it dead.
+func linkEntry(out *pluginv1.Entry, root string, e fssource.Entry) {
+	target := "../" + e.Name
+	if rel, err := filepath.Rel(root, e.Target); err == nil {
+		target = filepath.ToSlash(rel)
+	}
+	reachable := e.TargetKind != "" && !escapes(target)
+	if reachable && e.TargetKind == fssource.KindDir {
+		out.Kind = "well"
+		out.ChildContext = target
+		return
+	}
+	// The content facts are the target's, for a node that predates
+	// link_target and presents the entry as content of its own.
+	if reachable {
+		fileFacts(out, filepath.Dir(e.Target), filepath.Base(e.Target))
+	} else {
+		fileFacts(out, "", e.Name)
+	}
+	out.LinkTarget = &pluginv1.EntryRef{Context: path.Dir(target), Key: target}
+}
+
 func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {
-	dir, name, err := p.keyDirName(req.Key)
-	if err != nil {
-		return err
+	real, err := p.content(req.Key)
+	var fi os.FileInfo
+	if err == nil {
+		fi, err = os.Stat(real)
 	}
-	fi, statErr := os.Lstat(filepath.Join(dir, name))
-	if statErr != nil && !gone(statErr) {
-		return status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", req.Key, pathErr(statErr))
+	if err != nil && !gone(err) {
+		return refusal(req.Key, err)
 	}
-	if statErr != nil || fi.IsDir() {
+	if err != nil || fi.IsDir() {
 		// A directory or a vanished file has no document body.
 		return stream.Send(&pluginv1.ContentChunk{})
 	}
-	data, mediaType := fsfile.Body(dir, name)
-	return stream.Send(&pluginv1.ContentChunk{Data: data, MediaType: mediaType})
+	data, mediaType := fsfile.Body(filepath.Dir(real), filepath.Base(real))
+	chunk := &pluginv1.ContentChunk{MediaType: mediaType}
+	for {
+		n := min(len(data), fsfile.ChunkBytes)
+		chunk.Data, data = data[:n], data[n:]
+		if err := stream.Send(chunk); err != nil || len(data) == 0 {
+			return err
+		}
+		chunk = &pluginv1.ContentChunk{}
+	}
 }
 
 // serveStream adapts the plugin chunk stream to fsfile's sender; the two chunk
@@ -241,53 +353,62 @@ func (w serveStream) Send(c *gridwellv1.ServeContentChunk) error {
 }
 
 func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1.Plugin_ServeContentServer) error {
-	dir, name, err := p.keyDirName(req.Key)
+	full, err := p.abs(req.Key)
 	if err != nil {
-		return err
+		return refusal(req.Key, err)
 	}
-	if fi, statErr := os.Lstat(filepath.Join(dir, name)); statErr == nil && fi.IsDir() {
+	if fi, statErr := os.Lstat(full); statErr == nil && fi.IsDir() {
 		return status.Error(codes.NotFound, "fs plugin: directories serve no page")
 	}
-	return fsfile.ServeFile(serveStream{stream}, dir, name, req.Subpath)
+	return fsfile.ServeFile(serveStream{stream}, p.root, filepath.Dir(full), filepath.Base(full), req.Subpath)
 }
 
 func (p *Plugin) GetPreview(_ context.Context, req *pluginv1.GetPreviewRequest) (*pluginv1.GetPreviewResponse, error) {
-	dir, name, err := p.keyDirName(req.Key)
-	if err != nil {
-		return nil, err
+	real, err := p.content(req.Key)
+	switch {
+	case gone(err):
+		return &pluginv1.GetPreviewResponse{}, nil
+	case err != nil:
+		return nil, refusal(req.Key, err)
 	}
-	return &pluginv1.GetPreviewResponse{Jpeg: fsfile.PreviewJPEG(dir, name)}, nil
+	return &pluginv1.GetPreviewResponse{Jpeg: fsfile.PreviewJPEG(filepath.Dir(real), filepath.Base(real))}, nil
 }
 
 func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
 	full, err := p.abs(req.Key)
-	if err != nil {
-		return nil, err
+	if errors.Is(err, errOutside) {
+		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
 	}
-	_, statErr := os.Lstat(full)
+	if err == nil {
+		_, err = os.Lstat(full)
+	}
 	switch {
-	case statErr == nil:
+	case err == nil:
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
-	case gone(statErr):
+	case gone(err):
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
 	default:
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
 	}
 }
 
-// Delete moves the source path to the trash, through Host. An already-gone
-// path succeeds: the delete gesture is idempotent.
+// Delete moves the source path to the trash, through Host; a link goes, never
+// what it points at. An already-gone path succeeds: the delete gesture is
+// idempotent. A key not in the tree is never listed, so asking to delete one
+// is a bug or an attack, refused loudly.
 func (p *Plugin) Delete(_ context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {
 	full, err := p.abs(req.Key)
-	if err != nil {
-		return nil, err
+	if errors.Is(err, errOutside) {
+		return nil, status.Errorf(codes.InvalidArgument, "fs plugin: key %q %v", req.Key, err)
 	}
-	_, statErr := os.Lstat(full)
+	if err == nil {
+		_, err = os.Lstat(full)
+	}
 	switch {
-	case gone(statErr):
+	case gone(err):
 		return &pluginv1.DeleteResponse{}, nil
-	case statErr != nil:
-		return nil, status.Errorf(codes.Unavailable, "fs plugin: delete %s: %v", req.Key, pathErr(statErr))
+	case err != nil:
+		return nil, status.Errorf(codes.Unavailable, "fs plugin: delete %s: %v", req.Key, pathErr(err))
 	}
 	if err := p.host.Trash(full); err != nil {
 		return nil, status.Errorf(codes.Internal, "fs plugin: remove %s: %v", full, err)
