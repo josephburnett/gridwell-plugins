@@ -89,12 +89,16 @@ type watcher struct {
 	// add is the OS watch call; a test injects the limit the OS refuses with.
 	add func(fsw *fsnotify.Watcher, dir string) error
 
-	mu          sync.Mutex
-	fsw         *fsnotify.Watcher
-	watched     map[string]bool
-	subs        map[*watchSub]struct{}
-	pending     map[string]bool
+	mu      sync.Mutex
+	fsw     *fsnotify.Watcher
+	watched map[string]bool
+	subs    map[*watchSub]struct{}
+	pending map[string]bool
+	// limitLogged and errLogged hold each condition to one log line per
+	// episode: the limit's ends at a subscribe the OS accepts, an OS error's
+	// at the next event delivered.
 	limitLogged bool
+	errLogged   bool
 }
 
 // watchSub is one Watch stream: its scope (absolute directory to context
@@ -216,8 +220,8 @@ func (w *watcher) watchDir(dir string) error {
 }
 
 // verdict is what an OS refusal means to the node. Running out of watches is
-// ResourceExhausted, logged once per episode, and the node shows it as the
-// source's health.
+// ResourceExhausted: the node turns live updates off for the stream, and
+// listings still answer.
 func (w *watcher) verdict(dir string, err error) error {
 	switch {
 	case errors.Is(err, iofs.ErrNotExist), errors.Is(err, iofs.ErrPermission):
@@ -279,6 +283,7 @@ func (w *watcher) event(fsw *fsnotify.Watcher, ev fsnotify.Event) {
 	if w.fsw != fsw {
 		return
 	}
+	w.errLogged = false
 	path := filepath.Clean(ev.Name)
 	switch {
 	case w.watched[path] && ev.Has(fsnotify.Remove|fsnotify.Rename):
@@ -299,13 +304,16 @@ func (w *watcher) event(fsw *fsnotify.Watcher, ev fsnotify.Event) {
 // eventError is an asynchronous OS verdict. An overflow lost events, so every
 // shown directory may have changed.
 func (w *watcher) eventError(fsw *fsnotify.Watcher, err error) {
-	if !errors.Is(err, fsnotify.ErrEventOverflow) {
-		log.Printf("fs plugin: change notifications: %v", err)
-		return
-	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.fsw != fsw {
+		return
+	}
+	if !errors.Is(err, fsnotify.ErrEventOverflow) {
+		if !w.errLogged {
+			w.errLogged = true
+			log.Printf("fs plugin: change notifications: %v", err)
+		}
 		return
 	}
 	for s := range w.subs {

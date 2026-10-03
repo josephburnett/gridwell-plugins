@@ -3,6 +3,7 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -272,8 +273,8 @@ func TestWatchFansOutToEveryStream(t *testing.T) {
 	}
 }
 
-// Running out of OS watches is the stream's error, so the node shows it as
-// the source's health; it is logged once, and no half-scope stays watched.
+// Running out of OS watches is the stream's error, so the node turns live
+// updates off while listings still answer; no half-scope stays watched.
 func TestWatchLimitIsTheStreamError(t *testing.T) {
 	root := t.TempDir()
 	mkdirs(t, root, "a", "b")
@@ -284,9 +285,6 @@ func TestWatchLimitIsTheStreamError(t *testing.T) {
 		}
 		return fsw.Add(dir)
 	}
-	var logged bytes.Buffer
-	log.SetOutput(&logged)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	for range 2 {
 		s := &watchStream{ctx: context.Background(), header: make(chan struct{}), changes: make(chan string, 1)}
@@ -302,9 +300,6 @@ func TestWatchLimitIsTheStreamError(t *testing.T) {
 		if got := p.watchedDirs(); len(got) != 0 {
 			t.Fatalf("a refused scope left %v watched", got)
 		}
-	}
-	if n := strings.Count(logged.String(), "refused another change watch"); n != 1 {
-		t.Fatalf("logged %d times, want once:\n%s", n, logged.String())
 	}
 }
 
@@ -326,4 +321,90 @@ func TestWatchRewatchesADirectoryCreatedAgain(t *testing.T) {
 	}
 	write(t, filepath.Join(root, "a", "f"), "")
 	o.until(t, "a")
+}
+
+// An OS overflow lost events, so every directory in the scope may have
+// changed and each is announced.
+func TestWatchOverflowAnnouncesTheWholeScope(t *testing.T) {
+	root := t.TempDir()
+	mkdirs(t, root, "a", "b")
+	p := New(root, nil)
+	o := openWatch(t, p, ".", "a", "b")
+	p.watch.mu.Lock()
+	fsw := p.watch.fsw
+	p.watch.mu.Unlock()
+	p.watch.eventError(fsw, fsnotify.ErrEventOverflow)
+	o.all(t, ".", "a", "b")
+}
+
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &logged
+}
+
+// The watch limit logs when it starts, not on each refusal; a subscribe the
+// OS accepts ends the episode, and the next refusal logs again.
+func TestWatchLimitLogsOncePerEpisode(t *testing.T) {
+	root := t.TempDir()
+	mkdirs(t, root, "a", "b")
+	p := New(root, nil)
+	limited := true
+	p.watch.add = func(fsw *fsnotify.Watcher, dir string) error {
+		if limited && filepath.Base(dir) == "b" {
+			return fmt.Errorf("inotify_add_watch: %w", syscall.ENOSPC)
+		}
+		return fsw.Add(dir)
+	}
+	logged := captureLog(t)
+	refuse := func() {
+		t.Helper()
+		s := &watchStream{ctx: context.Background(), header: make(chan struct{}), changes: make(chan string, 1)}
+		if err := p.Watch(&pluginv1.WatchRequest{Contexts: []string{"a", "b"}}, s); status.Code(err) != codes.ResourceExhausted {
+			t.Fatalf("Watch = %v; want ResourceExhausted", err)
+		}
+	}
+	count := func() int { return strings.Count(logged.String(), "refused another change watch") }
+
+	refuse()
+	refuse()
+	if n := count(); n != 1 {
+		t.Fatalf("one episode logged %d times:\n%s", n, logged)
+	}
+	limited = false
+	openWatch(t, p, "a", "b").close(t)
+	limited = true
+	refuse()
+	if n := count(); n != 2 {
+		t.Fatalf("a second episode logged %d lines in all, want 2:\n%s", n, logged)
+	}
+}
+
+// Any other OS notification error logs when it starts; an event delivered
+// again ends the episode, and the next error logs again.
+func TestWatchErrorLogsOncePerEpisode(t *testing.T) {
+	root := t.TempDir()
+	mkdirs(t, root, "a")
+	p := New(root, nil)
+	o := openWatch(t, p, "a")
+	p.watch.mu.Lock()
+	fsw := p.watch.fsw
+	p.watch.mu.Unlock()
+	logged := captureLog(t)
+	broken := errors.New("read: input/output error")
+	count := func() int { return strings.Count(logged.String(), broken.Error()) }
+
+	p.watch.eventError(fsw, broken)
+	p.watch.eventError(fsw, broken)
+	if n := count(); n != 1 {
+		t.Fatalf("one episode logged %d times:\n%s", n, logged)
+	}
+	write(t, filepath.Join(root, "a", "x"), "")
+	o.until(t, "a")
+	p.watch.eventError(fsw, broken)
+	if n := count(); n != 2 {
+		t.Fatalf("a second episode logged %d lines in all, want 2:\n%s", n, logged)
+	}
 }
