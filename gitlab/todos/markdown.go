@@ -11,6 +11,10 @@ import (
 // of the target link. A plugin-served HTML page cannot do that: it is
 // sandboxed, and its links stay inside the sandbox.
 
+// TextPresentation is the todo tile's declared presentation: the body is
+// markdown, so it shows rendered and as its source.
+const TextPresentation = "both"
+
 // SnippetRunes bounds the body excerpt on the face.
 const SnippetRunes = 240
 

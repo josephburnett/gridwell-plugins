@@ -20,6 +20,8 @@ github.com/jhump/protoreflect v1.17.0 h1:qOEr613fac2lOuTgWN4tPAtLL7fUSbuJL5X5Xum
 github.com/jhump/protoreflect v1.17.0/go.mod h1:h9+vUUL38jiBzck8ck+6G/aeMX8Z4QUY/NiJPwPNi+8=
 github.com/josephburnett/gridwell-plugins/guest v0.1.0 h1:ifGeNEwq5OZ+iLuAalmfYL36Ym4u0jtWzXM6thk2jwY=
 github.com/josephburnett/gridwell-plugins/guest v0.1.0/go.mod h1:K/NNXVFn0yN3OXXhBa1+WnPetpqbRAWN/gkcPCG7RGg=
+github.com/josephburnett/gridwell-plugins/memo v0.2.0 h1:uRbfUivEVl52Jpz8tWcZnIkOfP4HI/zHAU6CJbJ/oUE=
+github.com/josephburnett/gridwell-plugins/memo v0.2.0/go.mod h1:6ExwQqnuu0GaIcsOGvoISayZogF0Q+DRGL377zGorKM=
 github.com/josephburnett/gridwell/api v0.4.0 h1:bzk+/0IpplhpBJbH+mZJ7ys53jMW5W8iDbLCQaERM34=
 github.com/josephburnett/gridwell/api v0.4.0/go.mod h1:YOip8PZe0bfa17occHRbMLZAeDRFnuSS4nvzCB8z+oc=
 github.com/mattn/go-colorable v0.1.9/go.mod h1:u6P/XSegPjTcexA+o6vUJrdnUu04hMope9wVRipJSqc=

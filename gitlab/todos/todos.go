@@ -7,7 +7,6 @@
 package todos
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -107,18 +106,24 @@ func (t *Todo) Action() string {
 	return strings.ReplaceAll(t.ActionName, "_", " ")
 }
 
-// DoneMark is the resolved todo's banner glyph: the filled green checkbox,
-// not a hairline check, because the mark must read at a distance — a week is
-// scanned zoomed out, and done-ness is the one fact worth seeing from there.
+// DoneMark is a resolved todo's status: the filled green checkbox, not a
+// hairline check, because a week is scanned zoomed out and done-ness is the
+// one fact worth seeing from there.
 const DoneMark = "✅"
 
-// Label is the tile's banner: a done mark, who it is from, the short
+// StatusDetail is DoneMark once the todo is done and nothing while it is
+// pending, the normal state.
+func (t *Todo) StatusDetail() string {
+	if t.Done() {
+		return DoneMark
+	}
+	return ""
+}
+
+// Label is the tile's name, the same done or open: who it is from, the short
 // ref, and the title.
 func (t *Todo) Label() string {
 	var b strings.Builder
-	if t.Done() {
-		b.WriteString(DoneMark + " ")
-	}
 	if name := strings.TrimSpace(t.Author.Name); name != "" {
 		b.WriteString(name)
 		b.WriteString(": ")
@@ -180,23 +185,5 @@ func ParseWeekKey(key string) (time.Time, bool) {
 	return t, true
 }
 
-// HintEpoch anchors the root calendar: the month containing it is row y=0,
-// later months climb into negative y, and earlier months descend. It is a
-// fixed date, so a week's hint is the same on every host and every restart and
-// two nodes never disagree about where a week first lands.
-var HintEpoch = time.Date(2026, time.August, 24, 0, 0, 0, 0, time.UTC)
-
-// WeekCell is the root hint for the week starting at start: one row per month,
-// the month the Monday falls in, with the month's weeks left to right by their
-// Monday's position in the month, x from 0 to 4. It reads as a calendar page,
-// newest at the top.
-func WeekCell(start time.Time) (x, y int64) {
-	u := start.UTC()
-	months := (u.Year()-HintEpoch.Year())*12 + int(u.Month()-HintEpoch.Month())
-	return int64((u.Day() - 1) / 7), -int64(months)
-}
-
-// WeekLabel names a week well by its Monday and its counts.
-func WeekLabel(start time.Time, open, done int) string {
-	return fmt.Sprintf("%s · %d open · %d done", start.UTC().Format("2006-01-02"), open, done)
-}
+// WeekLabel names a week well by its Monday.
+func WeekLabel(start time.Time) string { return start.UTC().Format("2006-01-02") }
