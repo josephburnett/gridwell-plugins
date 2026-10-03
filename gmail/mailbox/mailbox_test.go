@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/josephburnett/gridwell-plugins/memo/calendar"
 )
 
 func at(s string) time.Time {
@@ -54,27 +56,36 @@ func TestCollectionsAreInboxThenStarred(t *testing.T) {
 	}
 }
 
-// The tile's banner reads the state marks first, so unread and starred read
-// from a zoomed-out grid where the text does not — and the SAME message reads
-// the same in both grids, because both derive it from the same view.
-func TestLabelLeadsWithTheStateMarks(t *testing.T) {
+// A tile's name is its subject whatever its state, and its state is one
+// emoji in status_detail only when there is something to notice: unread, or
+// starred where the grid does not already say so. A read message says
+// nothing.
+func TestTheLabelIsTheSubjectAndStateIsQuiet(t *testing.T) {
 	m := msg("a1", "lunch", "2026-01-05T14:00:00Z")
 	cases := []struct {
-		v    View
-		want string
+		v                   View
+		all, inbox, starred string
 	}{
-		{View{Message: m}, "Alice: lunch"},
-		{View{Message: m, Unread: true}, UnreadMark + " Alice: lunch"},
-		{View{Message: m, Starred: true}, StarMark + " Alice: lunch"},
-		{View{Message: m, Unread: true, Starred: true}, UnreadMark + StarMark + " Alice: lunch"},
+		{View{Message: m}, "", "", ""},
+		{View{Message: m, Unread: true}, UnreadMark, UnreadMark, UnreadMark},
+		{View{Message: m, Starred: true}, StarMark, StarMark, ""},
+		{View{Message: m, Unread: true, Starred: true}, UnreadMark, UnreadMark, UnreadMark},
 	}
 	for _, c := range cases {
-		if got := c.v.Label(); got != c.want {
-			t.Errorf("label = %q, want %q", got, c.want)
+		entries := map[string]*Entry{
+			AllMailContext: CollectionEntries([]View{c.v})[0],
+			InboxContext:   LabelEntries(InboxContext, []View{c.v})[0],
+			StarredContext: LabelEntries(StarredContext, []View{c.v})[0],
 		}
-	}
-	if got := (View{Message: m, Unread: true}).StatusDetail(); got != "unread" {
-		t.Errorf("status = %q", got)
+		for ctx, want := range map[string]string{AllMailContext: c.all, InboxContext: c.inbox, StarredContext: c.starred} {
+			e := entries[ctx]
+			if e.Label != "lunch" {
+				t.Errorf("%+v in %s: label = %q, want the subject", c.v, ctx, e.Label)
+			}
+			if e.StatusDetail != want {
+				t.Errorf("%+v in %s: status = %q, want %q", c.v, ctx, e.StatusDetail, want)
+			}
+		}
 	}
 }
 
@@ -86,10 +97,6 @@ func TestTitleFallsBackToTheSnippetThenSaysItIsBlank(t *testing.T) {
 	}
 	if got := (&Message{}).Title(); got != NoSubject {
 		t.Errorf("title = %q", got)
-	}
-	// No display name: the address is who it is from.
-	if got := (&Message{FromEmail: "bot@example.com"}).From(); got != "bot@example.com" {
-		t.Errorf("from = %q", got)
 	}
 }
 
@@ -113,36 +120,34 @@ func TestParseFromKeepsWhatItCannotParse(t *testing.T) {
 	}
 }
 
-// The calendar hint is anchored to a fixed epoch in UTC, so a message lands
-// on the same cell on every host and after every restart.
-func TestPlacementIsACalendarInUTC(t *testing.T) {
-	if got := Day(HintEpoch); got != 0 {
-		t.Errorf("epoch day = %d", got)
+// A message's hint is the shared calendar's cell for its date, a function of
+// the message alone: a message that arrives late, earlier in the same day,
+// moves no other message's hint.
+func TestHintsAreTheCalendarCellOfTheDate(t *testing.T) {
+	one := []View{
+		{Message: msg("b", "two", "2026-01-03T10:00:00Z")},
+		{Message: msg("c", "three", "2026-01-04T10:00:00Z")},
 	}
-	// Late on the 5th in a zone eight hours west is still the 6th in UTC, and
-	// the hint must not shift with the host.
-	east := time.FixedZone("east", 8*3600)
-	if Day(at("2026-01-06T01:00:00Z")) != Day(at("2026-01-06T01:00:00Z").In(east)) {
-		t.Error("the hint moved with the zone")
+	more := append([]View{{Message: msg("a", "one", "2026-01-03T09:00:00Z")}}, one...)
+	before := map[string]*Entry{}
+	for _, e := range CollectionEntries(one) {
+		before[e.Key] = e
 	}
-	x, y := Cell(at("2026-01-03T00:00:00Z"), 2)
-	if x != 2*MessageTileW || y != -2 {
-		t.Errorf("cell = %d,%d", x, y)
-	}
-}
-
-// The card is markdown ABOUT the email and carries no link: the email is what
-// the tile opens into, and a link would open a second, weaker copy of it.
-func TestMarkdownIsTheCard(t *testing.T) {
-	v := View{Message: msg("a1", "lunch", "2026-01-05T14:03:00Z"), Unread: true, Starred: true}
-	got := string(Markdown(v))
-	for _, want := range []string{"# " + UnreadMark + StarMark + " lunch", "from Alice <alice@example.com>", "2026-01-05 14:03 UTC", "> about lunch"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("card missing %q:\n%s", want, got)
+	for _, e := range CollectionEntries(more) {
+		m, _ := ParseKey(e.Key)
+		var date time.Time
+		for _, v := range more {
+			if v.ID == m {
+				date = v.Date
+			}
 		}
-	}
-	if strings.Contains(got, "](") {
-		t.Errorf("the card carries a link:\n%s", got)
+		x, y := calendar.Cell(date, MessageTileW)
+		if h := e.PlacementHint; h.X != x || h.Y != y || h.W != MessageTileW || h.H != 1 {
+			t.Errorf("%s hint = %+v, want the calendar's (%d,%d)", e.Key, h, x, y)
+		}
+		if b, ok := before[e.Key]; ok && (b.PlacementHint.X != e.PlacementHint.X || b.PlacementHint.Y != e.PlacementHint.Y) {
+			t.Errorf("%s moved from %+v to %+v when an earlier message arrived", e.Key, b.PlacementHint, e.PlacementHint)
+		}
 	}
 }
 
@@ -166,9 +171,8 @@ func TestWrapPlainEscapes(t *testing.T) {
 	}
 }
 
-// Every entry is a text tile that serves a page, hinted as a calendar. The
-// root context gets no menu row of its own: the plugin's own (+) row already
-// opens it.
+// Every entry is a url tile that serves a page, and every context is a menu
+// entry.
 func TestEntriesAndMenu(t *testing.T) {
 	views := []View{
 		{Message: msg("a", "one", "2026-01-03T09:00:00Z")},
@@ -184,17 +188,10 @@ func TestEntriesAndMenu(t *testing.T) {
 			t.Fatalf("entry = %+v", e)
 		}
 	}
-	// One row per day, in arrival order across the row.
-	if es[0].PlacementHint.X != 0 || es[1].PlacementHint.X != MessageTileW {
-		t.Errorf("same-day hints = %+v %+v", es[0].PlacementHint, es[1].PlacementHint)
-	}
-	if es[2].PlacementHint.X != 0 || es[2].PlacementHint.Y != es[0].PlacementHint.Y-1 {
-		t.Errorf("next-day hint = %+v", es[2].PlacementHint)
-	}
 
 	menu := MenuEntries()
-	if len(menu) != len(Collections) || menu[0].Context != InboxContext ||
-		menu[1].Context != StarredContext || menu[1].Label != "starred" {
-		t.Fatalf("menu = %+v, want one entry per collection", menu)
+	if len(menu) != len(Collections)+1 || menu[0].Context != InboxContext ||
+		menu[1].Context != StarredContext || menu[1].Label != "starred" || menu[2].Context != AllMailContext {
+		t.Fatalf("menu = %+v, want one entry per label, then all mail", menu)
 	}
 }

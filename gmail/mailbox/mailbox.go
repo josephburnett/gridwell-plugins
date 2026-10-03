@@ -1,7 +1,7 @@
 // Package mailbox is the pure half of the gmail plugin: the message record,
-// the two Gmail labels it projects, the keys, labels and placement hints
-// derived from them, the memory of every message seen, and the disposable
-// cache file that memory rewarms itself from. There is no HTTP and no gRPC
+// the two Gmail labels it projects and all mail, their union, the keys and
+// entries derived from them, and the memory of every message seen, with the
+// snapshot of it the plugin's cache file keeps. There is no HTTP and no gRPC
 // here, so everything is unit-tested against fakes, and the plugin package
 // only wires it to the wire.
 package mailbox
@@ -37,7 +37,7 @@ type Message struct {
 }
 
 // View is a message as one grid shows it: the record, plus the state Memory
-// owns. Nothing derives a label, a card or an entry from a bare Message, so
+// owns. Nothing derives a status or an entry from a bare Message, so
 // the mutable half can never be read from a stale copy.
 type View struct {
 	Message
@@ -66,7 +66,7 @@ func SameViews(a, b []View) bool {
 	return true
 }
 
-// Collection is one of the two Gmail labels this plugin projects. Key is the
+// Collection is one of the two Gmail labels this plugin walks. Key is the
 // plugin's context key, stable forever. LabelIDs are the label ids Gmail's
 // messages.list takes. Label is the face of the (+) menu row that opens it.
 type Collection struct {
@@ -91,14 +91,31 @@ const UnreadLabel = "UNREAD"
 // StarredLabel is Gmail's label id for a starred message.
 const StarredLabel = "STARRED"
 
-// Collections is the projection, in the order the (+) menu offers it.
+// Collections are the labels walked, in the order the (+) menu offers them.
 // InboxContext is first because it is the collection to read first.
 var Collections = []Collection{
 	{Key: InboxContext, LabelIDs: []string{"INBOX"}, Label: "inbox"},
 	{Key: StarredContext, LabelIDs: []string{StarredLabel}, Label: "starred"},
 }
 
-// LookupCollection resolves a context key to its collection.
+// AllMailContext is the union of the labels walked: each message once, its
+// one tile, which every label lists a link to. It is not Gmail's All Mail
+// label, which this plugin never walks.
+const (
+	AllMailContext = "all"
+	AllMailLabel   = "all mail"
+)
+
+// Contexts are every context this plugin lists: the labels, then all mail.
+func Contexts() []string {
+	out := make([]string, 0, len(Collections)+1)
+	for _, c := range Collections {
+		out = append(out, c.Key)
+	}
+	return append(out, AllMailContext)
+}
+
+// LookupCollection resolves a label's context key to its collection.
 func LookupCollection(key string) (Collection, bool) {
 	for _, c := range Collections {
 		if c.Key == key {
@@ -155,50 +172,24 @@ func (m *Message) Title() string {
 	return NoSubject
 }
 
-// From is who the message is from: the sender's name, else their address.
-func (m *Message) From() string {
-	if n := strings.TrimSpace(m.FromName); n != "" {
-		return n
-	}
-	return strings.TrimSpace(m.FromEmail)
-}
-
-// UnreadMark is the unread message's banner glyph, and StarMark the starred
-// one. They lead the label, so state reads from a zoomed-out grid where the
-// text does not.
+// UnreadMark and StarMark are the status_detail of an unread and a starred
+// message: one emoji, which the client draws beside the name.
 const (
 	UnreadMark = "●"
 	StarMark   = "★"
 )
 
-// Label is the tile's banner: the state marks, the sender, and the subject.
-// It is the same string wherever the message appears, so the inbox and the
-// starred grid never disagree about one email.
-func (v View) Label() string {
-	var b strings.Builder
-	if v.Unread {
-		b.WriteString(UnreadMark)
+// StatusDetail is what the message's tile in context has to notice: unread,
+// else starred outside the starred grid, where the grid already says so, else
+// nothing.
+func (v View) StatusDetail(context string) string {
+	switch {
+	case v.Unread:
+		return UnreadMark
+	case v.Starred && context != StarredContext:
+		return StarMark
 	}
-	if v.Starred {
-		b.WriteString(StarMark)
-	}
-	if b.Len() > 0 {
-		b.WriteString(" ")
-	}
-	if from := v.From(); from != "" {
-		b.WriteString(from)
-		b.WriteString(": ")
-	}
-	b.WriteString(v.Title())
-	return b.String()
-}
-
-// StatusDetail is the one word the tile carries about its state.
-func (v View) StatusDetail() string {
-	if v.Unread {
-		return "unread"
-	}
-	return "read"
+	return ""
 }
 
 // ParseFrom splits a From header into a display name and an address. A header
@@ -216,29 +207,6 @@ func ParseFrom(header string) (name, addr string) {
 	return strings.TrimSpace(a.Name), strings.TrimSpace(a.Address)
 }
 
-// ── placement ──────────────────────────────────────────────────────────
-
-// HintEpoch anchors the calendar a collection is hinted as: the day
-// containing it is row y=0, later days climb into negative y, and earlier
-// days descend. It is a fixed date, so a message's hint is the same on every
-// host and every restart and two nodes never disagree about where a message
-// first lands.
-var HintEpoch = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-
-// MessageTileW is a message tile's hinted width: two cells, so the sender and
-// the subject read together on one banner.
+// MessageTileW is a message tile's hinted width: two cells, so a subject
+// reads on one banner.
 const MessageTileW = 2
-
-// Day is the number of whole days from HintEpoch to t, in UTC because Gmail's
-// internalDate is UTC and a hint must never shift with the host's zone.
-func Day(t time.Time) int64 {
-	u := t.UTC()
-	d := time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
-	return int64(d.Sub(HintEpoch).Hours() / 24)
-}
-
-// Cell is the hint for the index'th message of its day: one row per day,
-// newest at the top, the day's messages left to right in arrival order.
-func Cell(date time.Time, index int) (x, y int64) {
-	return int64(index) * MessageTileW, -Day(date)
-}

@@ -1,10 +1,10 @@
 // Package plugin is the gmail plugin: the wire half over
 // gridwell-plugins/gmail/mailbox. It projects two of Gmail's labels — the
 // inbox and the starred mail — as two grids, one context each, read through
-// the Gmail API. A message is a text tile that serves a page: its face and
-// document are a markdown card about the email, and descending into it opens
-// the email itself, as the HTML the sender wrote, through the node's content
-// door.
+// the Gmail API, and all mail, their union, as a third. A message is one url
+// tile in all mail that serves a page, the email itself as the HTML the
+// sender wrote, through the node's content door; a label lists links to it,
+// so a message starred out of the inbox keeps its one tile.
 //
 // It is a READ-ONLY projection. The token it holds carries the
 // gmail.readonly scope and nothing else, and there is no Delete, no
@@ -23,17 +23,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
-	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/josephburnett/gridwell-plugins/gmail/mailbox"
+	"github.com/josephburnett/gridwell-plugins/memo"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
@@ -62,14 +62,39 @@ const SweepEvery = 24 * time.Hour
 // time, and the node's refresh paints the rest in when it lands.
 const DefaultFirstAnswer = 2 * time.Second
 
-// DefaultMaxMessages bounds one collection's grid. A mailbox has no end, and
-// a grid with a hundred thousand tiles on it is not a place. The newest N are
-// what a person is looking at; older mail is what search is for.
-//
-// It is not a truncation the plugin hides: a read that stops here is not a
-// whole read, and mailbox.Memory's watermark keeps everything below it rather
-// than retiring tiles the read never reached.
+// DefaultMaxMessages bounds one walk of one label: a mailbox has no end, and
+// the newest N are what a person is looking at. It bounds the WALK, not the
+// grid: a read that stops here is not a whole read, and mailbox.Memory's
+// watermark keeps every message remembered below it rather than retiring
+// tiles the read never reached.
 const DefaultMaxMessages = 500
+
+// MinPollInterval is the fastest a watched plugin polls Gmail's history,
+// whatever the refresh window says: a window shorter than a refresh would
+// leave it always refreshing. Reads still refresh on the configured window —
+// a tiny one is how a test says "refresh on every read".
+const MinPollInterval = time.Second
+
+// account is the one key every refresh runs under. Gmail's history is
+// account-wide, and one history id is current to every context at once, so a
+// refresh is of the whole account, never of one context.
+const account = "account"
+
+// cacheFile is the memory's file in the state directory.
+const cacheFile = "gmail.json"
+
+// cacheVersion is bumped whenever cache changes shape.
+const cacheVersion = 1
+
+// cache is what the cache file holds: the memory, and the plugin's own
+// stamps — when each refresh and the last full walk landed — so a restart
+// inside the refresh window answers from the file without calling Gmail, and
+// the consistency pass keeps its schedule across restarts.
+type cache struct {
+	Memory   mailbox.Snapshot     `json:"memory"`
+	WalkedAt map[string]time.Time `json:"walkedAt,omitempty"`
+	SweptAt  time.Time            `json:"sweptAt,omitempty"`
+}
 
 // Source is Gmail, as much of it as this plugin reads. *gmailapi.Client is
 // the production implementation; a test fakes it without any HTTP at all.
@@ -93,42 +118,33 @@ type Source interface {
 // Plugin implements pluginv1.PluginServer.
 type Plugin struct {
 	pluginv1.UnimplementedPluginServer
-	src         Source
-	mem         *mailbox.Memory
-	refresh     time.Duration
-	firstAnswer time.Duration
-	max         int
-	now         func() time.Time
-	// cache is the memory's file in the state directory, "" when the node
-	// handed no state_dir — then the plugin runs cold at every start.
-	cache string
-	// logf is the plugin's one log door: the refresh's narration, and what
-	// must not be swallowed and must not fail a read — a cache it could not
-	// read or write, a metadata fetch that failed.
-	logf func(format string, args ...any)
+	src     Source
+	mem     *mailbox.Memory
+	refresh time.Duration
+	max     int
+	clock   memo.Clock
+	// logf is the plugin's one log door: what must not be swallowed and must
+	// not fail a read — a cache it could not read or write, a metadata fetch
+	// that failed — once per episode (episodes).
+	logf     func(format string, args ...any)
+	episodes episodes
+	// reauth is the command that writes a token Google accepts, which Info's
+	// refusal names.
+	reauth string
+	// served latches the first Info that passed: a token refused later is a
+	// source gone dark, which the reads report.
+	served atomic.Bool
 
-	// A refresh is of the whole account, never of one collection: Gmail's
-	// history is account-wide, and one history id is current to every
-	// collection at once.
-	mu       sync.Mutex
-	syncedAt time.Time // last refresh that landed
-	sweptAt  time.Time // last full walk that landed
-	// flight is the refresh in progress. A List that finds one joins it
-	// instead of starting its own, because the node lists a context on every
-	// GetGrid and GetTile and a burst of reads must cost Gmail one refresh,
-	// not one per reader.
-	flight *flight
-	// failed is the last refresh's error until a refresh lands. A warm read
-	// answers it, having not waited to hear it.
-	failed error
+	life    *memo.Life
+	file    *memo.File[cache]
+	flights *memo.Flights
+	changes *memo.Changes
+	// landing counts refreshes walked and not yet landed (saved and
+	// published), so a test can wait until the plugin is still.
+	landing atomic.Int32
 
-	watchers watchers
-}
-
-// flight is one refresh in progress; done closes when err is final.
-type flight struct {
-	done chan struct{}
-	err  error
+	mu      sync.Mutex
+	sweptAt time.Time // last full walk that landed
 }
 
 // Options tunes a plugin. Zero values take the defaults.
@@ -144,6 +160,12 @@ type Options struct {
 	// Logf takes every line the plugin writes. It defaults to the standard
 	// logger, which the node captures from the subprocess's stderr.
 	Logf func(format string, args ...any)
+	// Reauth is the command that writes a new token, which Info names when
+	// Google refuses the one it has.
+	Reauth string
+	// Linger is how long history is polled after the last stream needing it
+	// leaves: memo.DefaultLinger when zero, at once when negative.
+	Linger time.Duration
 }
 
 // New builds a plugin over src. A state directory holding a cache file is
@@ -151,107 +173,127 @@ type Options struct {
 // listing is answered from what the last process walked.
 func New(src Source, o Options) *Plugin {
 	p := &Plugin{
-		src:         src,
-		mem:         mailbox.NewMemory(),
-		refresh:     o.Refresh,
-		firstAnswer: o.FirstAnswer,
-		max:         o.MaxMessages,
-		now:         o.Now,
-		logf:        o.Logf,
+		src:     src,
+		mem:     mailbox.NewMemory(),
+		refresh: o.Refresh,
+		max:     o.MaxMessages,
+		clock:   memo.System,
+		logf:    o.Logf,
+		reauth:  o.Reauth,
+		life:    memo.NewLife(),
 	}
 	if p.refresh <= 0 {
 		p.refresh = DefaultRefresh
 	}
-	if p.firstAnswer <= 0 {
-		p.firstAnswer = DefaultFirstAnswer
-	}
 	if p.max <= 0 {
 		p.max = DefaultMaxMessages
 	}
-	if p.now == nil {
-		p.now = time.Now
+	if o.Now != nil {
+		p.clock = clock{now: o.Now}
+	}
+	if o.FirstAnswer <= 0 {
+		o.FirstAnswer = DefaultFirstAnswer
 	}
 	if p.logf == nil {
 		p.logf = log.Printf
 	}
-	if dir := strings.TrimSpace(o.StateDir); dir != "" {
-		p.cache = filepath.Join(dir, mailbox.CacheFile)
-		p.loadCache()
+	p.episodes.logf = p.logf
+	p.file = memo.NewFile[cache](strings.TrimSpace(o.StateDir), cacheFile, cacheVersion, p.logf)
+	p.flights = memo.NewFlights(p.life, memo.FlightOptions{
+		Name:        "gmail plugin",
+		Walk:        p.walkAccount,
+		Window:      p.refresh,
+		FirstAnswer: o.FirstAnswer,
+		Landed:      p.landed,
+		Clock:       p.clock,
+		Logf:        p.logf,
+	})
+	p.changes = memo.NewChanges(p.life, memo.ChangeOptions{
+		Unscoped: mailbox.Contexts(),
+		Work:     work,
+		Do:       p.poll,
+		Linger:   o.Linger,
+		Clock:    p.clock,
+	})
+	if c, ok := p.file.Load(); ok {
+		p.mem.Restore(c.Memory)
+		p.flights.Restore(c.WalkedAt)
+		p.sweptAt = c.SweptAt
 	}
 	return p
 }
 
-// loadCache folds the last process's memory in, with when its last refresh
-// and full walk landed: a refresh is fresh for the refresh window whichever
-// process ran it, so a restart inside that window answers every listing from
-// the file without touching Gmail, and one past it catches up from the
-// remembered history id instead of walking. A missing file is the first boot,
-// which is not news; anything else is reported and the plugin starts cold,
-// because a cache is disposable and a walk rebuilds it, but a cache that
-// cannot be read must not vanish in silence.
-func (p *Plugin) loadCache() {
-	snap, err := mailbox.LoadCache(p.cache)
-	switch {
-	case err == nil:
-		p.mem.Restore(snap)
-		p.syncedAt, p.sweptAt = snap.SyncedAt, snap.SweptAt
-	case errors.Is(err, fs.ErrNotExist):
-	default:
-		p.logf("gmail plugin: cache: %v (starting cold)", err)
-	}
-}
+// clock is memo's clock with the time a test sets.
+type clock struct{ now func() time.Time }
 
-// saveCache writes memory back after a refresh lands. A failure is reported
-// and nothing else: the refresh succeeded, the answer is good, and only the
-// next restart pays for the lost write.
-func (p *Plugin) saveCache() {
-	if p.cache == "" {
-		return
-	}
-	snap := p.mem.Snapshot()
-	p.mu.Lock()
-	snap.SyncedAt, snap.SweptAt = p.syncedAt, p.sweptAt
-	p.mu.Unlock()
-	if err := mailbox.SaveCache(p.cache, snap); err != nil {
-		p.logf("gmail plugin: cache: %v", err)
-	}
-}
+func (c clock) Now() time.Time                         { return c.now() }
+func (c clock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
-// MinRefresherInterval is the fastest the background refresher runs, whatever
-// the refresh window says. The refresher is a warmer, not a poller: a window
-// shorter than a refresh would leave it always refreshing, hammering Gmail.
-// Reads still refresh on the configured window — a tiny one is how a test
-// says "refresh on every read", and that keeps working.
-const MinRefresherInterval = time.Second
-
-func (p *Plugin) refresherInterval() time.Duration {
-	if p.refresh < MinRefresherInterval {
-		return MinRefresherInterval
-	}
-	return p.refresh
-}
-
-// Run keeps the memory warm until ctx is done: one goroutine refreshing on
-// the refresher's interval, so the refresh has happened before a read asks
-// rather than because one did. It shares the flight and the freshness window
-// with the reads, so a tick that lands on a memory a read has just refreshed
-// costs Gmail nothing.
-func (p *Plugin) Run(ctx context.Context) {
-	t := time.NewTicker(p.refresherInterval())
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			// No verdict to read: the refresh logs its own start and finish.
-			// The refresher's whole job is to make sure a refresh happens.
-			p.kick()
+// work names the background work a context in scope needs: every context
+// this plugin lists is read from the one account-wide history, so they share
+// one poll; any other context needs none.
+func work(context string) []string {
+	for _, c := range mailbox.Contexts() {
+		if c == context {
+			return []string{account}
 		}
 	}
+	return nil
 }
 
-func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+// poll asks Gmail's history on the refresh window while some stream needs
+// it: Gmail cannot tell, so the clock is the plugin's. A refresh a read has
+// just landed is fresh, and the tick costs nothing.
+func (p *Plugin) poll(ctx context.Context, _ string) {
+	memo.Poll(ctx, p.clock, max(p.refresh, MinPollInterval), func(ctx context.Context) {
+		_, _ = p.flights.Read(ctx, account, true) // a warm read: it starts the refresh and never waits on it
+	})
+}
+
+// walkAccount is one refresh, flights' Walk: it runs detached under the
+// plugin's lifetime, shared by every reader, and announces what it changed. A
+// failed refresh can still have changed memory — a full walk that read the
+// inbox and then failed — so the announcement does not wait on its error.
+func (p *Plugin) walkAccount(ctx context.Context, _ string) error {
+	p.landing.Add(1)
+	before := p.faces()
+	swept, err := p.catchUpOrSweep(ctx)
+	if err == nil && swept {
+		p.mu.Lock()
+		p.sweptAt = p.clock.Now()
+		p.mu.Unlock()
+	}
+	p.changes.Publish(p.changedSince(before)...)
+	return err
+}
+
+// landed saves memory once a refresh's outcome is recorded and before any
+// reader waiting on it is released: a listing that waited is one a restart
+// repeats.
+func (p *Plugin) landed(string, error) {
+	defer p.landing.Add(-1)
+	_ = p.file.Save(p.snapshot) // a failure is the File's to log; it costs the next restart a walk
+}
+
+func (p *Plugin) snapshot() cache {
+	p.mu.Lock()
+	swept := p.sweptAt
+	p.mu.Unlock()
+	return cache{Memory: p.mem.Snapshot(), WalkedAt: p.flights.WalkedAt(), SweptAt: swept}
+}
+
+// Info asks Google for the account's profile until it has once answered, and
+// refuses while Google refuses the token: that config cannot serve, and the
+// fix is a command. Anything else — Google out of reach — passes, and the
+// reads say the source is dark. After the first pass Info asks nothing.
+func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	if !p.served.Load() {
+		if _, err := p.src.HistoryID(ctx); status.Code(err) == codes.PermissionDenied {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"gmail plugin: Google refused the stored token (%s); run: %s", memo.Reason(err), p.reauth)
+		}
+		p.served.Store(true)
+	}
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
@@ -266,96 +308,6 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	}, nil
 }
 
-// withinLocked reports whether t is less than d ago. A stamp in the FUTURE is
-// not within: it can come from the cache file, and a clock that has since
-// stepped back would otherwise freeze the plugin on a stale memory. The
-// caller holds p.mu.
-func (p *Plugin) withinLocked(t time.Time, d time.Duration) bool {
-	if t.IsZero() {
-		return false
-	}
-	age := p.now().Sub(t)
-	return age >= 0 && age < d
-}
-
-// kick makes sure memory is fresh or a refresh is on its way, and answers the
-// flight to wait on — nil when memory is fresh — with the last refresh's
-// error. No refresh belongs to its starter: it runs detached, so no reader's
-// patience or hangup can kill or restart it.
-func (p *Plugin) kick() (*flight, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.withinLocked(p.syncedAt, p.refresh) {
-		return nil, nil
-	}
-	if p.flight == nil {
-		p.flight = &flight{done: make(chan struct{})}
-		go p.refreshFlight(p.flight)
-	}
-	return p.flight, p.failed
-}
-
-// sync makes one collection answerable. A read the memory already Shows
-// something for answers at once, with the last failed refresh's error if
-// there is one: waiting on the refresh would tax every read past the refresh
-// window for an answer memory already has. Only a cold read waits, at most
-// firstAnswer, then answers what memory holds so far.
-func (p *Plugin) sync(ctx context.Context, c mailbox.Collection) error {
-	warm := p.mem.Shows(c.Key)
-	f, last := p.kick()
-	if f == nil {
-		return nil
-	}
-	if warm {
-		return last
-	}
-	select {
-	case <-f.done:
-		return f.err
-	case <-time.After(p.firstAnswer):
-		p.logf("gmail plugin: %q answering with memory so far; the refresh runs on", c.Key)
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// refreshFlight is one detached refresh: it owns its flight and outlives
-// every reader. Its context is the plugin's lifetime — every Gmail call is
-// bounded by the client's own timeout, so a dead source ends the refresh
-// with its error rather than hanging it.
-func (p *Plugin) refreshFlight(f *flight) {
-	start := time.Now()
-	before := p.faces()
-	swept, err := p.catchUpOrSweep(context.Background())
-	how := "history"
-	if swept {
-		how = "full walk"
-	}
-	p.logf("gmail plugin: refresh (%s) finished in %s: err=%v", how, time.Since(start).Round(time.Millisecond), err)
-	p.mu.Lock()
-	if err == nil {
-		p.syncedAt = p.now()
-		if swept {
-			p.sweptAt = p.syncedAt
-		}
-	}
-	p.failed = err
-	p.flight = nil
-	p.mu.Unlock()
-	// The cache lands before the flight closes: a listing that waited for the
-	// refresh is one a restart can repeat, and a listing answered without
-	// waiting becomes repeatable as soon as the refresh behind it lands.
-	if err == nil {
-		p.saveCache()
-	}
-	// A failed refresh can still have changed memory — a full walk that read
-	// the inbox and then failed — so the announcement does not wait on err.
-	p.watchers.publish(p.changedSince(before))
-	f.err = err
-	close(f.done)
-}
-
 // catchUpOrSweep is the one rule for how memory catches up. A full walk of
 // every collection when memory has no history id, has not seen every
 // collection, or last walked SweepEvery ago; else Gmail's history since the
@@ -363,7 +315,7 @@ func (p *Plugin) refreshFlight(f *flight) {
 // is too old. swept reports that the full walk ran.
 func (p *Plugin) catchUpOrSweep(ctx context.Context) (swept bool, err error) {
 	p.mu.Lock()
-	due := p.mem.HistoryID() == 0 || !p.mem.Swept() || !p.withinLocked(p.sweptAt, SweepEvery)
+	due := p.mem.HistoryID() == 0 || !p.mem.Swept() || !memo.Within(p.clock.Now(), p.sweptAt, SweepEvery)
 	p.mu.Unlock()
 	if !due {
 		err := p.catchUp(ctx)
@@ -382,9 +334,7 @@ func (p *Plugin) catchUpOrSweep(ctx context.Context) (swept bool, err error) {
 // its answer: the id is how memory keeps up cheaply, never what it shows.
 func (p *Plugin) sweep(ctx context.Context) error {
 	id, err := p.src.HistoryID(ctx)
-	if err != nil {
-		p.logf("gmail plugin: history id: %v (the next refresh walks again)", err)
-	}
+	p.episodes.note("history id", err, "gmail plugin: history id: %v (each refresh walks until Gmail gives one)", err)
 	for _, c := range mailbox.Collections {
 		if _, err := p.walk(ctx, c); err != nil {
 			return err
@@ -399,7 +349,7 @@ func (p *Plugin) sweep(ctx context.Context) error {
 // by its labels, and each deleted one, or one Gmail no longer answers for,
 // leaves. A message whose read failed costs its change this refresh, not the
 // others: the id stays where it was, so the next refresh reads that change
-// again. Every read failing is the refresh failing, with its reason.
+// again. The source failing every read is the refresh failing (sourceDown).
 func (p *Plugin) catchUp(ctx context.Context) error {
 	d, err := p.src.History(ctx, p.mem.HistoryID(), mailbox.WatchedLabels())
 	if err != nil {
@@ -407,25 +357,25 @@ func (p *Plugin) catchUp(ctx context.Context) error {
 	}
 	fetched := make([]mailbox.Labelled, 0, len(d.Touched))
 	deleted := append([]string(nil), d.Deleted...)
-	var firstErr error
+	var down error
 	failed := 0
 	for _, id := range d.Touched {
 		m, labels, err := p.src.Headers(ctx, id)
+		if status.Code(err) != codes.NotFound {
+			p.episodes.note("message "+id, err, "gmail plugin: message %s: %v", id, err)
+		}
 		switch {
 		case status.Code(err) == codes.NotFound:
 			deleted = append(deleted, id)
 		case err != nil:
-			if firstErr == nil {
-				firstErr = err
-			}
+			down = sourceDown(down, err)
 			failed++
-			p.logf("gmail plugin: history: message %s: %v", id, err)
 		default:
 			fetched = append(fetched, mailbox.Labelled{Message: m, Labels: labels})
 		}
 	}
-	if failed > 0 && failed == len(d.Touched) {
-		return firstErr
+	if down != nil && failed == len(d.Touched) {
+		return down
 	}
 	p.mem.Apply(fetched, deleted)
 	if failed == 0 {
@@ -456,49 +406,104 @@ func (p *Plugin) walk(ctx context.Context, c mailbox.Collection) (int, error) {
 
 	missing := p.mem.Missing(ids)
 	fetched := make([]mailbox.Message, 0, len(missing))
-	var firstErr error
+	var down error
 	for _, id := range missing {
 		m, _, err := p.src.Headers(ctx, id)
+		p.episodes.note("message "+id, err, "gmail plugin: message %s: %v", id, err)
 		if err != nil {
 			// One message the metadata read could not reach costs a tile this
 			// pass, not the walk: the id stays in the membership, so nothing
 			// calls it gone, and the next walk reads it. It is never silent.
-			if firstErr == nil {
-				firstErr = err
-			}
-			p.logf("gmail plugin: %q message %s: %v", c.Key, id, err)
+			down = sourceDown(down, err)
 			continue
 		}
 		fetched = append(fetched, m)
 	}
-	// Every read failing is not "a message was skipped", it is the walk
-	// failing — a revoked token, or Gmail down — and it must surface with its
-	// reason instead of leaving an empty grid with nothing said.
-	if firstErr != nil && len(fetched) == 0 && len(missing) > 0 {
-		return 0, firstErr
+	if down != nil && len(fetched) == 0 {
+		return 0, down
 	}
 	p.mem.Absorb(c.Key, ids, unread, fetched, whole)
 	return len(ids), nil
 }
 
-// List answers one collection. A walk failure with a transport-shaped code
-// degrades at the node to the remembered listing, stamped stale; a verdict
-// such as "this token was refused" surfaces.
+// sourceDown is down, else err when err says the source failed rather than
+// one message: Gmail out of reach or the token refused. Every read failing
+// that way is the walk failing, which must surface with its reason; a
+// message Gmail will not answer for (NotFound, a body it cannot give) costs
+// its own tile only, however few messages a walk has left to read.
+func sourceDown(down, err error) error {
+	if down != nil {
+		return down
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.PermissionDenied, codes.Unauthenticated, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Canceled:
+		return err
+	}
+	return nil
+}
+
+// shows reports whether memory has an answer for a context: all mail has one
+// once any label does.
+func (p *Plugin) shows(key string) bool {
+	if key != mailbox.AllMailContext {
+		return p.mem.Shows(key)
+	}
+	for _, c := range mailbox.Collections {
+		if p.mem.Shows(c.Key) {
+			return true
+		}
+	}
+	return false
+}
+
+// read makes a context answerable: fresh memory as it is, else a refresh,
+// joined if one is in flight (memo.Flights.Read). A read memory can answer
+// never waits and never fails on Gmail: unreachable is why the last refresh
+// failed, "" while it lands, and memory answers either way — a token revoked
+// after Info included, which costs the user no tile. A cold read waits at
+// most the first-answer bound, and fails only when its refresh failed with
+// nothing remembered. current reports that memory is current to Gmail: no
+// refresh has failed since one landed inside the window, and memory knows
+// the history id it is current to, so the next refresh reads every change
+// since.
+func (p *Plugin) read(ctx context.Context, key string) (unreachable string, current bool, err error) {
+	unreachable, err = p.flights.Read(ctx, account, p.shows(key))
+	if err != nil {
+		return "", false, err
+	}
+	return unreachable, unreachable == "" && p.flights.Fresh(account) && p.mem.HistoryID() != 0, nil
+}
+
+// List answers one context.
 //
-// The listing is NOT authoritative. Absence is the node's question to settle
-// through Probe, which is the one place that knows whether every collection
-// has been read: a message missing from the inbox is often still starred, and
-// an authoritative inbox would retire its id and lose the user's placement on
-// the way past.
+// A label lists links into all mail (mailbox.LabelEntries), and is
+// authoritative only when it is definitive: its last walk read the whole
+// label, every member was read, and memory is current. A capped read proves
+// nothing below its oldest message, and a memory behind Gmail proves nothing
+// about what left since. All mail is never authoritative: a message that
+// left every label is usually archived, not gone, and Probe asks Gmail.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
+	if req.Context == mailbox.AllMailContext {
+		unreachable, _, err := p.read(ctx, req.Context)
+		if err != nil {
+			return nil, err
+		}
+		views := p.mem.AllMail()
+		return listing(mailbox.AllMailLabel, views, mailbox.CollectionEntries(views), false, unreachable), nil
+	}
 	c, ok := mailbox.LookupCollection(req.Context)
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "gmail plugin: unknown context %q", req.Context)
 	}
-	if err := p.sync(ctx, c); err != nil {
+	unreachable, current, err := p.read(ctx, c.Key)
+	if err != nil {
 		return nil, err
 	}
 	views := p.mem.Collection(c.Key)
+	return listing(c.Label, views, mailbox.LabelEntries(c.Key, views), p.mem.Definitive(c.Key) && current, unreachable), nil
+}
+
+func listing(label string, views []mailbox.View, entries []*pluginv1.Entry, authoritative bool, unreachable string) *pluginv1.ListResponse {
 	unread := 0
 	for _, v := range views {
 		if v.Unread {
@@ -506,32 +511,11 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		}
 	}
 	return &pluginv1.ListResponse{
-		Entries:       mailbox.CollectionEntries(views),
-		Authoritative: false,
-		SourceLabel:   fmt.Sprintf("%s · %d messages · %d unread", c.Label, len(views), unread),
-	}, nil
-}
-
-// ReadContent answers the message's markdown card: the tile's face and its
-// read-only document. The email itself is ServeContent's answer, not this
-// one. An unknown key reads as a one-line notice.
-func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {
-	id, ok := mailbox.ParseKey(req.Key)
-	if !ok {
-		return stream.Send(&pluginv1.ContentChunk{}) // not one of ours: no body
+		Entries:       entries,
+		Authoritative: authoritative,
+		SourceLabel:   fmt.Sprintf("%s · %d messages · %d unread", label, len(views), unread),
+		Unreachable:   unreachable,
 	}
-	v, known := p.mem.View(id)
-	if !known {
-		// Before any collection has been walked, "not in memory" means "not
-		// yet", not "gone" — and it must answer Unavailable, transport-shaped,
-		// so the node's cache serves the remembered body instead of storing a
-		// gone body over it while the walk is still running.
-		if !p.mem.Swept() {
-			return status.Error(codes.Unavailable, "gmail plugin: the first walk has not completed")
-		}
-		return stream.Send(&pluginv1.ContentChunk{Data: mailbox.GoneMarkdown(req.Key), MediaType: "text/markdown"})
-	}
-	return stream.Send(&pluginv1.ContentChunk{Data: mailbox.Markdown(v), MediaType: "text/markdown"})
 }
 
 // ServeContent is the email. Subpath "" is the message, as the HTML the
@@ -549,7 +533,7 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 			Data:      []byte("not found"),
 		})
 	}
-	body, media, err := p.src.HTML(context.Background(), id)
+	body, media, err := p.src.HTML(stream.Context(), id)
 	if err != nil {
 		// The reason travels: the node turns a coded failure into an answer
 		// the user can read, and a silent blank page would look like an email
@@ -567,31 +551,63 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 	return stream.Send(&pluginv1.ServeContentChunk{Status: 200, MediaType: media, Data: body})
 }
 
-// Probe is the one place that decides a message has left. PRESENT while some
-// collection holds it. GONE only once every collection has produced a usable
-// membership and none of them does — the message was archived, deleted or
-// filed somewhere this plugin does not project, and the node may retire its
-// id. UNSPECIFIED, meaning "cannot say", until then: a half-walked memory
-// must never cost the user a tile.
-func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
+// Probe is the one place that decides a message has left, and it answers for
+// the context asked. A label: PRESENT while it holds the message, GONE once a
+// whole read of it did not (mailbox.InLabel); the message is usually in
+// another label or archived, and its tile in all mail stays. All mail:
+// PRESENT while some label holds it, else Gmail's own word on the message —
+// GONE only when Gmail says it does not have it, and then memory forgets it
+// too. No context (a node from before contexts): PRESENT while some label
+// holds it, GONE once every label has been read and none does. UNSPECIFIED,
+// meaning "cannot say", otherwise: a half-walked memory must never cost the
+// user a tile.
+func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
 	id, ok := mailbox.ParseKey(req.Key)
 	if !ok {
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
+		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 	}
-	switch {
-	case p.mem.Member(id):
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
-	case p.mem.Swept():
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
+	switch req.Context {
+	case "":
+		switch {
+		case p.mem.Member(id):
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case p.mem.Swept():
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
+	case mailbox.AllMailContext:
+		if p.mem.Member(id) {
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		}
+		_, _, err := p.src.Headers(ctx, id)
+		switch {
+		case err == nil:
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case status.Code(err) == codes.NotFound:
+			p.mem.Forget(id)
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
 	default:
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
+		if _, ok := mailbox.LookupCollection(req.Context); !ok {
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a context this plugin never lists
+		}
+		switch p.mem.InLabel(req.Context, id) {
+		case mailbox.Present:
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case mailbox.Gone:
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
 	}
+	return presence(pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED), nil
+}
+
+func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
+	return &pluginv1.ProbeResponse{Presence: p}
 }
 
 // Search matches the query against the subject, snippet and sender of every
-// message a collection still holds; each result's path is the collection that
-// holds it. It reads memory only — no Gmail call — so it answers what the
-// grids show and nothing the user cannot navigate to. Gmail's own search is a
+// message a label still holds; each result is the message's one tile, in all
+// mail. It reads memory only — no Gmail call — so it answers what the grids
+// show and nothing the user cannot navigate to. Gmail's own search is a
 // bigger thing and would answer mail that has no tile.
 func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
 	q := strings.ToLower(strings.TrimSpace(req.Query))
@@ -603,14 +619,9 @@ func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*plugin
 		limit = 50
 	}
 	resp := &pluginv1.SearchResponse{}
-	holder := p.holders()
-	all := p.mem.All()
+	all := p.mem.AllMail()
 	for i := len(all) - 1; i >= 0 && len(resp.Results) < limit; i-- { // newest first
 		v := all[i]
-		held, ok := holder[v.ID]
-		if !ok {
-			continue
-		}
 		hay := strings.ToLower(strings.Join([]string{v.Subject, v.Snippet, v.FromName, v.FromEmail}, "\n"))
 		if !strings.Contains(hay, q) {
 			continue
@@ -621,28 +632,12 @@ func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*plugin
 		}
 		resp.Results = append(resp.Results, &pluginv1.SearchResult{
 			Entry:       entries[0],
-			ContextPath: []string{held},
+			ContextPath: []string{mailbox.AllMailContext},
 			Snippet:     v.Preview(),
 			Score:       1,
 		})
 	}
 	return resp, nil
-}
-
-// holders maps each message to a context that currently holds it, read once
-// per search. The collections are visited in the order they are declared, so
-// a starred message that is also in the inbox is navigated to in the inbox —
-// where a message is looked for first.
-func (p *Plugin) holders() map[string]string {
-	out := map[string]string{}
-	for _, c := range mailbox.Collections {
-		for _, v := range p.mem.Collection(c.Key) {
-			if _, already := out[v.ID]; !already {
-				out[v.ID] = c.Key
-			}
-		}
-	}
-	return out
 }
 
 // Delete is refused rather than left to the embedded Unimplemented, so the

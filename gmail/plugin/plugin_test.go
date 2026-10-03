@@ -48,6 +48,8 @@ type fakeGmail struct {
 	err    error
 	// headerErr fails Headers only, which is the one failure a walk survives.
 	headerErr error
+	// idErr fails Headers for one message.
+	idErr map[string]error
 	// failLabel fails the listing of that one label intersection.
 	failLabel string
 	// profileErr fails HistoryID only.
@@ -62,6 +64,32 @@ type fakeGmail struct {
 	hid     uint64
 	floor   uint64
 	log     []change
+	// ctxs is the context each kind of call ("label", "headers", "html",
+	// "profile") was last made under.
+	ctxs map[string]context.Context
+}
+
+func (f *fakeGmail) saw(kind string, ctx context.Context) {
+	f.ctxs[kind] = ctx
+}
+
+// ctxOf is the context the last call of kind was made under.
+func (f *fakeGmail) ctxOf(kind string) context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ctxs[kind]
+}
+
+// waitCtx waits for a call of kind and answers its context.
+func (f *fakeGmail) waitCtx(t *testing.T, kind string) context.Context {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if ctx := f.ctxOf(kind); ctx != nil {
+			return ctx
+		}
+	}
+	t.Fatalf("no %s call", kind)
+	return nil
 }
 
 // change is one entry in the fake's history.
@@ -73,7 +101,8 @@ type change struct {
 
 func newFake() *fakeGmail {
 	return &fakeGmail{labels: map[string][]string{}, whole: map[string]bool{},
-		recs: map[string]mailbox.Message{}, html: map[string]string{}, calls: map[string]int{}, hid: 100}
+		recs: map[string]mailbox.Message{}, html: map[string]string{}, calls: map[string]int{}, hid: 100,
+		ctxs: map[string]context.Context{}}
 }
 
 func (f *fakeGmail) hold(collection string, ms ...mailbox.Message) {
@@ -87,8 +116,9 @@ func (f *fakeGmail) hold(collection string, ms ...mailbox.Message) {
 	f.labels[collection] = ids
 }
 
-func (f *fakeGmail) Label(_ context.Context, labelIDs []string, limit int) ([]string, bool, error) {
+func (f *fakeGmail) Label(ctx context.Context, labelIDs []string, limit int) ([]string, bool, error) {
 	f.mu.Lock()
+	f.saw("label", ctx)
 	block := f.block
 	f.mu.Unlock()
 	if block != nil {
@@ -115,15 +145,19 @@ func (f *fakeGmail) Label(_ context.Context, labelIDs []string, limit int) ([]st
 	return ids, whole, nil
 }
 
-func (f *fakeGmail) Headers(_ context.Context, id string) (mailbox.Message, []string, error) {
+func (f *fakeGmail) Headers(ctx context.Context, id string) (mailbox.Message, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.saw("headers", ctx)
 	f.calls["headers"]++
 	if f.err != nil {
 		return mailbox.Message{}, nil, f.err
 	}
 	if f.headerErr != nil {
 		return mailbox.Message{}, nil, f.headerErr
+	}
+	if err := f.idErr[id]; err != nil {
+		return mailbox.Message{}, nil, err
 	}
 	m, ok := f.recs[id]
 	if !ok {
@@ -145,9 +179,10 @@ func (f *fakeGmail) Headers(_ context.Context, id string) (mailbox.Message, []st
 	return m, labels, nil
 }
 
-func (f *fakeGmail) HistoryID(context.Context) (uint64, error) {
+func (f *fakeGmail) HistoryID(ctx context.Context) (uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.saw("profile", ctx)
 	f.calls["profile"]++
 	if f.err != nil {
 		return 0, f.err
@@ -205,9 +240,10 @@ func (f *fakeGmail) deleted(id string) {
 	f.log = append(f.log, change{hid: f.hid, id: id, deleted: true})
 }
 
-func (f *fakeGmail) HTML(_ context.Context, id string) ([]byte, string, error) {
+func (f *fakeGmail) HTML(ctx context.Context, id string) ([]byte, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.saw("html", ctx)
 	f.calls["html"]++
 	if f.err != nil {
 		return nil, "", f.err
@@ -230,9 +266,10 @@ type reader struct {
 func (r *reader) Send(c *pluginv1.ContentChunk) error { r.chunks = append(r.chunks, c); return nil }
 func (r *reader) Context() context.Context            { return context.Background() }
 
-// server collects a ServeContent stream.
+// server collects a ServeContent stream made under ctx, Background if nil.
 type server struct {
 	pluginv1.Plugin_ServeContentServer
+	ctx    context.Context
 	chunks []*pluginv1.ServeContentChunk
 }
 
@@ -240,7 +277,13 @@ func (s *server) Send(c *pluginv1.ServeContentChunk) error {
 	s.chunks = append(s.chunks, c)
 	return nil
 }
-func (s *server) Context() context.Context { return context.Background() }
+
+func (s *server) Context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
 
 // stable is a plugin whose clock does not move, so nothing refreshes behind a
 // test's back.
@@ -268,9 +311,8 @@ func listAll(t *testing.T, p *Plugin) {
 	landed(t, p)
 }
 
-// The two collections are two contexts, and the inbox is the root: the
-// plugin's own (+) row lands there, and starred rides beside it. An empty
-// root_context would draw that row as a broken plugin.
+// Every context is a (+) menu entry, and none is a root: root_context is
+// retired.
 func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	p := stable(newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
@@ -289,9 +331,9 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	if info.Writable {
 		t.Error("a read-only projection declared itself writable")
 	}
-	if len(info.MenuEntries) != 2 || info.MenuEntries[0].Context != mailbox.InboxContext ||
-		info.MenuEntries[1].Context != mailbox.StarredContext {
-		t.Fatalf("menu entries = %+v, want one per collection", info.MenuEntries)
+	if len(info.MenuEntries) != 3 || info.MenuEntries[0].Context != mailbox.InboxContext ||
+		info.MenuEntries[1].Context != mailbox.StarredContext || info.MenuEntries[2].Context != mailbox.AllMailContext {
+		t.Fatalf("menu entries = %+v, want one per context", info.MenuEntries)
 	}
 }
 
@@ -307,9 +349,6 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key})
 		if err != nil {
 			t.Fatalf("%s: %v", c.Key, err)
-		}
-		if resp.Authoritative {
-			t.Errorf("%s listed authoritatively; absence is Probe's answer", c.Key)
 		}
 		if len(resp.Entries) != 1 {
 			t.Fatalf("%s: %d entries", c.Key, len(resp.Entries))
@@ -386,7 +425,7 @@ func TestUnreadComesFromASecondListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(resp.Entries[0].Label, mailbox.UnreadMark) || resp.Entries[0].StatusDetail != "unread" {
+	if resp.Entries[0].StatusDetail != mailbox.UnreadMark {
 		t.Fatalf("entry = %+v", resp.Entries[0])
 	}
 	if !strings.Contains(resp.SourceLabel, "1 unread") {
@@ -404,8 +443,8 @@ func TestUnreadComesFromASecondListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(resp.Entries[0].Label, mailbox.UnreadMark) {
-		t.Errorf("a message read at Gmail kept its mark: %q", resp.Entries[0].Label)
+	if resp.Entries[0].StatusDetail != "" {
+		t.Errorf("a message read at Gmail kept its mark: %q", resp.Entries[0].StatusDetail)
 	}
 	if f.count("headers") != before {
 		t.Error("clearing an unread mark cost a metadata read")
@@ -440,8 +479,8 @@ func TestOneMessageReadsTheSameOnBothGrids(t *testing.T) {
 	if inbox.Entries[0].Label != starred.Entries[0].Label {
 		t.Errorf("one message read two ways: %q vs %q", inbox.Entries[0].Label, starred.Entries[0].Label)
 	}
-	if !strings.HasPrefix(inbox.Entries[0].Label, mailbox.StarMark) {
-		t.Errorf("a starred message lost its star in the inbox: %q", inbox.Entries[0].Label)
+	if inbox.Entries[0].StatusDetail != mailbox.StarMark {
+		t.Errorf("a starred message lost its star in the inbox: %q", inbox.Entries[0].StatusDetail)
 	}
 }
 
@@ -496,9 +535,10 @@ func TestASlowWalkAnswersFromMemory(t *testing.T) {
 	close(f.block)
 }
 
-// A message is a text tile that serves a page. The markdown is the card; the
-// page is the email.
-func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
+// A message is a url tile that serves a page, and the page is the email. It
+// has no text body: nothing on the node reads one for a url entry, so the
+// plugin serves none (ReadContent is the embedded Unimplemented).
+func TestTheEmailIsThePageAndThereIsNoCard(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
 	f.html["a"] = "<div>Are you free friday?</div>"
@@ -508,15 +548,8 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := &reader{}
-	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "msg:a"}, r); err != nil {
-		t.Fatal(err)
-	}
-	if len(r.chunks) != 1 || r.chunks[0].MediaType != "text/markdown" {
-		t.Fatalf("chunks = %+v", r.chunks)
-	}
-	if !strings.Contains(string(r.chunks[0].Data), "# ") || !strings.Contains(string(r.chunks[0].Data), "lunch") {
-		t.Errorf("card = %q", r.chunks[0].Data)
+	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "msg:a"}, &reader{}); status.Code(err) != codes.Unimplemented {
+		t.Errorf("ReadContent = %v, want no card at all", err)
 	}
 
 	s := &server{}
@@ -528,14 +561,6 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 	}
 	if string(s.chunks[0].Data) != f.html["a"] {
 		t.Errorf("page = %q", s.chunks[0].Data)
-	}
-	// A key that is not one of ours reads as no body at all, not as an error.
-	r2 := &reader{}
-	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "label:INBOX"}, r2); err != nil {
-		t.Fatal(err)
-	}
-	if len(r2.chunks) != 1 || len(r2.chunks[0].Data) != 0 {
-		t.Errorf("chunks = %+v", r2.chunks)
 	}
 }
 
@@ -704,6 +729,34 @@ func TestOneUnreadableMessageDoesNotCostTheWalk(t *testing.T) {
 	}
 }
 
+// One message Gmail will not answer for costs its tile, never the walk, on
+// the first walk or any later one, when it is the only message left to read:
+// a refresh that failed forever on one email would mark the whole account
+// unreachable.
+func TestAMessageGmailWillNotReadNeverFailsAWalk(t *testing.T) {
+	for name, err := range map[string]error{
+		"not found": status.Error(codes.NotFound, "no message b"),
+		"malformed": status.Error(codes.Internal, "message b is malformed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake()
+			f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"), msg("b", "two", "2026-01-05T10:00:00Z"))
+			f.idErr = map[string]error{"b": err}
+			clock := at("2026-01-06T12:00:00Z")
+			p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
+			listAll(t, p)
+			refreshed(t, p, &clock, 2*time.Minute) // b is all this walk has to read
+			resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+			if err != nil || resp.Unreachable != "" {
+				t.Fatalf("the walk after one unreadable message = %q, %v", resp.GetUnreachable(), err)
+			}
+			if got := entryKeys(resp.Entries); got != "msg:a" {
+				t.Errorf("inbox = %s", got)
+			}
+		})
+	}
+}
+
 // Every metadata read failing is not "a message was skipped", it is the walk
 // failing, and it must surface with its reason.
 func TestEveryMetadataReadFailingFailsTheWalk(t *testing.T) {
@@ -714,16 +767,6 @@ func TestEveryMetadataReadFailingFailsTheWalk(t *testing.T) {
 	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v, want the walk to fail with Gmail's reason", err)
-	}
-}
-
-// Before any walk, a key the memory does not hold is "not yet", not "gone":
-// a Gone body stored over the node's remembered one would be a loss.
-func TestReadContentWaitsRatherThanDeclaringAMessageGone(t *testing.T) {
-	p := stable(newFake(), Options{})
-	err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "msg:a"}, &reader{})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("err = %v, want Unavailable", err)
 	}
 }
 
@@ -738,10 +781,10 @@ func TestDeleteIsRefusedWithItsReason(t *testing.T) {
 	}
 }
 
-// The grid is bounded, and a bounded read is not a whole read: the messages
-// below the cap keep their tiles rather than being retired by a read that
-// never reached them.
-func TestTheGridIsBoundedAndACappedReadNeverRetires(t *testing.T) {
+// The cap bounds the WALK, not the grid: a capped read is not a whole read,
+// so the messages below it keep their tiles rather than being retired by a
+// read that never reached them, and the grid holds what memory holds.
+func TestTheCapBoundsTheWalkAndACappedReadNeverRetires(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX",
 		msg("a", "one", "2026-01-05T09:00:00Z"),
@@ -756,7 +799,7 @@ func TestTheGridIsBoundedAndACappedReadNeverRetires(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(resp.Entries) != 2 {
-		t.Fatalf("a grid bounded at 2 held %d", len(resp.Entries))
+		t.Fatalf("a first walk capped at 2 read %d", len(resp.Entries))
 	}
 	// The newest two are what a person is looking at.
 	if resp.Entries[0].Key != "msg:b" || resp.Entries[1].Key != "msg:c" {
@@ -771,6 +814,18 @@ func TestTheGridIsBoundedAndACappedReadNeverRetires(t *testing.T) {
 	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:b"})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_PRESENT {
 		t.Errorf("a message on the grid probed %v", got.Presence)
+	}
+
+	// A new message: the next walk reads the newest two, c and d, and b,
+	// below them, stays on a grid now longer than the cap.
+	f.hold("INBOX",
+		msg("a", "one", "2026-01-05T09:00:00Z"),
+		msg("b", "two", "2026-01-05T10:00:00Z"),
+		msg("c", "three", "2026-01-05T11:00:00Z"),
+		msg("d", "four", "2026-01-05T12:00:00Z"))
+	refreshed(t, p, &clock, 2*time.Minute)
+	if got := keys(t, p, mailbox.InboxContext); got != "msg:b,msg:c,msg:d" {
+		t.Errorf("inbox after a second capped walk = %s, want what memory holds", got)
 	}
 }
 
@@ -787,7 +842,7 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 	p := stable(f, opts)
 	ctx := context.Background()
 	listAll(t, p)
-	if _, err := os.Stat(filepath.Join(dir, mailbox.CacheFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, cacheFile)); err != nil {
 		t.Fatalf("no cache file: %v", err)
 	}
 
@@ -800,8 +855,8 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 	if len(resp.Entries) != 1 || resp.Entries[0].Key != "msg:a" {
 		t.Fatalf("restored listing = %+v", resp.Entries)
 	}
-	if !strings.HasPrefix(resp.Entries[0].Label, mailbox.UnreadMark) {
-		t.Errorf("the unread mark did not survive the restart: %q", resp.Entries[0].Label)
+	if resp.Entries[0].StatusDetail != mailbox.UnreadMark {
+		t.Errorf("the unread mark did not survive the restart: %q", resp.Entries[0].StatusDetail)
 	}
 	if got := cold.count("INBOX"); got != 0 {
 		t.Errorf("a restart inside the refresh window walked %d times", got)
@@ -817,7 +872,7 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 // start-up.
 func TestAnUnreadableCacheStartsColdAndSaysSo(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, mailbox.CacheFile), []byte("{not json"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, cacheFile), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var lines []string
@@ -847,10 +902,10 @@ func TestTheCacheHoldsNoCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != mailbox.CacheFile {
+	if len(entries) != 1 || entries[0].Name() != cacheFile {
 		t.Fatalf("state dir = %v; the plugin writes one cache file and nothing else", entries)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, mailbox.CacheFile))
+	raw, err := os.ReadFile(filepath.Join(dir, cacheFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -875,7 +930,7 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 	if len(res.Results) != 1 || res.Results[0].Entry.Key != "msg:b" {
 		t.Fatalf("results = %+v", res.Results)
 	}
-	if got := res.Results[0].ContextPath; len(got) != 1 || got[0] != mailbox.StarredContext {
+	if got := res.Results[0].ContextPath; len(got) != 1 || got[0] != mailbox.AllMailContext {
 		t.Errorf("context path = %v", got)
 	}
 	if f.count("STARRED") != before {
@@ -891,17 +946,8 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 // read answers before the refresh it started has landed.
 func landed(t *testing.T, p *Plugin) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
-	for {
-		p.mu.Lock()
-		f := p.flight
-		p.mu.Unlock()
-		if f == nil {
-			return
-		}
-		select {
-		case <-f.done:
-		case <-deadline:
+	for deadline := time.Now().Add(5 * time.Second); p.flights.Busy(account) || p.landing.Load() > 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
 			t.Fatal("a walk never landed")
 		}
 	}
@@ -910,10 +956,13 @@ func landed(t *testing.T, p *Plugin) {
 // A read over a memory that has an answer gives it at once, however slow the
 // walk behind it: past the refresh window every read would otherwise pay the
 // first-answer bound for an answer memory already had. The walk still runs
-// and lands, and a walk that failed is answered by the next warm read.
-func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
+// and lands. A walk that failed — here a token revoked after Info passed —
+// costs no read its answer: the next warm read answers memory, every entry,
+// and says why in unreachable, until a walk lands again.
+func TestAWarmReadAnswersMemoryAndSaysWhyTheWalkFailed(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
+	f.hold("STARRED", msg("a", "lunch", "2026-01-05T14:00:00Z"))
 	clock := at("2026-01-06T12:00:00Z")
 	p := stable(f, Options{Refresh: time.Minute, FirstAnswer: time.Hour, Now: func() time.Time { return clock }})
 	ctx := context.Background()
@@ -948,8 +997,25 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	f.mu.Unlock()
 	close(f.block)
 	landed(t, p)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("after a failed walk a warm read answered %v, want the walk's verdict", err)
+	for _, c := range mailbox.Contexts() {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: c})
+		if err != nil {
+			t.Fatalf("%s after a failed walk = %v, want memory's answer", c, err)
+		}
+		if len(resp.Entries) != 1 || resp.Unreachable != "the stored token was refused" || resp.Authoritative {
+			t.Errorf("%s after a failed walk = %d entries, unreachable %q, authoritative %v; want memory, the reason, no authority",
+				c, len(resp.Entries), resp.Unreachable, resp.Authoritative)
+		}
+	}
+
+	f.mu.Lock()
+	f.err = nil
+	f.mu.Unlock()
+	clock = clock.Add(2 * time.Minute)
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	landed(t, p)
+	if resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil || resp.Unreachable != "" {
+		t.Errorf("after a walk landed = unreachable %q, %v; want live again", resp.GetUnreachable(), err)
 	}
 }
 
@@ -1043,8 +1109,8 @@ func TestACatchUpAppliesExactlyWhatHistoryNames(t *testing.T) {
 	}
 	resp, _ := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
 	for _, e := range resp.Entries {
-		if e.Key == "msg:a" && !strings.HasPrefix(e.Label, mailbox.StarMark) {
-			t.Errorf("a starred message has no star in the inbox: %q", e.Label)
+		if e.Key == "msg:a" && e.StatusDetail != mailbox.StarMark {
+			t.Errorf("a starred message has no star in the inbox: %q", e.StatusDetail)
 		}
 	}
 }
@@ -1173,18 +1239,12 @@ func watch(t *testing.T, p *Plugin, gate chan struct{}) *watchStream {
 		}
 		<-done
 	})
-	for deadline := time.Now().Add(5 * time.Second); ; {
-		p.watchers.mu.Lock()
-		n := len(p.watchers.subs)
-		p.watchers.mu.Unlock()
-		if n > 0 {
-			return w
-		}
+	for deadline := time.Now().Add(5 * time.Second); !w.header.Load(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("Watch never subscribed")
 		}
-		time.Sleep(time.Millisecond)
 	}
+	return w
 }
 
 // announced collects what the stream is sent within a short settle.
@@ -1220,20 +1280,19 @@ func TestWatchAnnouncesExactlyWhatARefreshChanged(t *testing.T) {
 
 	f.deleted("d") // starred only
 	refreshed(t, p, clock, 2*time.Minute)
-	if got := announced(w); !slices.Equal(got, []string{mailbox.StarredContext}) {
+	if got := announced(w); !slices.Equal(got, []string{mailbox.StarredContext, mailbox.AllMailContext}) {
 		t.Errorf("a starred deletion announced %v", got)
 	}
 
-	f.hold("STARRED", msg("a", "one", "2026-01-05T09:00:00Z")) // a gains a star: both faces change
+	f.hold("STARRED", msg("a", "one", "2026-01-05T09:00:00Z")) // a gains a star: every face changes
 	f.changed("a")
 	refreshed(t, p, clock, 2*time.Minute)
-	if got := announced(w); !slices.Equal(got, []string{mailbox.InboxContext, mailbox.StarredContext}) {
+	if got := announced(w); !slices.Equal(got, []string{mailbox.InboxContext, mailbox.StarredContext, mailbox.AllMailContext}) {
 		t.Errorf("starring an inbox message announced %v", got)
 	}
 }
 
-// A subscriber that never reads costs no refresh anything: refreshes land,
-// and what it has not taken coalesces to one mark per collection.
+// A subscriber that never reads costs no refresh anything: refreshes land.
 func TestASlowWatcherNeverBlocksARefresh(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
@@ -1248,15 +1307,6 @@ func TestASlowWatcherNeverBlocksARefresh(t *testing.T) {
 		f.mu.Unlock()
 		f.changed(id)
 		refreshed(t, p, clock, 2*time.Minute) // fails the test if a refresh never lands
-	}
-	p.watchers.mu.Lock()
-	defer p.watchers.mu.Unlock()
-	for s := range p.watchers.subs {
-		s.mu.Lock()
-		if len(s.pending) > len(mailbox.Collections) {
-			t.Errorf("a slow watcher holds %d marks", len(s.pending))
-		}
-		s.mu.Unlock()
 	}
 }
 

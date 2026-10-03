@@ -8,9 +8,8 @@ import (
 
 // Memory is everything the plugin has seen: the record of every message, the
 // unread set, and which messages each collection last held. It survives a
-// restart through the cache file in the plugin's state directory — see
-// Snapshot and store.go — which holds this plugin's memory of ITS SOURCE and
-// never a node fact.
+// restart as a Snapshot in the plugin's cache file, which holds this
+// plugin's memory of ITS SOURCE and never a node fact.
 //
 // It is the one owner of every fact about a message that can change. A
 // Message record holds only what cannot: the id, the subject, the sender, the
@@ -34,6 +33,10 @@ type Memory struct {
 	// membership. Until every collection has had one, nothing is ever GONE: a
 	// message missing from a memory nothing has walked is unseen, not deleted.
 	complete map[string]bool
+	// whole records that a collection's last walk read the label to its end,
+	// so its membership is the label's and not only its newest part. History
+	// keeps a membership exact, so only a walk changes it.
+	whole map[string]bool
 	// historyID is the Gmail history id the memory is current to: every
 	// change Gmail recorded after it is still to be applied. Zero means none
 	// is known, and only a full walk of every collection mints one.
@@ -47,6 +50,7 @@ func NewMemory() *Memory {
 		unread:   map[string]bool{},
 		members:  map[string][]string{},
 		complete: map[string]bool{},
+		whole:    map[string]bool{},
 	}
 }
 
@@ -92,6 +96,7 @@ func (m *Memory) Absorb(collection string, ids []string, unread map[string]bool,
 		}
 	}
 
+	m.whole[collection] = whole
 	if whole {
 		m.members[collection] = append([]string(nil), ids...)
 		m.complete[collection] = true
@@ -129,9 +134,9 @@ func (m *Memory) Absorb(collection string, ids []string, unread map[string]bool,
 // Apply folds a history catch-up in. Each fetched message is placed by the
 // labels it carries now: a member of every collection whose labels it has,
 // of none it lacks, and unread exactly when it carries UNREAD. Each deleted
-// message leaves every collection. Applying the same catch-up twice changes
-// nothing, which is what lets a refresh that read only part of it keep the
-// old history id and read it all again.
+// message leaves every collection and memory: Gmail said it is gone. Applying
+// the same catch-up twice changes nothing, which is what lets a refresh that
+// read only part of it keep the old history id and read it all again.
 func (m *Memory) Apply(fetched []Labelled, deleted []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -156,11 +161,31 @@ func (m *Memory) Apply(fetched []Labelled, deleted []string) {
 		}
 	}
 	for _, id := range deleted {
-		delete(m.unread, id)
 		for _, c := range Collections {
 			m.members[c.Key] = placed(m.members[c.Key], id, false)
 		}
+		m.forgetLocked(id)
 	}
+}
+
+// Forget drops a message Gmail says it no longer has, unless some collection
+// still holds it: a membership is the label's own word, newer than a lookup
+// that missed. It reports whether the message was forgotten.
+func (m *Memory) Forget(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.forgetLocked(id)
+}
+
+func (m *Memory) forgetLocked(id string) bool {
+	for _, c := range Collections {
+		if m.memberLocked(c.Key, id) {
+			return false
+		}
+	}
+	delete(m.messages, id)
+	delete(m.unread, id)
+	return true
 }
 
 // placed is ids holding id exactly when in is true, otherwise unchanged.
@@ -227,9 +252,9 @@ func union(a, b []string) []string {
 	return out
 }
 
-// Collection answers one collection's messages, oldest first — the order the
-// placement hints are derived from, so two nodes lay the same mail out the
-// same way. A member whose record is missing is skipped rather than invented;
+// Collection answers one collection's messages, oldest first, so two reads
+// list the same mail in the same order. A member whose record is missing is
+// skipped rather than invented;
 // it keeps its place in the membership and gets a tile on the next walk that
 // reads its metadata.
 func (m *Memory) Collection(key string) []View {
@@ -244,6 +269,66 @@ func (m *Memory) Collection(key string) []View {
 	}
 	sortViews(out)
 	return out
+}
+
+// AllMail answers every message some collection holds, each once, oldest
+// first.
+func (m *Memory) AllMail() []View {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	for _, c := range Collections {
+		ids = union(ids, m.members[c.Key])
+	}
+	out := make([]View, 0, len(ids))
+	for _, id := range ids {
+		if v, ok := m.viewLocked(id); ok {
+			out = append(out, v)
+		}
+	}
+	sortViews(out)
+	return out
+}
+
+// Presence is what memory can say about a message in one collection.
+type Presence int
+
+const (
+	Unknown Presence = iota
+	Present
+	Gone
+)
+
+// InLabel says whether a collection holds a message: Present while it does,
+// Gone once its last walk read the whole label without it, Unknown when that
+// walk was capped and said nothing about what it did not reach.
+func (m *Memory) InLabel(collection, id string) Presence {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case m.memberLocked(collection, id):
+		return Present
+	case m.whole[collection]:
+		return Gone
+	}
+	return Unknown
+}
+
+// Definitive reports whether a collection's answer is the whole label: its
+// last walk read to the end, and memory holds a record for every member, so
+// nothing it holds is missing from Collection.
+func (m *Memory) Definitive(collection string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.whole[collection] {
+		return false
+	}
+	for _, id := range m.members[collection] {
+		if _, ok := m.messages[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // View answers one message as a grid shows it, whatever collection holds it
@@ -330,4 +415,85 @@ func sortViews(vs []View) {
 		}
 		return vs[i].ID < vs[j].ID
 	})
+}
+
+// Snapshot is everything the memory holds, as the plugin's cache file keeps
+// it: every message seen, the unread set, each collection's membership, and
+// the history id all of it is current to.
+type Snapshot struct {
+	Messages    []Message               `json:"messages"`
+	Unread      []string                `json:"unread"`
+	Collections map[string]CollectionIn `json:"collections"`
+	HistoryID   uint64                  `json:"historyId,omitempty"`
+}
+
+// CollectionIn is one collection's remembered membership: what it held,
+// whether the walk that read it produced a usable membership, and whether it
+// read the whole label.
+type CollectionIn struct {
+	Complete bool     `json:"complete"`
+	Whole    bool     `json:"whole,omitempty"`
+	IDs      []string `json:"ids"`
+}
+
+// Snapshot copies out everything the memory holds, messages oldest first and
+// the unread set in the same order, so two snapshots of the same memory are
+// byte-identical.
+func (m *Memory) Snapshot() Snapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	msgs := make([]Message, 0, len(m.messages))
+	for _, msg := range m.messages {
+		msgs = append(msgs, *msg)
+	}
+	sortMessages(msgs)
+	unread := make([]string, 0, len(m.unread))
+	for _, msg := range msgs {
+		if m.unread[msg.ID] {
+			unread = append(unread, msg.ID)
+		}
+	}
+	cols := make(map[string]CollectionIn, len(m.members))
+	for key, ids := range m.members {
+		out := make([]string, len(ids))
+		copy(out, ids)
+		cols[key] = CollectionIn{Complete: m.complete[key], Whole: m.whole[key], IDs: out}
+	}
+	return Snapshot{Messages: msgs, Unread: unread, Collections: cols, HistoryID: m.historyID}
+}
+
+// Restore folds a snapshot into the memory. It is the boot path only: the
+// membership it carries is taken as read, because it is this plugin's own
+// last word about the same collections.
+func (m *Memory) Restore(s Snapshot) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range s.Messages {
+		msg := s.Messages[i]
+		m.messages[msg.ID] = &msg
+	}
+	for _, id := range s.Unread {
+		m.unread[id] = true
+	}
+	for key, in := range s.Collections {
+		ids := make([]string, len(in.IDs))
+		copy(ids, in.IDs)
+		m.members[key] = ids
+		if in.Complete {
+			m.complete[key] = true
+		}
+		m.whole[key] = in.Whole
+	}
+	m.historyID = s.HistoryID
+}
+
+func sortMessages(ms []Message) {
+	views := make([]View, len(ms))
+	for i := range ms {
+		views[i] = View{Message: ms[i]}
+	}
+	sortViews(views)
+	for i := range views {
+		ms[i] = views[i].Message
+	}
 }

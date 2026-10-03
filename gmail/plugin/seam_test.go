@@ -79,13 +79,13 @@ func TestOverTheRealGmailContract(t *testing.T) {
 	if !strings.HasPrefix(e.Key, mailbox.KeyPrefix) || !e.ServesPage || e.Kind != rpc.KindURL {
 		t.Fatalf("entry = %+v", e)
 	}
-	if !strings.Contains(e.Label, "Alice Example") || !strings.Contains(e.Label, "Lunch plans") {
-		t.Errorf("label = %q", e.Label)
+	if e.Label != "Lunch plans" {
+		t.Errorf("label = %q, want the subject", e.Label)
 	}
 	// The unread listing is what marks it, and only the one id it named.
 	marked := 0
 	for _, e := range resp.Entries {
-		if strings.HasPrefix(e.Label, mailbox.UnreadMark) {
+		if e.StatusDetail == mailbox.UnreadMark {
 			marked++
 		}
 	}
