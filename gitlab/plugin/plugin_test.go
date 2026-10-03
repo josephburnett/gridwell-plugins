@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/josephburnett/gridwell-plugins/gitlab/todos"
+	"github.com/josephburnett/gridwell-plugins/memo/calendar"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
@@ -76,7 +77,7 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root.Authoritative || len(root.Entries) != 2 || root.Entries[0].Key != "week:2026-08-24" || root.Entries[1].Label != "2026-08-17 · 1 open · 1 done" {
+	if root.Authoritative || len(root.Entries) != 2 || root.Entries[0].Key != "week:2026-08-24" || root.Entries[1].Label != "2026-08-17" {
 		t.Fatalf("root = %v", root.Entries)
 	}
 	if src.calls.Load() != 2 {
@@ -94,22 +95,22 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	if len(wk.Entries) != 2 || wk.Entries[0].ServesPage || wk.Entries[0].Kind != "text" || wk.Entries[0].Key != "todo:1" {
 		t.Fatalf("week = %v", wk.Entries)
 	}
-	if h := wk.Entries[0].PlacementHint; h == nil || h.X != todos.TodoTileW || h.W != todos.TodoTileW {
+	if x, y := calendar.Cell(at("2026-08-18T10:00:00Z"), todos.TodoTileW); wk.Entries[0].PlacementHint.GetX() != x || wk.Entries[0].PlacementHint.GetY() != y {
 		t.Errorf("Tuesday hint = %v", wk.Entries[0].PlacementHint)
 	}
 	// Todo 1 is marked done in GitLab. Inside the window nothing moves;
-	// past it, a read starts the descent's targeted walk, and the label flips
+	// past it, a read starts the descent's targeted walk, and the status flips
 	// when that walk lands.
 	src.pending = src.pending[1:]
 	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
-	if strings.HasPrefix(wk.Entries[0].Label, todos.DoneMark) {
+	if wk.Entries[0].StatusDetail != "" {
 		t.Error("state changed inside the refresh window")
 	}
 	clock = clock.Add(DefaultFullRefresh + time.Second)
 	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
 	landed(t, p)
 	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
-	if src.calls.Load() != 4 || !strings.HasPrefix(wk.Entries[0].Label, todos.DoneMark+" !1 ") || wk.Entries[0].StatusDetail != todos.StateDone {
+	if src.calls.Load() != 4 || !strings.HasPrefix(wk.Entries[0].Label, "!1 ") || wk.Entries[0].StatusDetail != todos.DoneMark {
 		t.Errorf("after the window: calls=%d entry=%v", src.calls.Load(), wk.Entries[0])
 	}
 	// The todo did not go away.
@@ -117,7 +118,7 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 		t.Errorf("a done todo left the listing: %v", wk.Entries)
 	}
 	root, _ = p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
-	if root.Entries[1].Label != "2026-08-17 · 0 open · 2 done" {
+	if root.Entries[1].Label != "2026-08-17" {
 		t.Errorf("root after flip = %q", root.Entries[1].Label)
 	}
 }
@@ -218,7 +219,7 @@ func TestRestartAnswersFromTheCacheFileWithoutWalking(t *testing.T) {
 	if n := cold.calls.Load(); n != 0 {
 		t.Errorf("the restart walked GitLab %d times; the last walk is still inside the refresh window", n)
 	}
-	if len(root.Entries) != 2 || root.Entries[1].Label != "2026-08-17 · 1 open · 1 done" {
+	if len(root.Entries) != 2 || root.Entries[1].Label != "2026-08-17" {
 		t.Fatalf("root after restart = %v", root.Entries)
 	}
 	wk, err := second.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})

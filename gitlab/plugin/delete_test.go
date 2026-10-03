@@ -41,7 +41,8 @@ func (m *fakeMarker) MarkDone(_ context.Context, id int64) error {
 	return nil
 }
 
-// weekState reads one todo's state out of the week listing, "" when unlisted.
+// weekState reads one todo's state out of the week listing's status, "" when
+// unlisted.
 func weekState(t *testing.T, p *Plugin, week string, key string) string {
 	t.Helper()
 	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: week})
@@ -50,7 +51,10 @@ func weekState(t *testing.T, p *Plugin, week string, key string) string {
 	}
 	for _, e := range resp.Entries {
 		if e.Key == key {
-			return e.StatusDetail
+			if e.StatusDetail == todos.DoneMark {
+				return todos.StateDone
+			}
+			return todos.StatePending
 		}
 	}
 	return ""
