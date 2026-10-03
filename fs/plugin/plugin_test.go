@@ -154,8 +154,7 @@ func TestInfoRefusesARootItCannotServe(t *testing.T) {
 // recordingHost records what Delete trashed and touches nothing.
 type recordingHost struct{ trashed []string }
 
-func (h *recordingHost) Remove(p string) error    { h.trashed = append(h.trashed, p); return nil }
-func (h *recordingHost) RemoveAll(p string) error { h.trashed = append(h.trashed, p); return nil }
+func (h *recordingHost) Trash(p string) error { h.trashed = append(h.trashed, p); return nil }
 
 type contentStream struct {
 	grpc.ServerStream
@@ -207,6 +206,27 @@ func TestDeleteSucceedsOnlyForAGonePath(t *testing.T) {
 	}
 	if len(h.trashed) != 0 {
 		t.Errorf("trashed %v, want nothing", h.trashed)
+	}
+}
+
+// A file and a directory leave the same way: to the trash.
+func TestDeleteTrashesFilesAndDirectoriesAlike(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "f.md"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &recordingHost{}
+	p := New(root, h)
+	for _, key := range []string{"d", "f.md"} {
+		if _, err := p.Delete(context.Background(), &pluginv1.DeleteRequest{Key: key}); err != nil {
+			t.Fatalf("Delete(%q): %v", key, err)
+		}
+	}
+	if want := []string{filepath.Join(root, "d"), filepath.Join(root, "f.md")}; strings.Join(h.trashed, ",") != strings.Join(want, ",") {
+		t.Errorf("trashed %v, want %v", h.trashed, want)
 	}
 }
 

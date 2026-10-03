@@ -31,14 +31,12 @@ import (
 // Host is the destructive side-effect surface, injected so tests never touch
 // real files.
 type Host interface {
-	Remove(path string) error
-	RemoveAll(path string) error
+	Trash(path string) error
 }
 
 type trashHost struct{}
 
-func (trashHost) Remove(p string) error    { return trash.Trash(p) }
-func (trashHost) RemoveAll(p string) error { return trash.Trash(p) }
+func (trashHost) Trash(p string) error { return trash.Trash(p) }
 
 // Plugin implements pluginv1.PluginServer for one directory root.
 type Plugin struct {
@@ -284,21 +282,15 @@ func (p *Plugin) Delete(_ context.Context, req *pluginv1.DeleteRequest) (*plugin
 	if err != nil {
 		return nil, err
 	}
-	info, statErr := os.Lstat(full)
+	_, statErr := os.Lstat(full)
 	switch {
 	case gone(statErr):
 		return &pluginv1.DeleteResponse{}, nil
 	case statErr != nil:
 		return nil, status.Errorf(codes.Unavailable, "fs plugin: delete %s: %v", req.Key, pathErr(statErr))
 	}
-	if info.IsDir() {
-		if err := p.host.RemoveAll(full); err != nil {
-			return nil, status.Errorf(codes.Internal, "fs plugin: remove %s: %v", full, err)
-		}
-	} else {
-		if err := p.host.Remove(full); err != nil {
-			return nil, status.Errorf(codes.Internal, "fs plugin: remove %s: %v", full, err)
-		}
+	if err := p.host.Trash(full); err != nil {
+		return nil, status.Errorf(codes.Internal, "fs plugin: remove %s: %v", full, err)
 	}
 	return &pluginv1.DeleteResponse{}, nil
 }
