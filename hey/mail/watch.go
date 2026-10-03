@@ -27,10 +27,13 @@ type Event struct {
 	Thread Thread
 }
 
-// Effect is what applying one event did to one collection.
+// Effect is what applying one event or walk did to one collection.
 type Effect struct {
 	// Changed says the collection's listing differs from before.
 	Changed bool
+	// Everything says everything's listing differs from before: the union
+	// gained or lost a thread, or a thread's record changed.
+	Everything bool
 	// Rewalk says the memory could not apply the event and only a read of the
 	// box can: a deleted posting it cannot map to a thread it shows.
 	Rewalk bool

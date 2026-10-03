@@ -192,6 +192,7 @@ func live(t *testing.T, o Options) (*Plugin, *fakeHEY, *watcher, []mail.Event) {
 	evs := fixture(t)
 	send(t, f.feed, evs[lineReady])
 	expect(t, w, mail.ImboxContext)
+	expect(t, w, mail.EverythingContext)
 	eventually(t, "every box is walked", func() bool {
 		return f.count("imbox") == 1 && f.count("laterbox") == 1 && f.count("asidebox") == 1
 	})
@@ -215,27 +216,32 @@ func listed(t *testing.T, p *Plugin, ctx string) []string {
 	return keys
 }
 
-// Every thread line moves memory and tells the watcher which collection
-// changed, with no walk: a thread arrives, is read, and leaves, and a line
-// about a box this plugin does not project changes nothing.
+// Every thread line moves memory and tells the watcher which collections
+// changed, with no walk: a thread arrives, is read, and leaves, each line
+// moving its box and everything, and a line about another box moves that box.
 func TestTheFeedMovesTheListingAndTellsTheWatcher(t *testing.T) {
 	p, f, w, evs := live(t, Options{})
 
 	send(t, f.feed, evs[lineAdded])
 	expect(t, w, mail.ImboxContext)
+	expect(t, w, mail.EverythingContext)
 	if got := listed(t, p, mail.ImboxContext); !slices.Contains(got, "thread:103") {
 		t.Fatalf("imbox = %v, want the added thread", got)
 	}
 
 	send(t, f.feed, evs[lineUpdated])
 	expect(t, w, mail.ImboxContext)
+	expect(t, w, mail.EverythingContext)
 	if got, _ := p.mem.Get(103); !got.Seen {
 		t.Error("the update did not land")
 	}
 
 	send(t, f.feed, evs[lineFeedbox])
+	expect(t, w, mail.FeedContext)
+	expect(t, w, mail.EverythingContext)
 	send(t, f.feed, evs[lineDeleted])
 	expect(t, w, mail.ImboxContext)
+	expect(t, w, mail.EverythingContext)
 	if got := listed(t, p, mail.ImboxContext); slices.Contains(got, "thread:103") {
 		t.Fatalf("imbox = %v, the deleted posting's thread stayed", got)
 	}
@@ -253,6 +259,7 @@ func TestResyncRereadsTheBox(t *testing.T) {
 	f.setBox("laterbox", th(2, "invoice", "2026-01-04T09:00:00Z"))
 	send(t, f.feed, evs[lineResync])
 	expect(t, w, mail.ReplyLaterContext)
+	expect(t, w, mail.EverythingContext)
 	idle(t, p)
 	if n := f.count("laterbox"); n != 2 {
 		t.Errorf("laterbox walked %d times, want 2", n)
@@ -267,8 +274,9 @@ func TestAReconnectCatchesUpEveryBox(t *testing.T) {
 	send(t, f.feed, evs[lineDisconnected])
 	send(t, f.feed, evs[lineReadyAgain])
 	expect(t, w, mail.SetAsideContext)
+	expect(t, w, mail.EverythingContext)
 	idle(t, p)
-	for _, box := range []string{"imbox", "laterbox", "asidebox"} {
+	for _, box := range []string{"imbox", "laterbox", "asidebox", "feedbox", "trailbox", "bubblebox"} {
 		if n := f.count(box); n != 2 {
 			t.Errorf("%s walked %d times, want 2", box, n)
 		}
@@ -430,6 +438,7 @@ func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 		send(t, f.feed, mail.Event{Change: mail.ChangeAdded, Box: "imbox", PostingID: id,
 			Thread: th(id, "news", "2026-01-06T09:00:00Z")})
 		expect(t, fast, mail.ImboxContext)
+		expect(t, fast, mail.EverythingContext)
 	}
 	close(block)
 	got := map[string]bool{}
@@ -439,7 +448,12 @@ func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 			got[k] = true
 		default:
 		}
-		return got[mail.ImboxContext] && got[mail.ReplyLaterContext] && got[mail.SetAsideContext]
+		for _, c := range mail.Collections {
+			if !got[c.Key] {
+				return false
+			}
+		}
+		return got[mail.EverythingContext]
 	})
 }
 

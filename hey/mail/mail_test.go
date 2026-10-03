@@ -95,8 +95,8 @@ func TestCellPutsNewerDaysHigher(t *testing.T) {
 	}
 }
 
-func TestCollectionsAreTheThreeStacks(t *testing.T) {
-	if len(Collections) != 3 {
+func TestCollectionsAreTheSixBoxes(t *testing.T) {
+	if len(Collections) != 6 {
 		t.Fatalf("got %d collections", len(Collections))
 	}
 	boxes := map[string]bool{}
@@ -106,13 +106,16 @@ func TestCollectionsAreTheThreeStacks(t *testing.T) {
 		}
 		boxes[c.Box] = true
 	}
-	for _, want := range []string{"imbox", "laterbox", "asidebox"} {
+	for _, want := range []string{"imbox", "laterbox", "asidebox", "feedbox", "trailbox", "bubblebox"} {
 		if !boxes[want] {
 			t.Errorf("no collection reads box %q", want)
 		}
 	}
-	if _, ok := LookupCollection("box:trailbox"); ok {
+	if _, ok := LookupCollection("box:spambox"); ok {
 		t.Error("LookupCollection accepted a box this plugin does not project")
+	}
+	if _, ok := LookupCollection(EverythingContext); ok {
+		t.Error("everything is no box: nothing walks it")
 	}
 }
 

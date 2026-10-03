@@ -56,14 +56,15 @@ func TestSweptNeedsEveryCollection(t *testing.T) {
 	if m.Swept() {
 		t.Fatal("a cold memory reports itself swept")
 	}
-	m.Absorb(ImboxContext, nil, true)
-	m.Absorb(ReplyLaterContext, nil, true)
-	if m.Swept() {
-		t.Fatal("two of three collections reported a full sweep")
+	for _, c := range Collections[:len(Collections)-1] {
+		m.Absorb(c.Key, nil, true)
 	}
-	m.Absorb(SetAsideContext, nil, true)
+	if m.Swept() {
+		t.Fatal("all but one collection reported a full sweep")
+	}
+	m.Absorb(Collections[len(Collections)-1].Key, nil, true)
 	if !m.Swept() {
-		t.Fatal("three complete walks did not make a sweep")
+		t.Fatal("every collection walked whole did not make a sweep")
 	}
 	// A partial walk of one collection does not un-sweep the memory: the box
 	// HAS been read to its end once, and that is what the flag records.
@@ -134,8 +135,9 @@ func TestCacheRoundTrips(t *testing.T) {
 	if back.Swept() {
 		t.Error("a restored half sweep reports itself swept")
 	}
-	back.Absorb(ReplyLaterContext, nil, true)
-	back.Absorb(SetAsideContext, nil, true)
+	for _, c := range Collections[1:] {
+		back.Absorb(c.Key, nil, true)
+	}
 	if !back.Swept() {
 		t.Error("the restored imbox forgot its completed walk")
 	}

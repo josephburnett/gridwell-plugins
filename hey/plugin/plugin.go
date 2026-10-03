@@ -1,11 +1,10 @@
 // Package plugin is the hey plugin: the wire half over
-// gridwell-plugins/hey/mail. It projects three of HEY's stacks — the Imbox,
-// Reply Later and Set Aside — as three grids, one context each, walked
-// through the official HEY CLI and kept current by its live feed (watch.go).
-// A thread is a text tile that serves a page:
-// its face and document are a markdown card about the email, and descending
-// into it opens the email itself, as HEY's own HTML, through the node's
-// content door.
+// gridwell-plugins/hey/mail. It projects HEY's six boxes as six grids, one
+// context each, walked through the official HEY CLI and kept current by its
+// live feed (watch.go), and everything, their union, as a seventh. A thread
+// is one url tile in everything that serves a page, the email itself as
+// HEY's own HTML through the node's content door; a box lists links to it,
+// so a thread that moves between boxes keeps its one tile.
 //
 // It is a READ-ONLY projection. There is no Delete, no WriteContent and no
 // write of any kind to HEY: the trash gesture is refused with its reason
@@ -251,10 +250,10 @@ func (p *Plugin) refresherInterval() time.Duration {
 }
 
 // Run keeps the memory warm until ctx is done: the live feed (watch.go), and
-// one goroutine sweeping all three collections on the refresher's interval,
+// one goroutine sweeping every box on the refresher's interval,
 // so the walk has happened before a read asks rather than because one did. It shares the flights and
 // the freshness window with the reads, so a tick that lands on a memory a
-// read has just refreshed costs HEY nothing. Sweeping all three together is
+// read has just refreshed costs HEY nothing. Sweeping every box together is
 // also what lets Probe ever answer GONE: a thread is archived only when no
 // collection holds it, and that takes a complete pass over every one.
 func (p *Plugin) Run(ctx context.Context) {
@@ -392,9 +391,9 @@ func (p *Plugin) walk(c mail.Collection, f *flight, gen int) {
 	threads, whole, err := p.src.Box(context.Background(), c.Box)
 	p.logf("hey plugin: walk %q finished in %s: %d threads, whole=%v, err=%v",
 		c.Key, time.Since(start).Round(time.Millisecond), len(threads), whole, err)
-	changed := false
+	var eff mail.Effect
 	if err == nil {
-		changed = p.mem.Absorb(c.Key, threads, whole)
+		eff = p.mem.Absorb(c.Key, threads, whole)
 	} else {
 		p.mem.EndWalk(c.Key)
 	}
@@ -417,11 +416,20 @@ func (p *Plugin) walk(c mail.Collection, f *flight, gen int) {
 	if err == nil {
 		p.saveCache()
 	}
-	if changed {
-		p.changes.publish(c.Key)
-	}
+	p.publish(c.Key, eff)
 	f.err = err
 	close(f.done)
+}
+
+// publish tells every Watch subscriber what one change moved: the box's
+// listing, everything's, or both.
+func (p *Plugin) publish(box string, eff mail.Effect) {
+	if eff.Changed {
+		p.changes.publish(box)
+	}
+	if eff.Everything {
+		p.changes.publish(mail.EverythingContext)
+	}
 }
 
 // List answers one collection. A walk failure with a transport-shaped code
@@ -433,7 +441,17 @@ func (p *Plugin) walk(c mail.Collection, f *flight, gen int) {
 // whether every collection has been read: a thread missing from the Imbox is
 // usually in Reply Later, and an authoritative Imbox would retire its id and
 // lose the user's placement on the way past.
+//
+// A box lists links into everything (mail.BoxEntries); everything lists each
+// thread once, and is as current as every box is.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
+	if req.Context == mail.EverythingContext {
+		if err := p.syncAll(ctx); err != nil {
+			return nil, err
+		}
+		threads := p.mem.Everything()
+		return listing(mail.EverythingLabel, threads, mail.CollectionEntries(threads)), nil
+	}
 	c, ok := mail.LookupCollection(req.Context)
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "hey plugin: unknown context %q", req.Context)
@@ -442,6 +460,10 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		return nil, err
 	}
 	threads := p.mem.Collection(c.Key)
+	return listing(c.Label, threads, mail.BoxEntries(threads)), nil
+}
+
+func listing(label string, threads []mail.Thread, entries []*pluginv1.Entry) *pluginv1.ListResponse {
 	unseen := 0
 	for i := range threads {
 		if !threads[i].Seen {
@@ -449,10 +471,26 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		}
 	}
 	return &pluginv1.ListResponse{
-		Entries:       mail.CollectionEntries(threads),
+		Entries:       entries,
 		Authoritative: false,
-		SourceLabel:   fmt.Sprintf("%s · %d threads · %d unseen", c.Label, len(threads), unseen),
-	}, nil
+		SourceLabel:   fmt.Sprintf("%s · %d threads · %d unseen", label, len(threads), unseen),
+	}
+}
+
+// syncAll is sync over every box at once, answering the first failure.
+func (p *Plugin) syncAll(ctx context.Context) error {
+	errs := make([]error, len(mail.Collections))
+	var wg sync.WaitGroup
+	for i, c := range mail.Collections {
+		wg.Go(func() { errs[i] = p.sync(ctx, c) })
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ReadContent answers the thread's markdown card: the tile's face and its
@@ -514,31 +552,62 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 	})
 }
 
-// Probe is the one place that decides a thread has left. PRESENT while some
-// collection holds it. GONE only once every collection has been read to its
-// end and none of them does — the thread was archived, trashed or filed
-// somewhere this plugin does not project, and the node may retire its id.
-// UNSPECIFIED, meaning "cannot say", until then: a half-swept memory must
-// never cost the user a tile.
-func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
+// Probe is the one place that decides a thread has left, and it answers for
+// the context asked. A box: PRESENT while it holds the thread, GONE once a
+// whole walk did not list it or the feed moved it out (mail.InBox). The
+// thread is usually in another box, and its tile in everything stays.
+// Everything: PRESENT while some box holds it, else HEY's own word on the
+// thread — GONE only when `thread read` says it does not exist. No context
+// (a node from before contexts): PRESENT while some box holds it, GONE once
+// every box has been read to its end and none does. UNSPECIFIED, meaning
+// "cannot say", otherwise: a half-swept memory must never cost the user a
+// tile.
+func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
 	id, ok := mail.ParseKey(req.Key)
 	if !ok {
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
+		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 	}
-	switch {
-	case p.mem.Member(id):
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
-	case p.mem.Swept():
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
+	switch req.Context {
+	case "":
+		switch {
+		case p.mem.Member(id):
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case p.mem.Swept():
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
+	case mail.EverythingContext:
+		if p.mem.Member(id) {
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		}
+		_, err := p.src.ThreadHTML(ctx, id)
+		switch {
+		case err == nil:
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case status.Code(err) == codes.NotFound:
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
 	default:
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
+		if _, ok := mail.LookupCollection(req.Context); !ok {
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a context this plugin never lists
+		}
+		switch p.mem.InBox(req.Context, id) {
+		case mail.Present:
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case mail.Gone:
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
 	}
+	return presence(pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED), nil
+}
+
+func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
+	return &pluginv1.ProbeResponse{Presence: p}
 }
 
 // Search matches the query against the subject, preview and sender of every
-// thread a collection still holds; each result's path is that collection. It
-// reads memory only — no CLI run — so it answers what the grids show and
-// nothing the user cannot navigate to.
+// thread a collection still holds; each result is the thread's one tile, in
+// everything. It reads memory only — no CLI run — so it answers what the
+// grids show and nothing the user cannot navigate to.
 func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
 	q := strings.ToLower(strings.TrimSpace(req.Query))
 	if q == "" {
@@ -565,7 +634,7 @@ func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*plugin
 		}
 		resp.Results = append(resp.Results, &pluginv1.SearchResult{
 			Entry:       entries[0],
-			ContextPath: []string{t.Collection},
+			ContextPath: []string{mail.EverythingContext},
 			Snippet:     t.Snippet(),
 			Score:       1,
 		})

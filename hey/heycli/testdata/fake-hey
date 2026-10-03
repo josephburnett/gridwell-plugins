@@ -44,7 +44,11 @@ JSON
       asidebox)
         echo '{"ok":true,"data":{"id":3,"kind":"asidebox","name":"Set Aside","postings":[]},"summary":"0 threads in Set Aside"}'
         ;;
-      trailbox)
+      feedbox|trailbox|bubblebox)
+        echo "{\"ok\":true,\"data\":{\"id\":4,\"kind\":\"$3\",\"name\":\"$3\",\"postings\":[]},\"summary\":\"0 threads\"}"
+        ;;
+      lockedbox)
+        # No box of HEY's: the selector a test uses to see a refusal.
         cat >&2 <<'JSON'
 {
   "ok": false,

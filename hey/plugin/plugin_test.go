@@ -41,15 +41,17 @@ type fakeHEY struct {
 	boxes map[string][]mail.Thread
 	whole map[string]bool // absent means whole
 	html  map[int64]string
-	err   error
-	calls map[string]int
-	block chan struct{} // when non-nil, Box waits on it
-	feed  *feed         // when nil, Watch runs silent until cancelled
+	// threadErr is what ThreadHTML answers for one thread, over err.
+	threadErr map[int64]error
+	err       error
+	calls     map[string]int
+	block     chan struct{} // when non-nil, Box waits on it
+	feed      *feed         // when nil, Watch runs silent until cancelled
 }
 
 func newFake() *fakeHEY {
 	return &fakeHEY{boxes: map[string][]mail.Thread{}, whole: map[string]bool{},
-		html: map[int64]string{}, calls: map[string]int{}}
+		html: map[int64]string{}, threadErr: map[int64]error{}, calls: map[string]int{}}
 }
 
 func (f *fakeHEY) Box(_ context.Context, box string) ([]mail.Thread, bool, error) {
@@ -73,6 +75,9 @@ func (f *fakeHEY) ThreadHTML(_ context.Context, id int64) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["thread"]++
+	if err := f.threadErr[id]; err != nil {
+		return nil, err
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -159,9 +164,9 @@ func stable(src Source, o Options) *Plugin {
 	return New(src, o)
 }
 
-// The three collections are three contexts and three (+) menu entries. There
-// is no wrapper grid above them and no landing among them: a plugin is not a
-// place, it contributes doorways, and each collection is one.
+// The six boxes and everything are seven contexts and seven (+) menu entries.
+// There is no wrapper grid above them and no landing among them: a plugin is
+// not a place, it contributes doorways, and each collection is one.
 func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	p := stable(newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
@@ -187,9 +192,13 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	for _, e := range info.MenuEntries {
 		got[e.Context] = true
 	}
-	if len(info.MenuEntries) != 3 || !got[mail.ImboxContext] ||
-		!got[mail.ReplyLaterContext] || !got[mail.SetAsideContext] {
-		t.Fatalf("menu entries = %+v, want one per collection", info.MenuEntries)
+	if len(info.MenuEntries) != len(mail.Collections)+1 || !got[mail.EverythingContext] {
+		t.Fatalf("menu entries = %+v, want one per collection and everything", info.MenuEntries)
+	}
+	for _, c := range mail.Collections {
+		if !got[c.Key] {
+			t.Errorf("no menu entry for %s", c.Key)
+		}
 	}
 }
 
@@ -198,6 +207,9 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	f.boxes["laterbox"] = []mail.Thread{th(2, "invoice", "2026-01-04T09:00:00Z")}
 	f.boxes["asidebox"] = []mail.Thread{th(3, "recipe", "2026-01-03T09:00:00Z")}
+	f.boxes["feedbox"] = []mail.Thread{th(4, "digest", "2026-01-02T09:00:00Z")}
+	f.boxes["trailbox"] = []mail.Thread{th(5, "receipt", "2026-01-01T09:00:00Z")}
+	f.boxes["bubblebox"] = []mail.Thread{th(6, "follow up", "2025-12-31T09:00:00Z")}
 	clock := at("2026-01-06T12:00:00Z")
 	p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
@@ -240,7 +252,7 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 
 func TestUnknownContextIsRefused(t *testing.T) {
 	p := stable(newFake(), Options{})
-	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "box:trailbox"})
+	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "box:spambox"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("err = %v, want InvalidArgument", err)
 	}
@@ -582,7 +594,7 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 	if len(res.Results) != 1 || res.Results[0].Entry.Key != "thread:2" {
 		t.Fatalf("results = %+v", res.Results)
 	}
-	if got := res.Results[0].ContextPath; len(got) != 1 || got[0] != mail.ReplyLaterContext {
+	if got := res.Results[0].ContextPath; len(got) != 1 || got[0] != mail.EverythingContext {
 		t.Errorf("context path = %v", got)
 	}
 	if f.count("laterbox") != before {

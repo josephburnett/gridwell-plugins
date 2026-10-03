@@ -20,7 +20,7 @@ func TestLookupBoxIsTheSelectorTable(t *testing.T) {
 			t.Errorf("LookupBox(%q) = %+v, %v", c.Box, got, ok)
 		}
 	}
-	if _, ok := LookupBox("feedbox"); ok {
+	if _, ok := LookupBox("spambox"); ok {
 		t.Error("a box this plugin does not project resolved")
 	}
 }
@@ -108,7 +108,7 @@ func TestEventsDuringAWalkStandOverItsAnswer(t *testing.T) {
 	m.Apply(ImboxContext, added("imbox", thread(3, "c", "2026-01-04")))
 	m.Apply(ImboxContext, deleted("imbox", 10))
 	// The read started before both: it still holds 1 and lacks 3.
-	changed := m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	changed := m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true).Changed
 	if got, want := keys(m.Collection(ImboxContext)), []int64{2, 3}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("imbox = %v, want %v", got, want)
 	}
@@ -135,13 +135,13 @@ func TestEventsDuringAWalkStandOverItsAnswer(t *testing.T) {
 
 func TestAbsorbReportsWhetherTheListingChanged(t *testing.T) {
 	m := NewMemory()
-	if !m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true) {
+	if !m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true).Changed {
 		t.Fatal("a first listing reported no change")
 	}
-	if m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true) {
+	if m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true).Changed {
 		t.Fatal("the same listing reported a change")
 	}
-	if !m.Absorb(ImboxContext, nil, true) {
+	if !m.Absorb(ImboxContext, nil, true).Changed {
 		t.Fatal("an emptied box reported no change")
 	}
 	if !m.Shows(ImboxContext) {

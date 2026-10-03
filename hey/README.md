@@ -1,8 +1,9 @@
 # gridwell-plugin-hey
 
-A read-only projection of one HEY account into Gridwell: three grids — the
-Imbox, Reply Later and Set Aside — with one tile per email thread. A tile's
-face and document are a markdown card about the thread; descending into it
+A read-only projection of one HEY account into Gridwell: one tile per email
+thread, in **everything**, and HEY's six boxes — the Imbox, Reply Later, Set
+Aside, the Feed, the Paper Trail and Bubble Up — as grids of links to those
+tiles. A tile's face is the thread's sender and subject; descending into it
 opens the email itself, as HEY's own HTML, through the node's content door.
 
 Nothing here writes to your mail. There is no delete, no archive, no reply.
@@ -46,8 +47,9 @@ hey watch --events added,updated,deleted,resync   the live feed of mail changes
 ```
 
 `<box>` is one of the CLI's own named box selectors, which `resolveBox` in
-hey-cli answers without a listing call: `imbox`, `laterbox` (Reply Later) and
-`asidebox` (Set Aside).
+hey-cli answers without a listing call: `imbox`, `laterbox` (Reply Later),
+`asidebox` (Set Aside), `feedbox` (the Feed), `trailbox` (the Paper Trail) and
+`bubblebox` (Bubble Up).
 
 `box view` answers the CLI's response envelope. The plugin reads exactly these
 fields and ignores the rest:
@@ -120,8 +122,8 @@ The plugin reads exactly these fields:
 - `deleted` names only the posting and its box. The plugin remembers which
   posting holds each thread in each box, so it knows which thread left.
 - Every thread line names its box, so a change maps to its collection without
-  a read. `box.kind` is the selector `box view` takes (`imbox`, `laterbox`,
-  `asidebox`); every other box (the Feed, the Paper Trail, …) is ignored.
+  a read. `box.kind` is the selector `box view` takes; a box that is none of
+  the six is ignored.
 - `resync` means the box changed more than the feed could list: re-read it.
 - `ready` comes once every box is caught up and the subscription is live, and
   again after every reconnect; `disconnected` when the connection drops.
@@ -155,7 +157,7 @@ changes any shape above, that script and its test are where it shows.
 The plugin runs one `hey watch` for its whole life. Every line lands in
 memory at once, and a line that changes a collection's listing tells the node
 through the plugin's `Watch` stream, so new mail reaches the grid in seconds.
-`resync` re-reads its box. `ready` re-reads all three: the feed says nothing
+`resync` re-reads its box. `ready` re-reads every box: the feed says nothing
 about the time before it was live, so the first `ready` and every one after a
 reconnect is a catch-up.
 
@@ -181,7 +183,28 @@ whether the feed or a walk changed it. It never sends `EntryRemoved`: the
 listings are not authoritative, and a thread that leaves one box is usually
 in another, so whether it is gone is `Probe`'s to say. A subscriber that falls
 64 changes behind never holds the feed up: its changes are dropped, and when
-it reads again it is told all three collections changed.
+it reads again it is told every collection changed.
+
+## Everything and the boxes
+
+Everything is the union of the six boxes, each thread once, laid out like a
+box: a row per day, newest at the top. It is the thread's one home. A box
+lists a link per thread it holds (`Entry.link_target`, naming the thread in
+everything), with the box's own placement; the node draws it dashed and reads
+its page through the thread. So a thread that moves from the Imbox to Reply
+Later leaves one box's grid and appears in the other's, its tile in
+everything untouched, and a tile dragged out of a box into your own grid is a
+link to that tile, which keeps working through every move. It reads dead only
+once HEY no longer has the thread.
+
+`Probe` answers for the context the node asks about. In a box: present while
+the box holds the thread, gone once a whole read of the box did not list it
+or the feed moved its posting out, otherwise "cannot say". In everything:
+present while some box holds it, otherwise `hey thread read` decides — gone
+only when the CLI says the thread does not exist (exit 2).
+
+`Watch` announces everything whenever a thread's record or the union
+changes, and the node passes that on to every box that links into it.
 
 ## State
 

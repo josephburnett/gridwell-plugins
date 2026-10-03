@@ -1,5 +1,6 @@
 // Package mail is the pure half of the hey plugin: the thread record, the
-// three HEY collections it projects, the keys, labels and placement hints
+// six HEY boxes it projects and everything (their union), the keys, labels
+// and placement hints
 // derived from them, the memory of every thread seen, and the disposable
 // cache file that memory rewarms itself from. There is no process and no
 // gRPC here, so everything is unit-tested against fakes, and the plugin
@@ -35,7 +36,7 @@ type Thread struct {
 	Seen       bool      `json:"seen"`
 }
 
-// Collection is one of the three HEY stacks this plugin projects. Key is the
+// Collection is one of the six HEY boxes this plugin projects. Key is the
 // plugin's context key, stable forever. Box is the selector `hey box view`
 // takes — the hey-cli's own named getter, so no listing call is needed to
 // resolve it. Label is the face of the (+) menu row that opens it.
@@ -45,13 +46,16 @@ type Collection struct {
 	Label string
 }
 
-// The three context keys. They embed the CLI's box selector rather than a
+// The box context keys. They embed the CLI's box selector rather than a
 // display name, because a display name is HEY's to change and a key is
 // forever.
 const (
 	ImboxContext      = "box:imbox"
 	ReplyLaterContext = "box:laterbox"
 	SetAsideContext   = "box:asidebox"
+	FeedContext       = "box:feedbox"
+	PaperTrailContext = "box:trailbox"
+	BubbleUpContext   = "box:bubblebox"
 )
 
 // Collections is the projection, in the order the (+) menu offers it.
@@ -60,7 +64,19 @@ var Collections = []Collection{
 	{Key: ImboxContext, Box: "imbox", Label: "imbox"},
 	{Key: ReplyLaterContext, Box: "laterbox", Label: "reply later"},
 	{Key: SetAsideContext, Box: "asidebox", Label: "set aside"},
+	{Key: FeedContext, Box: "feedbox", Label: "the feed"},
+	{Key: PaperTrailContext, Box: "trailbox", Label: "paper trail"},
+	{Key: BubbleUpContext, Box: "bubblebox", Label: "bubble up"},
 }
+
+// EverythingContext is the union of every box: each thread once, its one
+// home. A box lists links to it (BoxEntries), so a thread that moves between
+// boxes keeps its tile and every reference to it. It is no box of HEY's, so
+// nothing walks it; it is derived from the boxes' memory.
+const (
+	EverythingContext = "everything"
+	EverythingLabel   = "everything"
+)
 
 // LookupCollection resolves a context key to its collection.
 func LookupCollection(key string) (Collection, bool) {
