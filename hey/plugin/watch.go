@@ -31,7 +31,7 @@ const DefaultRecoverAfter = 2 * time.Minute
 // ends — the last Watch stream left memo's Linger ago — restarting it with
 // backoff when it stops. A feed the CLI refuses as usage (1 or 8: a CLI with
 // no watch) is not restarted: reads walk on the refresh window instead, and
-// the log says so once. Any other verdict is also every read's answer
+// the log says so once. Any other verdict is every read's unreachable reason
 // (watchErr) until a feed reaches ready.
 func (p *Plugin) watch(ctx context.Context) {
 	backoff := p.watchBackoff
@@ -54,9 +54,7 @@ func (p *Plugin) watch(ctx context.Context) {
 			return
 		case codes.Unavailable:
 		default:
-			p.mu.Lock()
-			p.watchErr = err
-			p.mu.Unlock()
+			p.verdict(err)
 		}
 		if live {
 			backoff = p.watchBackoff
@@ -126,8 +124,8 @@ func (p *Plugin) apply(ev mail.Event) {
 		p.mu.Lock()
 		p.live = true
 		p.liveGen++
-		p.watchErr = nil
 		p.mu.Unlock()
+		p.verdict(nil)
 		for _, c := range mail.Collections {
 			p.flights.Rewalk(c.Key)
 		}
@@ -150,6 +148,18 @@ func (p *Plugin) apply(ev mail.Event) {
 		if eff.Rewalk {
 			p.flights.Rewalk(c.Key)
 		}
+	}
+}
+
+// verdict records why the feed last ended, nil once one is live. Every read
+// answers it as its unreachable reason, so its edges repaint every context.
+func (p *Plugin) verdict(err error) {
+	p.mu.Lock()
+	edge := (p.watchErr == nil) != (err == nil)
+	p.watchErr = err
+	p.mu.Unlock()
+	if edge {
+		p.changes.Publish(contexts()...)
 	}
 }
 

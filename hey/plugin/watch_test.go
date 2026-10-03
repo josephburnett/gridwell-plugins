@@ -521,22 +521,48 @@ func TestAFailedCatchUpIsWalkedByTheNextRead(t *testing.T) {
 	}
 }
 
-// A feed that ends on a verdict — not signed in — is every read's answer, not
-// only the log's, until a feed reaches ready again. The memory it leaves is
-// still there to answer from; the error says it is no longer current.
-func TestAFeedVerdictSurfacesOnTheNextRead(t *testing.T) {
+// A feed that ends on a verdict — not signed in — is every read's reason
+// until a feed reaches ready again, never a refusal: the memory it leaves
+// still answers (decision 3). Both edges repaint every open grid, so the
+// reason reaches the screen and leaves it without a gesture.
+func TestAFeedVerdictIsEveryReadsReason(t *testing.T) {
 	var mu sync.Mutex
 	var logs []string
-	p, f, _, evs := live(t, Options{WatchBackoff: 20 * time.Millisecond, Logf: func(format string, args ...any) {
+	p, f, w, evs := live(t, Options{WatchBackoff: 20 * time.Millisecond, Logf: func(format string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
 		logs = append(logs, format)
 	}})
+	list := func() *pluginv1.ListResponse {
+		t.Helper()
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+		if err != nil {
+			t.Fatalf("the verdict refused a read: %v", err)
+		}
+		return resp
+	}
 	f.feed.exit <- status.Error(codes.PermissionDenied, "hey plugin: watch: Not logged in (Run: hey auth login)")
-	eventually(t, "the verdict reaches a read", func() bool {
-		_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
-		return status.Code(err) == codes.PermissionDenied && strings.Contains(err.Error(), "Not logged in")
-	})
+	repainted := func() {
+		t.Helper()
+		got := map[string]bool{}
+		eventually(t, "every context is repainted", func() bool {
+			select {
+			case k := <-w.got:
+				got[k] = true
+			default:
+			}
+			for _, c := range contexts() {
+				if !got[c] {
+					return false
+				}
+			}
+			return true
+		})
+	}
+	repainted()
+	if r := list(); len(r.Entries) != 1 || !strings.Contains(r.Unreachable, "Not logged in") {
+		t.Fatalf("listing under the verdict = %+v, want memory and the reason", r)
+	}
 	mu.Lock()
 	if !slices.ContainsFunc(logs, func(l string) bool { return strings.Contains(l, "watch ended") }) {
 		t.Errorf("the verdict was not logged: %v", logs)
@@ -545,11 +571,34 @@ func TestAFeedVerdictSurfacesOnTheNextRead(t *testing.T) {
 
 	<-f.feed.starts
 	send(t, f.feed, evs[lineReady])
-	eventually(t, "the feed is live", func() bool { return isLive(p) })
+	repainted()
 	idle(t, p)
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
-		t.Fatalf("a feed that is live again left the verdict standing: %v", err)
+	if r := list(); r.Unreachable != "" {
+		t.Fatalf("a feed that is live again left the verdict standing: %q", r.Unreachable)
 	}
+}
+
+// A walk that fails, and the walk that lands after it, each repaint the box
+// and everything: the reason is news to an open grid, and so is its end.
+func TestTheEdgesOfAFailedWalkRepaint(t *testing.T) {
+	p, f, w, _ := live(t, Options{})
+	f.mu.Lock()
+	f.boxErr["laterbox"] = status.Error(codes.Unavailable, "network")
+	f.mu.Unlock()
+	p.flights.Rewalk(mail.ReplyLaterContext)
+	expect(t, w, mail.ReplyLaterContext)
+	expect(t, w, mail.EverythingContext)
+	p.flights.Rewalk(mail.ReplyLaterContext)
+	idle(t, p)
+	if got := quiet(w); len(got) != 0 {
+		t.Fatalf("a second failure repainted %v", got)
+	}
+	f.mu.Lock()
+	delete(f.boxErr, "laterbox")
+	f.mu.Unlock()
+	p.flights.Rewalk(mail.ReplyLaterContext)
+	expect(t, w, mail.ReplyLaterContext)
+	expect(t, w, mail.EverythingContext)
 }
 
 // A feed that keeps ending is one episode in the log: the first end is said,

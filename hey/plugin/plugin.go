@@ -105,6 +105,10 @@ type Plugin struct {
 	// effects are what each landed walk changed, held for flights' Landed to
 	// announce once the landing is recorded.
 	effects map[string]mail.Effect
+	// failing holds the collections whose last walk failed. Only the edges
+	// repaint: the first failure, so an open grid shows the reason, and the
+	// landing after it, so the reason leaves.
+	failing map[string]bool
 
 	watchBackoff time.Duration
 	recoverAfter time.Duration
@@ -161,6 +165,7 @@ func New(src Source, o Options) *Plugin {
 		logf:         o.Logf,
 		caughtUp:     map[string]int{},
 		effects:      map[string]mail.Effect{},
+		failing:      map[string]bool{},
 		watchBackoff: o.WatchBackoff,
 		recoverAfter: o.RecoverAfter,
 		ready:        o.Ready,
@@ -293,14 +298,22 @@ func (p *Plugin) walk(ctx context.Context, key string) error {
 // is released, so a listing that waited is one a restart repeats, and then
 // the change goes out, so the node's re-list finds the landing recorded.
 func (p *Plugin) landed(key string, err error) {
-	if err != nil {
-		return
-	}
-	p.save()
 	p.mu.Lock()
+	edge := p.failing[key] != (err != nil)
+	if err != nil {
+		p.failing[key] = true
+	} else {
+		delete(p.failing, key)
+	}
 	eff := p.effects[key]
 	delete(p.effects, key)
 	p.mu.Unlock()
+	if err == nil {
+		p.save()
+	}
+	if edge {
+		eff.Changed, eff.Everything = true, true
+	}
 	p.publish(key, eff)
 }
 
@@ -323,8 +336,9 @@ func (p *Plugin) publish(box string, eff mail.Effect) {
 
 // read makes one collection answerable (memo.Flights.Read): a read memory
 // has a listing for never waits. A refresh that failed is not the read's
-// failure: memory answers, and unreachable says why (rule 7). err is only
-// the caller hanging up, or the feed's verdict.
+// failure: memory answers, and unreachable says why (rule 7), the walk's
+// failure first and then the feed's verdict. err is only the caller hanging
+// up.
 func (p *Plugin) read(ctx context.Context, key string) (unreachable string, err error) {
 	reason, err := p.flights.Read(ctx, key, p.mem.Shows(key))
 	if err != nil {
@@ -333,9 +347,12 @@ func (p *Plugin) read(ctx context.Context, key string) (unreachable string, err 
 		}
 		reason = memo.Reason(err)
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return reason, p.watchErr
+	if reason == "" {
+		p.mu.Lock()
+		reason = memo.Reason(p.watchErr)
+		p.mu.Unlock()
+	}
+	return reason, nil
 }
 
 // List answers one collection from memory, refreshed first when it is not
