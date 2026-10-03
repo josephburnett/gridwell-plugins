@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -146,5 +148,120 @@ func TestInfoRefusesARootItCannotServe(t *testing.T) {
 	}
 	if info, err := New(empty, nil).Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
 		t.Errorf("empty root → Info %v, %v; want healthy with its one collection", info, err)
+	}
+}
+
+// recordingHost records what Delete trashed and touches nothing.
+type recordingHost struct{ trashed []string }
+
+func (h *recordingHost) Trash(p string) error { h.trashed = append(h.trashed, p); return nil }
+
+type contentStream struct {
+	grpc.ServerStream
+	chunks []*pluginv1.ContentChunk
+}
+
+func (s *contentStream) Send(c *pluginv1.ContentChunk) error {
+	s.chunks = append(s.chunks, c)
+	return nil
+}
+
+// lockedDir answers a root holding locked/f.md, with locked made unsearchable
+// so every stat inside it fails with EACCES. It skips where permissions do not
+// bind.
+func lockedDir(t *testing.T) (root string) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		t.Skip("permissions do not bind here")
+	}
+	root = t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "f.md"), []byte("kept"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	return root
+}
+
+// Only a path that is not there is an idempotent delete. A path the plugin
+// cannot see is a source it cannot reach right now: Unavailable with the
+// reason, and nothing trashed.
+func TestDeleteSucceedsOnlyForAGonePath(t *testing.T) {
+	ctx := context.Background()
+	root := lockedDir(t)
+	h := &recordingHost{}
+	p := New(root, h)
+	if _, err := p.Delete(ctx, &pluginv1.DeleteRequest{Key: "missing.md"}); err != nil {
+		t.Errorf("Delete of a gone path = %v, want success", err)
+	}
+	_, err := p.Delete(ctx, &pluginv1.DeleteRequest{Key: "locked/f.md"})
+	if status.Code(err) != codes.Unavailable || !strings.Contains(status.Convert(err).Message(), "permission denied") {
+		t.Errorf("Delete inside an unreadable directory = %v, want Unavailable naming the reason", err)
+	}
+	if len(h.trashed) != 0 {
+		t.Errorf("trashed %v, want nothing", h.trashed)
+	}
+}
+
+// A file and a directory leave the same way: to the trash.
+func TestDeleteTrashesFilesAndDirectoriesAlike(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "f.md"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &recordingHost{}
+	p := New(root, h)
+	for _, key := range []string{"d", "f.md"} {
+		if _, err := p.Delete(context.Background(), &pluginv1.DeleteRequest{Key: key}); err != nil {
+			t.Fatalf("Delete(%q): %v", key, err)
+		}
+	}
+	if want := []string{filepath.Join(root, "d"), filepath.Join(root, "f.md")}; strings.Join(h.trashed, ",") != strings.Join(want, ",") {
+		t.Errorf("trashed %v, want %v", h.trashed, want)
+	}
+}
+
+// A file the plugin cannot stat has a body it cannot read right now, which is
+// not an empty body; a gone file still answers empty.
+func TestReadContentOfAnUnreadableFileIsUnavailable(t *testing.T) {
+	root := lockedDir(t)
+	p := New(root, nil)
+	err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "locked/f.md"}, &contentStream{})
+	if status.Code(err) != codes.Unavailable || !strings.Contains(status.Convert(err).Message(), "permission denied") {
+		t.Errorf("ReadContent inside an unreadable directory = %v, want Unavailable naming the reason", err)
+	}
+	gone := &contentStream{}
+	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "missing.md"}, gone); err != nil || len(gone.chunks) != 1 || len(gone.chunks[0].Data) != 0 {
+		t.Errorf("ReadContent of a gone file = %v, %v; want one empty chunk", gone.chunks, err)
+	}
+}
+
+// A context that is now a file, or lies under one, has no entries, and that is
+// definitive: an authoritative empty listing, not a dark source, and a key
+// under a file probes gone.
+func TestListOfAContextThatIsAFileIsAuthoritativeAndEmpty(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "was-a-dir"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := New(root, nil)
+	for _, ctxKey := range []string{"was-a-dir", "was-a-dir/sub"} {
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctxKey})
+		if err != nil || !resp.Authoritative || len(resp.Entries) != 0 {
+			t.Errorf("List(%q) = %v, %v; want an authoritative empty listing", ctxKey, resp, err)
+		}
+	}
+	pr, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: "was-a-dir/f.md"})
+	if err != nil || pr.Presence != pluginv1.ProbeResponse_PRESENCE_GONE {
+		t.Errorf("Probe of a key under a file = %v, %v; want GONE", pr, err)
 	}
 }
