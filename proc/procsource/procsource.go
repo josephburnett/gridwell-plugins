@@ -1,11 +1,12 @@
-// Package procsource reads the Linux /proc filesystem and projects the process
-// tree into the abstract entries the proc plugin lists. It is pure Go, with no
-// database. Tests run against a temp-dir stub /proc, so they do not depend on
-// the host's process table.
+// Package procsource reads the Linux /proc filesystem: each process's place in
+// the tree from its stat file, and the metadata an @info tile shows. Tests run
+// against a temp-dir stub /proc, so they do not depend on the host's process
+// table.
 package procsource
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -21,11 +22,9 @@ import (
 // directory; the production server passes DefaultRoot.
 const DefaultRoot = "/proc"
 
-// Info is the metadata for a single process. Fields beyond the
-// identifier triple (PID/PPID/Name) come from /proc/<pid>/status and
-// /proc/<pid>/cwd; readers that can't resolve a field leave it at its
-// zero value rather than failing the read — a process is allowed to
-// hide bits of its state from a non-privileged reader.
+// Info is the metadata an @info tile shows, from /proc/<pid>/status, cmdline
+// and cwd. A field the reader cannot resolve stays zero rather than failing
+// the read: a process may hide bits of its state from an unprivileged reader.
 type Info struct {
 	PID     int64
 	PPID    int64
@@ -51,27 +50,24 @@ type Info struct {
 	Cwd string
 }
 
-// Children returns the direct child processes of parentPID, sorted by
-// PID for deterministic auto-grid layout. It walks every numeric
-// subdirectory of procRoot, reads the status file, and keeps those
-// whose PPid matches.
-//
-// procRoot is normally DefaultRoot. Tests pass a stub directory.
-func Children(procRoot string, parentPID int64) ([]Info, error) {
+// Children returns the direct children of parentPID, sorted by pid. It reads
+// only each process's stat file, since every process on the host is read to
+// find a few. The error is the scan's: a table it cannot list, or ctx done. A
+// process that exits or cannot be read mid-scan is left out, and the caller's
+// listing is non-authoritative for exactly that reason.
+func Children(ctx context.Context, procRoot string, parentPID int64) ([]Stat, error) {
 	pids, err := listPIDs(procRoot)
 	if err != nil {
 		return nil, err
 	}
-	var out []Info
+	var out []Stat
 	for _, pid := range pids {
-		info, err := readInfo(procRoot, pid)
-		if err != nil {
-			// A process can disappear between listPIDs and readInfo.
-			// Skip it rather than failing the whole read.
-			continue
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		if info.PPID == parentPID {
-			out = append(out, info)
+		st, err := ReadStat(procRoot, pid)
+		if err == nil && st.PPID == parentPID {
+			out = append(out, st)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
@@ -88,6 +84,9 @@ func Get(procRoot string, pid int64) (Info, error) {
 type Stat struct {
 	PID  int64
 	PPID int64
+	// StartTime is when the process started, in clock ticks since boot: with
+	// PID it names one process, where a pid alone is reused.
+	StartTime uint64
 }
 
 // ReadStat reads pid's /proc/<pid>/stat.
@@ -115,16 +114,21 @@ func parseStat(b []byte) (Stat, error) {
 	if err != nil {
 		return Stat{}, fmt.Errorf("stat pid: %w", err)
 	}
-	// After the name: state, then ppid.
+	// After the name come fields 3 onward (proc(5)): ppid is field 4 and
+	// starttime field 22.
 	rest := strings.Fields(s[rp+1:])
-	if len(rest) < 2 {
+	if len(rest) < 22-2 {
 		return Stat{}, fmt.Errorf("stat %q is short", s)
 	}
-	ppid, err := strconv.ParseInt(rest[1], 10, 64)
+	ppid, err := strconv.ParseInt(rest[4-3], 10, 64)
 	if err != nil {
 		return Stat{}, fmt.Errorf("stat ppid: %w", err)
 	}
-	return Stat{PID: pid, PPID: ppid}, nil
+	start, err := strconv.ParseUint(rest[22-3], 10, 64)
+	if err != nil {
+		return Stat{}, fmt.Errorf("stat starttime: %w", err)
+	}
+	return Stat{PID: pid, PPID: ppid, StartTime: start}, nil
 }
 
 // IsGone reports whether err from a read under /proc/<pid> means the process
@@ -178,11 +182,8 @@ func listPIDs(procRoot string) ([]int64, error) {
 	return out, nil
 }
 
-// readInfo reads /proc/<pid>/status and /proc/<pid>/cmdline into an
-// Info, then resolves /proc/<pid>/cwd best-effort. Status is the only
-// hard dependency: a missing status means the process is gone. cwd
-// failures (sandbox / permission) leave Cwd empty without surfacing an
-// error.
+// readInfo's one hard dependency is status: a missing status means the
+// process is gone. cmdline and cwd are best-effort.
 func readInfo(procRoot string, pid int64) (Info, error) {
 	info := Info{PID: pid}
 	dir := filepath.Join(procRoot, strconv.FormatInt(pid, 10))
@@ -197,8 +198,8 @@ func readInfo(procRoot string, pid int64) (Info, error) {
 	return info, nil
 }
 
-// parseStatus reads /proc/<pid>/status (a TEXT key:value list) and
-// extracts the fields Info cares about (Name, PPid, Uid).
+// parseStatus reads /proc/<pid>/status, a key:value list, into the fields
+// Info carries.
 func parseStatus(path string, out *Info) error {
 	f, err := os.Open(path)
 	if err != nil {

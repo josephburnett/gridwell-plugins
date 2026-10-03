@@ -167,7 +167,7 @@ func parsePID(s string) (int64, bool) {
 // List enumerates one process's children plus its @info tile, @info first, so
 // the ids the node mints stay stable. A process table it cannot read is
 // Unavailable: a partial listing would look like the truth.
-func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
+func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	pid, err := contextPID(req.Context)
 	if err != nil {
 		return nil, err
@@ -183,7 +183,10 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 			Kind: "text", Label: infoLabel, TextPresentation: "both",
 		})
 	}
-	children, err := procsource.Children(p.procRoot, pid)
+	children, err := procsource.Children(ctx, p.procRoot, pid)
+	if ctx.Err() != nil {
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "proc plugin: children of %d: %v", pid, err)
 	}

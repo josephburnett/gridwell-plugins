@@ -100,9 +100,9 @@ func TestSplitKVAndFirstField(t *testing.T) {
 // the last ')', so spaces and parentheses in the name do not shift them.
 func TestParseStatSplitsAfterTheLastParen(t *testing.T) {
 	for line, want := range map[string]Stat{
-		"7 (sh) S 3 7 7 0 -1\n":           {PID: 7, PPID: 3},
-		"9 (a) b) (c) R 4 9 9 0 -1\n":     {PID: 9, PPID: 4},
-		"12 (tmux: server) S 1 12 12 0\n": {PID: 12, PPID: 1},
+		statLine(7, "sh", 3, 55):            {PID: 7, PPID: 3, StartTime: 55},
+		statLine(9, "a) b) (c", 4, 66):      {PID: 9, PPID: 4, StartTime: 66},
+		statLine(12, "tmux: server", 1, 77): {PID: 12, PPID: 1, StartTime: 77},
 	} {
 		got, err := parseStat([]byte(line))
 		if err != nil || got != want {
