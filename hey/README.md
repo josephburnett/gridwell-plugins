@@ -36,7 +36,9 @@ Two optional keys:
 | `refresh` | `1m` | how often one collection is re-walked while the live feed is down |
 
 A CLI that cannot be found refuses the plugin's handshake with that reason, so
-its row shows it broken until the CLI is installed.
+its row shows it broken until the CLI is installed. One that goes missing after
+that is a source not answering: the node keeps serving its rows, dark, until
+the CLI is back.
 
 ## The CLI contract
 
@@ -177,7 +179,7 @@ each collection is re-walked when its last walk is older than that.
 A read answers from memory at once whenever memory has a listing of the
 collection, even while a walk it started runs behind it; it carries the last
 failed walk's error until a walk lands, and the verdict the feed ended on
-(not signed in, no CLI) until the feed is live again. Only a read with no listing to
+(not signed in) until the feed is live again. Only a read with no listing to
 answer — the first ever — waits for the walk, at most 2s.
 
 `Watch` sends only `ContextChanged`, one per collection whose listing changed,
