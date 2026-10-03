@@ -84,6 +84,49 @@ func Get(procRoot string, pid int64) (Info, error) {
 	return readInfo(procRoot, pid)
 }
 
+// Stat is a process's place in the tree, read from /proc/<pid>/stat.
+type Stat struct {
+	PID  int64
+	PPID int64
+}
+
+// ReadStat reads pid's /proc/<pid>/stat.
+func ReadStat(procRoot string, pid int64) (Stat, error) {
+	b, err := os.ReadFile(filepath.Join(procRoot, strconv.FormatInt(pid, 10), "stat"))
+	if err != nil {
+		return Stat{}, err
+	}
+	st, err := parseStat(b)
+	if err != nil {
+		return Stat{}, fmt.Errorf("pid %d: %w", pid, err)
+	}
+	return st, nil
+}
+
+// parseStat splits after the LAST ')': the command name between the
+// parentheses is the process's to choose and may hold spaces and parentheses.
+func parseStat(b []byte) (Stat, error) {
+	s := string(b)
+	lp, rp := strings.IndexByte(s, '('), strings.LastIndexByte(s, ')')
+	if lp < 0 || rp < lp {
+		return Stat{}, fmt.Errorf("stat %q has no command name", s)
+	}
+	pid, err := strconv.ParseInt(strings.TrimSpace(s[:lp]), 10, 64)
+	if err != nil {
+		return Stat{}, fmt.Errorf("stat pid: %w", err)
+	}
+	// After the name: state, then ppid.
+	rest := strings.Fields(s[rp+1:])
+	if len(rest) < 2 {
+		return Stat{}, fmt.Errorf("stat %q is short", s)
+	}
+	ppid, err := strconv.ParseInt(rest[1], 10, 64)
+	if err != nil {
+		return Stat{}, fmt.Errorf("stat ppid: %w", err)
+	}
+	return Stat{PID: pid, PPID: ppid}, nil
+}
+
 // IsGone reports whether err from a read under /proc/<pid> means the process
 // has exited, rather than that it could not be read.
 func IsGone(err error) bool {

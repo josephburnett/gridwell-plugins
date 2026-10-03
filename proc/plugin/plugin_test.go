@@ -179,6 +179,55 @@ func TestReadingInfoOfAGoneOrUnreadableProcessIsAVerdict(t *testing.T) {
 	}
 }
 
+// Probe answers for the context it names. A process is under the context of
+// its parent now, so a child reparented after its parent died (30, once
+// under 10) is gone from the old grid and present in its new parent's; an
+// @info tile lives only in its own process's grid, and only while that
+// process runs. No context asks about the plugin as a whole.
+func TestProbeAnswersForTheContextAsked(t *testing.T) {
+	root := stubProc(t, map[int64]int64{1: 0, 10: 1, 20: 10, 30: 1})
+	p := served(t, root, 1)
+	const (
+		present = pluginv1.ProbeResponse_PRESENCE_PRESENT
+		gone    = pluginv1.ProbeResponse_PRESENCE_GONE
+		unknown = pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED
+	)
+	cases := []struct {
+		key, context string
+		want         pluginv1.ProbeResponse_Presence
+	}{
+		{"20", "10", present},
+		{"30", "10", gone},
+		{"30", "1", present},
+		{"30", "", present},
+		{"42", "1", gone},
+		{"42", "", gone},
+		{"info:10", "10", present},
+		{"info:10", "", present},
+		{"info:10", "1", gone},
+		{"info:42", "42", gone},
+		{"info:42", "", gone},
+		{"20", "info:10", gone},
+		{"nope", "1", gone},
+	}
+	probe := func(key, ctxKey string) pluginv1.ProbeResponse_Presence {
+		resp, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: key, Context: ctxKey})
+		if err != nil {
+			t.Fatalf("Probe(%q in %q): %v", key, ctxKey, err)
+		}
+		return resp.Presence
+	}
+	for _, c := range cases {
+		if got := probe(c.key, c.context); got != c.want {
+			t.Errorf("Probe(%q in %q) = %v, want %v", c.key, c.context, got, c.want)
+		}
+	}
+	deny(t, filepath.Join(root, "20"))
+	if got := probe("20", "10"); got != unknown {
+		t.Errorf("Probe of an unreadable process = %v, want UNSPECIFIED", got)
+	}
+}
+
 // @info's body is markdown, so it declares the document renderer with the
 // toggle to its source; every text entry the plugin lists declares one.
 func TestEveryTextEntryDeclaresItsPresentation(t *testing.T) {

@@ -139,21 +139,36 @@ func (p *Plugin) servable() error {
 	return nil
 }
 
-// keyPID resolves any key shape to the pid it denotes.
-func keyPID(key string) (int64, error) {
-	s := strings.TrimPrefix(key, infoKeyPrefix)
-	pid, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || pid <= 0 {
-		return 0, status.Errorf(codes.InvalidArgument, "proc plugin: invalid key %q", key)
+// parseKey resolves a key to the pid it names, and whether it is that pid's
+// @info tile rather than its well.
+func parseKey(key string) (pid int64, info bool, err error) {
+	s, info := strings.CutPrefix(key, infoKeyPrefix)
+	pid, ok := parsePID(s)
+	if !ok {
+		return 0, false, status.Errorf(codes.InvalidArgument, "proc plugin: invalid key %q", key)
+	}
+	return pid, info, nil
+}
+
+// contextPID resolves a context, which is always a bare pid.
+func contextPID(context string) (int64, error) {
+	pid, ok := parsePID(context)
+	if !ok {
+		return 0, status.Errorf(codes.InvalidArgument, "proc plugin: invalid context %q", context)
 	}
 	return pid, nil
+}
+
+func parsePID(s string) (int64, bool) {
+	pid, err := strconv.ParseInt(s, 10, 64)
+	return pid, err == nil && pid > 0
 }
 
 // List enumerates one process's children plus its @info tile, @info first, so
 // the ids the node mints stay stable. A process table it cannot read is
 // Unavailable: a partial listing would look like the truth.
 func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	pid, err := keyPID(req.Context)
+	pid, err := contextPID(req.Context)
 	if err != nil {
 		return nil, err
 	}
@@ -182,13 +197,13 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 }
 
 func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {
-	if !strings.HasPrefix(req.Key, infoKeyPrefix) {
-		// A process well carries no document body.
-		return stream.Send(&pluginv1.ContentChunk{})
-	}
-	pid, err := keyPID(req.Key)
+	pid, isInfo, err := parseKey(req.Key)
 	if err != nil {
 		return err
+	}
+	if !isInfo {
+		// A process well carries no document body.
+		return stream.Send(&pluginv1.ContentChunk{})
 	}
 	info, err := procsource.Get(p.procRoot, pid)
 	switch {
@@ -203,31 +218,44 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	})
 }
 
+// Probe answers for the context named, or for the plugin as a whole when none
+// is. A process is under its parent's context now, so a child reparented
+// after its parent died is gone from the old grid; info:<pid> lives only in
+// <pid>'s grid, and only while <pid> runs.
 func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
-	if strings.HasPrefix(req.Key, infoKeyPrefix) {
-		// @info is never swept: it describes the grid's own process, and a
-		// grid outliving its process is the wells' problem, not @info's.
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
-	}
-	pid, err := keyPID(req.Key)
+	pid, isInfo, err := parseKey(req.Key)
 	if err != nil {
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
+		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 	}
-	present, perr := procsource.Exists(p.procRoot, pid)
+	var under int64 // 0: the plugin as a whole
+	if req.Context != "" {
+		if under, err = contextPID(req.Context); err != nil {
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a context this plugin never lists
+		}
+	}
+	if isInfo && under != 0 && under != pid {
+		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+	}
+	st, err := procsource.ReadStat(p.procRoot, pid)
 	switch {
-	case perr != nil:
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
-	case present:
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
-	default:
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
+	case procsource.IsGone(err):
+		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+	case err != nil:
+		return presence(pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED), nil
+	case !isInfo && under != 0 && st.PPID != under:
+		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 	}
+	return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+}
+
+func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
+	return &pluginv1.ProbeResponse{Presence: p}
 }
 
 // Delete sends SIGTERM, best-effort; the tile sweeps once the process is
 // definitively gone.
 func (p *Plugin) Delete(_ context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {
-	pid, err := keyPID(req.Key)
+	pid, _, err := parseKey(req.Key)
 	if err != nil {
 		return nil, err
 	}

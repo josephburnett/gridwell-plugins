@@ -95,3 +95,23 @@ func TestSplitKVAndFirstField(t *testing.T) {
 		t.Errorf("firstField(blank) = %q, want empty", got)
 	}
 }
+
+// A command name is the process's to choose: parseStat takes the fields after
+// the last ')', so spaces and parentheses in the name do not shift them.
+func TestParseStatSplitsAfterTheLastParen(t *testing.T) {
+	for line, want := range map[string]Stat{
+		"7 (sh) S 3 7 7 0 -1\n":           {PID: 7, PPID: 3},
+		"9 (a) b) (c) R 4 9 9 0 -1\n":     {PID: 9, PPID: 4},
+		"12 (tmux: server) S 1 12 12 0\n": {PID: 12, PPID: 1},
+	} {
+		got, err := parseStat([]byte(line))
+		if err != nil || got != want {
+			t.Errorf("parseStat(%q) = %+v, %v; want %+v", line, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "7 sh S 3", "7 (sh) S", "x (sh) S 3"} {
+		if got, err := parseStat([]byte(bad)); err == nil {
+			t.Errorf("parseStat(%q) = %+v; want an error", bad, got)
+		}
+	}
+}
