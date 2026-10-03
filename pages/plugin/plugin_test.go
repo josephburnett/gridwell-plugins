@@ -242,6 +242,39 @@ func TestInfoDeclaresTheCollectionAndNotHostContent(t *testing.T) {
 	if info.HostContent {
 		t.Error("host_content is true; the pages are the plugin's own content")
 	}
+	// Standard rule 1: the plugin implements no Watch, so it declares none.
+	if info.Watch {
+		t.Error("watch is declared; this plugin implements no Watch")
+	}
+	if err := impl.Watch(&pluginv1.WatchRequest{}, nil); status.Code(err) != codes.Unimplemented {
+		t.Errorf("Watch = %v; a plugin that declares no watch must not implement one", err)
+	}
+}
+
+// Every entry's label is its doc's and no entry carries state (standard rule
+// 11): the site never changes, so there is nothing worth noticing. Every hint
+// is the doc's own cell (rule 10), so it cannot move with the listing order.
+func TestEntriesAreQuietAndHintedByTheirDoc(t *testing.T) {
+	resp, err := New().List(context.Background(), &pluginv1.ListRequest{Context: site.RootContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range resp.Entries {
+		d := site.Lookup(e.Key)
+		if d == nil {
+			t.Fatalf("listed %q, which the site does not hold", e.Key)
+		}
+		if e.Label != d.Label {
+			t.Errorf("%s label = %q, want the doc's %q", e.Key, e.Label, d.Label)
+		}
+		if e.StatusDetail != "" {
+			t.Errorf("%s carries status_detail %q; the site has no state", e.Key, e.StatusDetail)
+		}
+		h := e.PlacementHint
+		if h == nil || h.X != d.Col || h.Y != d.Row || h.W != 2 || h.H != 2 {
+			t.Errorf("%s hint = %v, want the doc's cell (%d,%d) at 2x2", e.Key, h, d.Col, d.Row)
+		}
+	}
 }
 
 // Delete refuses with a reason rather than succeeding silently: a delete that
