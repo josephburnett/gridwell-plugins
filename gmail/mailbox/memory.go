@@ -253,9 +253,9 @@ func union(a, b []string) []string {
 	return out
 }
 
-// Collection answers one collection's messages, oldest first — the order the
-// placement hints are derived from, so two nodes lay the same mail out the
-// same way. A member whose record is missing is skipped rather than invented;
+// Collection answers one collection's messages, oldest first, so two reads
+// list the same mail in the same order. A member whose record is missing is
+// skipped rather than invented;
 // it keeps its place in the membership and gets a tile on the next walk that
 // reads its metadata.
 func (m *Memory) Collection(key string) []View {

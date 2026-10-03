@@ -1,45 +1,49 @@
 package mailbox
 
 import (
+	"github.com/josephburnett/gridwell-plugins/memo/calendar"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell/api/rpc"
 )
 
+// Entry is one listed tile.
+type Entry = pluginv1.Entry
+
 // CollectionEntries derives all mail's grid: every message as a url tile
-// serving its own page, hinted as a calendar — a row per day,
-// newest at the top, the day's messages left to right in arrival order.
-// views must be oldest first, which is what Memory.Collection answers.
+// serving its own page, named by its subject and hinted at the shared
+// calendar's cell for its date (calendar.Cell), which reads nothing but the
+// message.
 //
 // A message is a page, so it is a url entry that serves one: the node derives
 // the address at its /content/ door, so there is none to declare here, and a
 // url entry offers no text body beside the page.
-func CollectionEntries(views []View) []*pluginv1.Entry {
-	perDay := map[int64]int{}
-	out := make([]*pluginv1.Entry, 0, len(views))
-	for _, v := range views {
-		day := Day(v.Date)
-		index := perDay[day]
-		perDay[day] = index + 1
-		x, y := Cell(v.Date, index)
-		out = append(out, &pluginv1.Entry{
-			Key:           v.Key(),
-			Kind:          rpc.KindURL,
-			Label:         v.Label(),
-			ServesPage:    true,
-			StatusDetail:  v.StatusDetail(),
-			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: MessageTileW, H: 1},
-		})
+func CollectionEntries(views []View) []*Entry {
+	return entries(AllMailContext, views)
+}
+
+// LabelEntries derives one label's grid: its messages as in all mail, each a
+// link to the same message there. The content facts stay, so a node that
+// predates link_target still shows the label as pages of its own.
+func LabelEntries(label string, views []View) []*Entry {
+	out := entries(label, views)
+	for _, e := range out {
+		e.LinkTarget = &pluginv1.EntryRef{Context: AllMailContext, Key: e.Key}
 	}
 	return out
 }
 
-// LabelEntries derives one label's grid: CollectionEntries, each a link to
-// the same message in all mail. The content facts stay, so a node that
-// predates link_target still shows the label as pages of its own.
-func LabelEntries(views []View) []*pluginv1.Entry {
-	out := CollectionEntries(views)
-	for _, e := range out {
-		e.LinkTarget = &pluginv1.EntryRef{Context: AllMailContext, Key: e.Key}
+func entries(context string, views []View) []*Entry {
+	out := make([]*Entry, 0, len(views))
+	for _, v := range views {
+		x, y := calendar.Cell(v.Date, MessageTileW)
+		out = append(out, &pluginv1.Entry{
+			Key:           v.Key(),
+			Kind:          rpc.KindURL,
+			Label:         v.Title(),
+			ServesPage:    true,
+			StatusDetail:  v.StatusDetail(context),
+			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: MessageTileW, H: 1},
+		})
 	}
 	return out
 }

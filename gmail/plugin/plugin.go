@@ -530,7 +530,7 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		return nil, err
 	}
 	views := p.mem.Collection(c.Key)
-	return listing(c.Label, views, mailbox.LabelEntries(views), p.mem.Definitive(c.Key) && p.current()), nil
+	return listing(c.Label, views, mailbox.LabelEntries(c.Key, views), p.mem.Definitive(c.Key) && p.current()), nil
 }
 
 func listing(label string, views []mailbox.View, entries []*pluginv1.Entry, authoritative bool) *pluginv1.ListResponse {

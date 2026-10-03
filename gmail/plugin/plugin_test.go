@@ -382,7 +382,7 @@ func TestUnreadComesFromASecondListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(resp.Entries[0].Label, mailbox.UnreadMark) || resp.Entries[0].StatusDetail != "unread" {
+	if resp.Entries[0].StatusDetail != mailbox.UnreadMark {
 		t.Fatalf("entry = %+v", resp.Entries[0])
 	}
 	if !strings.Contains(resp.SourceLabel, "1 unread") {
@@ -400,8 +400,8 @@ func TestUnreadComesFromASecondListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(resp.Entries[0].Label, mailbox.UnreadMark) {
-		t.Errorf("a message read at Gmail kept its mark: %q", resp.Entries[0].Label)
+	if resp.Entries[0].StatusDetail != "" {
+		t.Errorf("a message read at Gmail kept its mark: %q", resp.Entries[0].StatusDetail)
 	}
 	if f.count("headers") != before {
 		t.Error("clearing an unread mark cost a metadata read")
@@ -436,8 +436,8 @@ func TestOneMessageReadsTheSameOnBothGrids(t *testing.T) {
 	if inbox.Entries[0].Label != starred.Entries[0].Label {
 		t.Errorf("one message read two ways: %q vs %q", inbox.Entries[0].Label, starred.Entries[0].Label)
 	}
-	if !strings.HasPrefix(inbox.Entries[0].Label, mailbox.StarMark) {
-		t.Errorf("a starred message lost its star in the inbox: %q", inbox.Entries[0].Label)
+	if inbox.Entries[0].StatusDetail != mailbox.StarMark {
+		t.Errorf("a starred message lost its star in the inbox: %q", inbox.Entries[0].StatusDetail)
 	}
 }
 
@@ -796,8 +796,8 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 	if len(resp.Entries) != 1 || resp.Entries[0].Key != "msg:a" {
 		t.Fatalf("restored listing = %+v", resp.Entries)
 	}
-	if !strings.HasPrefix(resp.Entries[0].Label, mailbox.UnreadMark) {
-		t.Errorf("the unread mark did not survive the restart: %q", resp.Entries[0].Label)
+	if resp.Entries[0].StatusDetail != mailbox.UnreadMark {
+		t.Errorf("the unread mark did not survive the restart: %q", resp.Entries[0].StatusDetail)
 	}
 	if got := cold.count("INBOX"); got != 0 {
 		t.Errorf("a restart inside the refresh window walked %d times", got)
@@ -1039,8 +1039,8 @@ func TestACatchUpAppliesExactlyWhatHistoryNames(t *testing.T) {
 	}
 	resp, _ := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
 	for _, e := range resp.Entries {
-		if e.Key == "msg:a" && !strings.HasPrefix(e.Label, mailbox.StarMark) {
-			t.Errorf("a starred message has no star in the inbox: %q", e.Label)
+		if e.Key == "msg:a" && e.StatusDetail != mailbox.StarMark {
+			t.Errorf("a starred message has no star in the inbox: %q", e.StatusDetail)
 		}
 	}
 }

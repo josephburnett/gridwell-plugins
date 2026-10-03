@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/josephburnett/gridwell-plugins/guest v0.1.0
+	github.com/josephburnett/gridwell-plugins/memo v0.2.0
 	github.com/josephburnett/gridwell/api v0.5.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.297.0

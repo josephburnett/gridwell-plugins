@@ -107,8 +107,8 @@ func TestStateComesFromTheMemoryNotTheRecord(t *testing.T) {
 	if len(inbox) != 1 || len(starred) != 1 {
 		t.Fatalf("collections = %v %v", ids(inbox), ids(starred))
 	}
-	if inbox[0].Label() != starred[0].Label() {
-		t.Errorf("one message read two ways: %q vs %q", inbox[0].Label(), starred[0].Label())
+	if inbox[0] != starred[0] {
+		t.Errorf("one message read two ways: %+v vs %+v", inbox[0], starred[0])
 	}
 	if !inbox[0].Unread || !inbox[0].Starred {
 		t.Errorf("state = %+v", inbox[0])
