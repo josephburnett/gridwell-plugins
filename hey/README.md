@@ -3,7 +3,9 @@
 A read-only projection of one HEY account into Gridwell: one tile per email
 thread, in **everything**, and HEY's six boxes — the Imbox, Reply Later, Set
 Aside, the Feed, the Paper Trail and Bubble Up — as grids of links to those
-tiles. A tile's face is the thread's sender and subject; descending into it
+tiles. The (+) menu offers four of them: imbox, reply later, set aside and
+everything. The Feed, the Paper Trail and Bubble Up are walked into
+everything but are not menu entries. A tile's face is the thread's sender and subject; descending into it
 opens the email itself, as HEY's own HTML, through the node's content door.
 
 Nothing here writes to your mail. There is no delete, no archive, no reply.

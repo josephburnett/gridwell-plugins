@@ -39,11 +39,14 @@ type Thread struct {
 // Collection is one of the six HEY boxes this plugin projects. Key is the
 // plugin's context key, stable forever. Box is the selector `hey box view`
 // takes — the hey-cli's own named getter, so no listing call is needed to
-// resolve it. Label is the face of the (+) menu row that opens it.
+// resolve it. Label is the face of the (+) menu row that opens it. Doorway
+// says whether the (+) menu offers it: every box is walked into everything,
+// but a box nobody opens on purpose is clutter in the one menu row.
 type Collection struct {
-	Key   string
-	Box   string
-	Label string
+	Key     string
+	Box     string
+	Label   string
+	Doorway bool
 }
 
 // The box context keys. They embed the CLI's box selector rather than a
@@ -58,12 +61,12 @@ const (
 	BubbleUpContext   = "box:bubblebox"
 )
 
-// Collections is the projection, in the order the (+) menu offers it.
-// ImboxContext is first because it is the collection to read first.
+// Collections is the projection, in the order the (+) menu offers its
+// doorways. ImboxContext is first because it is the collection to read first.
 var Collections = []Collection{
-	{Key: ImboxContext, Box: "imbox", Label: "imbox"},
-	{Key: ReplyLaterContext, Box: "laterbox", Label: "reply later"},
-	{Key: SetAsideContext, Box: "asidebox", Label: "set aside"},
+	{Key: ImboxContext, Box: "imbox", Label: "imbox", Doorway: true},
+	{Key: ReplyLaterContext, Box: "laterbox", Label: "reply later", Doorway: true},
+	{Key: SetAsideContext, Box: "asidebox", Label: "set aside", Doorway: true},
 	{Key: FeedContext, Box: "feedbox", Label: "the feed"},
 	{Key: PaperTrailContext, Box: "trailbox", Label: "paper trail"},
 	{Key: BubbleUpContext, Box: "bubblebox", Label: "bubble up"},

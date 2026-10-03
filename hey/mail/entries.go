@@ -45,13 +45,16 @@ func BoxEntries(threads []Thread) []*pluginv1.Entry {
 	return out
 }
 
-// MenuEntries declares every collection this plugin serves, one (+) menu
-// entry each, everything last. There is no privileged collection and no
-// landing grid: a plugin is not a place, it contributes doorways, and each of
-// these is one.
+// MenuEntries declares every doorway collection, one (+) menu entry each,
+// everything last. There is no privileged collection and no landing grid: a
+// plugin is not a place, it contributes doorways. A box that is not a doorway
+// still lists, so a reference into it keeps resolving.
 func MenuEntries() []*pluginv1.MenuEntry {
 	out := make([]*pluginv1.MenuEntry, 0, len(Collections)+1)
 	for _, c := range Collections {
+		if !c.Doorway {
+			continue
+		}
 		out = append(out, &pluginv1.MenuEntry{
 			Id:      c.Key,
 			Label:   c.Label,

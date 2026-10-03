@@ -192,12 +192,12 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	for _, e := range info.MenuEntries {
 		got[e.Context] = true
 	}
-	if len(info.MenuEntries) != len(mail.Collections)+1 || !got[mail.EverythingContext] {
-		t.Fatalf("menu entries = %+v, want one per collection and everything", info.MenuEntries)
+	if len(info.MenuEntries) != 4 || !got[mail.EverythingContext] {
+		t.Fatalf("menu entries = %+v, want the three doorway boxes and everything", info.MenuEntries)
 	}
 	for _, c := range mail.Collections {
-		if !got[c.Key] {
-			t.Errorf("no menu entry for %s", c.Key)
+		if got[c.Key] != c.Doorway {
+			t.Errorf("menu entry for %s = %v, want %v", c.Key, got[c.Key], c.Doorway)
 		}
 	}
 }
