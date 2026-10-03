@@ -80,10 +80,13 @@ type Plugin struct {
 	// handed no state_dir: the plugin then walks GitLab from cold at every
 	// start.
 	cache string
-	// logf is the plugin's one log door: the walk's narration, and what must
-	// not be swallowed and must not fail a read — a cache the plugin could
-	// not read or write, a walk that failed.
+	// logf is the plugin's one log door, for what must not be swallowed and
+	// must not fail a read: a cache the plugin could not read or write,
+	// GitLab not answering. Each is an episode, logged once when it starts.
 	logf func(format string, args ...any)
+	// unanswered is GitLab failing a walk or a glance; unsaved is the cache
+	// file failing a write.
+	unanswered, unsaved episode
 	// life is the plugin's lifetime: every detached walk runs under it, since
 	// a walk belongs to no reader. Close ends it.
 	life  context.Context
@@ -122,10 +125,9 @@ type Options struct {
 	// means no cache: the plugin keeps everything in memory for its process
 	// lifetime.
 	StateDir string
-	// Logf takes every line the plugin writes: the walk's narration, and the
-	// failures that must not be swallowed and must not fail a read. It
-	// defaults to the standard logger, which the node captures from the
-	// subprocess's stderr.
+	// Logf takes every line the plugin writes: the failures that must not be
+	// swallowed and must not fail a read. It defaults to the standard logger,
+	// which the node captures from the subprocess's stderr.
 	Logf func(format string, args ...any)
 }
 
@@ -203,8 +205,8 @@ func (p *Plugin) saveCache(walkedAt time.Time) {
 	}
 	snap := p.mem.Snapshot()
 	snap.WalkedAt = walkedAt
-	if err := todos.SaveCache(p.cache, snap); err != nil {
-		p.logf("gitlab plugin: cache: %v", err)
+	if err := todos.SaveCache(p.cache, snap); p.unsaved.started(err) {
+		p.logf("gitlab plugin: cache: %v (logged once until a write lands)", err)
 	}
 }
 
@@ -276,16 +278,43 @@ func (p *Plugin) glance(ctx context.Context) {
 	switch {
 	case ctx.Err() != nil:
 	case err != nil:
-		p.logf("gitlab plugin: glance: %v", err)
 		p.failed[todos.RootContext] = err
 	default:
 		delete(p.failed, todos.RootContext)
 	}
 	walked := p.syncedAt[todos.RootContext]
 	p.mu.Unlock()
+	if ctx.Err() == nil {
+		p.heard(err)
+	}
 	if p.announce() {
 		p.saveCache(walked)
 	}
+}
+
+// heard takes GitLab's answer to a walk or a glance: a failure is logged
+// once per episode, and an answer ends the episode.
+func (p *Plugin) heard(err error) {
+	if p.unanswered.started(err) {
+		p.logf("gitlab plugin: GitLab did not answer: %v (logged once until it does)", err)
+	}
+}
+
+// episode is one condition logged once when it starts and again only after
+// it has cleared (plugin standard rule 14).
+type episode struct {
+	mu sync.Mutex
+	on bool
+}
+
+// started records whether the condition holds, err non-nil, and reports
+// whether it has just begun.
+func (e *episode) started(err error) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	was := e.on
+	e.on = err != nil
+	return e.on && !was
 }
 
 func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
@@ -375,10 +404,10 @@ func (p *Plugin) sync(ctx context.Context, ctxKey string, since time.Time) error
 // of times, so a dead source ends the walk with its error rather than hanging
 // it.
 func (p *Plugin) walk(ctxKey string, since time.Time, f *flight) {
-	p.logf("gitlab plugin: walk %q starting (since=%s)", ctxKey, since.Format("2006-01-02"))
-	start := time.Now()
 	err := p.mem.Sync(p.life, p.src, since)
-	p.logf("gitlab plugin: walk %q finished in %s: err=%v", ctxKey, time.Since(start).Round(time.Millisecond), err)
+	if p.life.Err() == nil {
+		p.heard(err)
+	}
 	p.mu.Lock()
 	if err == nil {
 		p.syncedAt[ctxKey] = p.now()

@@ -311,21 +311,24 @@ func TestAnUnusableCacheIsReportedAndTheWalkStillAnswers(t *testing.T) {
 		t.Fatalf("the walk after a corrupt cache = (%v, %v)", root.GetEntries(), err)
 	}
 
-	// A directory the plugin cannot write reports on every walk and still
-	// answers from GitLab.
+	// A directory the plugin cannot write is reported once, however many
+	// walks fail to save, and the walks still answer from GitLab.
 	blocked := filepath.Join(t.TempDir(), "blocked")
 	if err := os.Mkdir(blocked, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(blocked, 0o700) })
 	lines = nil
-	q := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{StateDir: filepath.Join(blocked, "gitlab"), Logf: logf})
-	root, err = q.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})
-	if err != nil || len(root.Entries) != 1 {
-		t.Fatalf("the walk with an unwritable cache = (%v, %v)", root.GetEntries(), err)
+	q := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{StateDir: filepath.Join(blocked, "gitlab"), Logf: logf, FullRefresh: time.Nanosecond})
+	for range 2 {
+		root, err = q.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})
+		if err != nil || len(root.Entries) != 1 {
+			t.Fatalf("the walk with an unwritable cache = (%v, %v)", root.GetEntries(), err)
+		}
+		landed(t, q)
 	}
-	if len(lines) == 0 {
-		t.Error("an unwritable cache was swallowed")
+	if len(lines) != 1 || !strings.Contains(lines[0], "cache") {
+		t.Errorf("two walks with an unwritable cache logged %q, want one report", lines)
 	}
 }
 
