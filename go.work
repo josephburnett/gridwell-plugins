@@ -11,6 +11,7 @@ use (
 	./gmail
 	./guest
 	./hey
+	./memo
 	./pages
 	./proc
 )

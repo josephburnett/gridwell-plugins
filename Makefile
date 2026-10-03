@@ -7,6 +7,7 @@
 # CGO_ENABLED=0 keeps each binary fully static, as the sidecar is.
 build:
 	cd guest && CGO_ENABLED=0 go build ./...
+	cd memo && CGO_ENABLED=0 go build ./...
 	cd fs && CGO_ENABLED=0 go build -o ../gridwell-plugin-fs ./cmd/gridwell-plugin-fs
 	cd proc && CGO_ENABLED=0 go build -o ../gridwell-plugin-proc ./cmd/gridwell-plugin-proc
 	cd gitlab && CGO_ENABLED=0 go build -o ../gridwell-plugin-gitlab ./cmd/gridwell-plugin-gitlab
@@ -17,7 +18,7 @@ build:
 # The modules that ship on every OS gridwell releases for. proc is not
 # here: it reads /proc, so it is a unix plugin by design and the Windows
 # release ships without it (gridwell's Makefile drops it from PLUGIN_KINDS).
-RELEASE_MODULES := guest fs gitlab pages hey gmail
+RELEASE_MODULES := guest memo fs gitlab pages hey gmail
 
 # check is the per-commit gate: gofmt, then every module vetted and tested
 # ALONE (GOWORK=off), so no module can quietly lean on the workspace, then
@@ -25,7 +26,7 @@ RELEASE_MODULES := guest fs gitlab pages hey gmail
 check:
 	@bad=$$(gofmt -l $$(git ls-files '*.go')); \
 	if [ -n "$$bad" ]; then echo "gofmt needed (run: gofmt -w <file>):"; echo "$$bad"; exit 1; fi
-	@for m in guest fs proc gitlab pages hey gmail; do \
+	@for m in guest memo fs proc gitlab pages hey gmail; do \
 		echo "== module $$m (standalone)"; \
 		(cd $$m && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...) || exit 1; \
 	done
