@@ -56,36 +56,44 @@ func (w *watchers) publish(keys []string) {
 	}
 }
 
-// take empties the subscriber's marks, in the order the collections are
+// take empties the subscriber's marks, in the order the contexts are
 // declared.
 func (s *watcher) take() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []string
-	for _, c := range mailbox.Collections {
-		if s.pending[c.Key] {
-			out = append(out, c.Key)
+	for _, key := range mailbox.Contexts() {
+		if s.pending[key] {
+			out = append(out, key)
 		}
 	}
 	clear(s.pending)
 	return out
 }
 
-// faces is what every collection answers now.
+// views is what one context answers now.
+func (p *Plugin) views(key string) []mailbox.View {
+	if key == mailbox.AllMailContext {
+		return p.mem.AllMail()
+	}
+	return p.mem.Collection(key)
+}
+
+// faces is what every context answers now.
 func (p *Plugin) faces() map[string][]mailbox.View {
-	out := make(map[string][]mailbox.View, len(mailbox.Collections))
-	for _, c := range mailbox.Collections {
-		out[c.Key] = p.mem.Collection(c.Key)
+	out := map[string][]mailbox.View{}
+	for _, key := range mailbox.Contexts() {
+		out[key] = p.views(key)
 	}
 	return out
 }
 
-// changedSince names the collections whose answer is no longer before's.
+// changedSince names the contexts whose answer is no longer before's.
 func (p *Plugin) changedSince(before map[string][]mailbox.View) []string {
 	var out []string
-	for _, c := range mailbox.Collections {
-		if !mailbox.SameViews(before[c.Key], p.mem.Collection(c.Key)) {
-			out = append(out, c.Key)
+	for _, key := range mailbox.Contexts() {
+		if !mailbox.SameViews(before[key], p.views(key)) {
+			out = append(out, key)
 		}
 	}
 	return out

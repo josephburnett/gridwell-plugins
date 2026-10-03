@@ -34,6 +34,10 @@ type Memory struct {
 	// membership. Until every collection has had one, nothing is ever GONE: a
 	// message missing from a memory nothing has walked is unseen, not deleted.
 	complete map[string]bool
+	// whole records that a collection's last walk read the label to its end,
+	// so its membership is the label's and not only its newest part. History
+	// keeps a membership exact, so only a walk changes it.
+	whole map[string]bool
 	// historyID is the Gmail history id the memory is current to: every
 	// change Gmail recorded after it is still to be applied. Zero means none
 	// is known, and only a full walk of every collection mints one.
@@ -47,6 +51,7 @@ func NewMemory() *Memory {
 		unread:   map[string]bool{},
 		members:  map[string][]string{},
 		complete: map[string]bool{},
+		whole:    map[string]bool{},
 	}
 }
 
@@ -92,6 +97,7 @@ func (m *Memory) Absorb(collection string, ids []string, unread map[string]bool,
 		}
 	}
 
+	m.whole[collection] = whole
 	if whole {
 		m.members[collection] = append([]string(nil), ids...)
 		m.complete[collection] = true
@@ -129,9 +135,9 @@ func (m *Memory) Absorb(collection string, ids []string, unread map[string]bool,
 // Apply folds a history catch-up in. Each fetched message is placed by the
 // labels it carries now: a member of every collection whose labels it has,
 // of none it lacks, and unread exactly when it carries UNREAD. Each deleted
-// message leaves every collection. Applying the same catch-up twice changes
-// nothing, which is what lets a refresh that read only part of it keep the
-// old history id and read it all again.
+// message leaves every collection and memory: Gmail said it is gone. Applying
+// the same catch-up twice changes nothing, which is what lets a refresh that
+// read only part of it keep the old history id and read it all again.
 func (m *Memory) Apply(fetched []Labelled, deleted []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -156,11 +162,31 @@ func (m *Memory) Apply(fetched []Labelled, deleted []string) {
 		}
 	}
 	for _, id := range deleted {
-		delete(m.unread, id)
 		for _, c := range Collections {
 			m.members[c.Key] = placed(m.members[c.Key], id, false)
 		}
+		m.forgetLocked(id)
 	}
+}
+
+// Forget drops a message Gmail says it no longer has, unless some collection
+// still holds it: a membership is the label's own word, newer than a lookup
+// that missed. It reports whether the message was forgotten.
+func (m *Memory) Forget(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.forgetLocked(id)
+}
+
+func (m *Memory) forgetLocked(id string) bool {
+	for _, c := range Collections {
+		if m.memberLocked(c.Key, id) {
+			return false
+		}
+	}
+	delete(m.messages, id)
+	delete(m.unread, id)
+	return true
 }
 
 // placed is ids holding id exactly when in is true, otherwise unchanged.
@@ -244,6 +270,66 @@ func (m *Memory) Collection(key string) []View {
 	}
 	sortViews(out)
 	return out
+}
+
+// AllMail answers every message some collection holds, each once, oldest
+// first.
+func (m *Memory) AllMail() []View {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	for _, c := range Collections {
+		ids = union(ids, m.members[c.Key])
+	}
+	out := make([]View, 0, len(ids))
+	for _, id := range ids {
+		if v, ok := m.viewLocked(id); ok {
+			out = append(out, v)
+		}
+	}
+	sortViews(out)
+	return out
+}
+
+// Presence is what memory can say about a message in one collection.
+type Presence int
+
+const (
+	Unknown Presence = iota
+	Present
+	Gone
+)
+
+// InLabel says whether a collection holds a message: Present while it does,
+// Gone once its last walk read the whole label without it, Unknown when that
+// walk was capped and said nothing about what it did not reach.
+func (m *Memory) InLabel(collection, id string) Presence {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case m.memberLocked(collection, id):
+		return Present
+	case m.whole[collection]:
+		return Gone
+	}
+	return Unknown
+}
+
+// Definitive reports whether a collection's answer is the whole label: its
+// last walk read to the end, and memory holds a record for every member, so
+// nothing it holds is missing from Collection.
+func (m *Memory) Definitive(collection string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.whole[collection] {
+		return false
+	}
+	for _, id := range m.members[collection] {
+		if _, ok := m.messages[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // View answers one message as a grid shows it, whatever collection holds it

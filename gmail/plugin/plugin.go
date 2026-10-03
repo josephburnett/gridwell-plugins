@@ -1,10 +1,10 @@
 // Package plugin is the gmail plugin: the wire half over
 // gridwell-plugins/gmail/mailbox. It projects two of Gmail's labels — the
 // inbox and the starred mail — as two grids, one context each, read through
-// the Gmail API. A message is a text tile that serves a page: its face and
-// document are a markdown card about the email, and descending into it opens
-// the email itself, as the HTML the sender wrote, through the node's content
-// door.
+// the Gmail API, and all mail, their union, as a third. A message is one url
+// tile in all mail that serves a page, the email itself as the HTML the
+// sender wrote, through the node's content door; a label lists links to it,
+// so a message starred out of the inbox keeps its one tile.
 //
 // It is a READ-ONLY projection. The token it holds carries the
 // gmail.readonly scope and nothing else, and there is no Delete, no
@@ -295,13 +295,13 @@ func (p *Plugin) kick() (*flight, error) {
 	return p.flight, p.failed
 }
 
-// sync makes one collection answerable. A read the memory already Shows
+// sync makes one context answerable. A read the memory already Shows
 // something for answers at once, with the last failed refresh's error if
 // there is one: waiting on the refresh would tax every read past the refresh
 // window for an answer memory already has. Only a cold read waits, at most
 // firstAnswer, then answers what memory holds so far.
-func (p *Plugin) sync(ctx context.Context, c mailbox.Collection) error {
-	warm := p.mem.Shows(c.Key)
+func (p *Plugin) sync(ctx context.Context, key string) error {
+	warm := p.shows(key)
 	f, last := p.kick()
 	if f == nil {
 		return nil
@@ -313,7 +313,7 @@ func (p *Plugin) sync(ctx context.Context, c mailbox.Collection) error {
 	case <-f.done:
 		return f.err
 	case <-time.After(p.firstAnswer):
-		p.logf("gmail plugin: %q answering with memory so far; the refresh runs on", c.Key)
+		p.logf("gmail plugin: %q answering with memory so far; the refresh runs on", key)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -481,24 +481,59 @@ func (p *Plugin) walk(ctx context.Context, c mailbox.Collection) (int, error) {
 	return len(ids), nil
 }
 
-// List answers one collection. A walk failure with a transport-shaped code
+// shows reports whether memory has an answer for a context: all mail has one
+// once any label does.
+func (p *Plugin) shows(key string) bool {
+	if key != mailbox.AllMailContext {
+		return p.mem.Shows(key)
+	}
+	for _, c := range mailbox.Collections {
+		if p.mem.Shows(c.Key) {
+			return true
+		}
+	}
+	return false
+}
+
+// current reports whether memory is current to Gmail: a refresh landed inside
+// the window, none has failed since, and memory knows the history id it is
+// current to, so the next refresh reads every change since.
+func (p *Plugin) current() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failed == nil && p.withinLocked(p.syncedAt, p.refresh) && p.mem.HistoryID() != 0
+}
+
+// List answers one context. A walk failure with a transport-shaped code
 // degrades at the node to the remembered listing, stamped stale; a verdict
 // such as "this token was refused" surfaces.
 //
-// The listing is NOT authoritative. Absence is the node's question to settle
-// through Probe, which is the one place that knows whether every collection
-// has been read: a message missing from the inbox is often still starred, and
-// an authoritative inbox would retire its id and lose the user's placement on
-// the way past.
+// A label lists links into all mail (mailbox.LabelEntries), and is
+// authoritative only when it is definitive: its last walk read the whole
+// label, every member was read, and memory is current. A capped read proves
+// nothing below its oldest message, and a memory behind Gmail proves nothing
+// about what left since. All mail is never authoritative: a message that
+// left every label is usually archived, not gone, and Probe asks Gmail.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
+	if req.Context == mailbox.AllMailContext {
+		if err := p.sync(ctx, req.Context); err != nil {
+			return nil, err
+		}
+		views := p.mem.AllMail()
+		return listing(mailbox.AllMailLabel, views, mailbox.CollectionEntries(views), false), nil
+	}
 	c, ok := mailbox.LookupCollection(req.Context)
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "gmail plugin: unknown context %q", req.Context)
 	}
-	if err := p.sync(ctx, c); err != nil {
+	if err := p.sync(ctx, c.Key); err != nil {
 		return nil, err
 	}
 	views := p.mem.Collection(c.Key)
+	return listing(c.Label, views, mailbox.LabelEntries(views), p.mem.Definitive(c.Key) && p.current()), nil
+}
+
+func listing(label string, views []mailbox.View, entries []*pluginv1.Entry, authoritative bool) *pluginv1.ListResponse {
 	unread := 0
 	for _, v := range views {
 		if v.Unread {
@@ -506,10 +541,10 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		}
 	}
 	return &pluginv1.ListResponse{
-		Entries:       mailbox.CollectionEntries(views),
-		Authoritative: false,
-		SourceLabel:   fmt.Sprintf("%s · %d messages · %d unread", c.Label, len(views), unread),
-	}, nil
+		Entries:       entries,
+		Authoritative: authoritative,
+		SourceLabel:   fmt.Sprintf("%s · %d messages · %d unread", label, len(views), unread),
+	}
 }
 
 // ReadContent answers the message's markdown card: the tile's face and its
@@ -567,31 +602,63 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 	return stream.Send(&pluginv1.ServeContentChunk{Status: 200, MediaType: media, Data: body})
 }
 
-// Probe is the one place that decides a message has left. PRESENT while some
-// collection holds it. GONE only once every collection has produced a usable
-// membership and none of them does — the message was archived, deleted or
-// filed somewhere this plugin does not project, and the node may retire its
-// id. UNSPECIFIED, meaning "cannot say", until then: a half-walked memory
-// must never cost the user a tile.
-func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
+// Probe is the one place that decides a message has left, and it answers for
+// the context asked. A label: PRESENT while it holds the message, GONE once a
+// whole read of it did not (mailbox.InLabel); the message is usually in
+// another label or archived, and its tile in all mail stays. All mail:
+// PRESENT while some label holds it, else Gmail's own word on the message —
+// GONE only when Gmail says it does not have it, and then memory forgets it
+// too. No context (a node from before contexts): PRESENT while some label
+// holds it, GONE once every label has been read and none does. UNSPECIFIED,
+// meaning "cannot say", otherwise: a half-walked memory must never cost the
+// user a tile.
+func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
 	id, ok := mailbox.ParseKey(req.Key)
 	if !ok {
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
+		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 	}
-	switch {
-	case p.mem.Member(id):
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
-	case p.mem.Swept():
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
+	switch req.Context {
+	case "":
+		switch {
+		case p.mem.Member(id):
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case p.mem.Swept():
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
+	case mailbox.AllMailContext:
+		if p.mem.Member(id) {
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		}
+		_, _, err := p.src.Headers(ctx, id)
+		switch {
+		case err == nil:
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case status.Code(err) == codes.NotFound:
+			p.mem.Forget(id)
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
 	default:
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
+		if _, ok := mailbox.LookupCollection(req.Context); !ok {
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a context this plugin never lists
+		}
+		switch p.mem.InLabel(req.Context, id) {
+		case mailbox.Present:
+			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
+		case mailbox.Gone:
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
+		}
 	}
+	return presence(pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED), nil
+}
+
+func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
+	return &pluginv1.ProbeResponse{Presence: p}
 }
 
 // Search matches the query against the subject, snippet and sender of every
-// message a collection still holds; each result's path is the collection that
-// holds it. It reads memory only — no Gmail call — so it answers what the
-// grids show and nothing the user cannot navigate to. Gmail's own search is a
+// message a label still holds; each result is the message's one tile, in all
+// mail. It reads memory only — no Gmail call — so it answers what the grids
+// show and nothing the user cannot navigate to. Gmail's own search is a
 // bigger thing and would answer mail that has no tile.
 func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
 	q := strings.ToLower(strings.TrimSpace(req.Query))
@@ -603,14 +670,9 @@ func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*plugin
 		limit = 50
 	}
 	resp := &pluginv1.SearchResponse{}
-	holder := p.holders()
-	all := p.mem.All()
+	all := p.mem.AllMail()
 	for i := len(all) - 1; i >= 0 && len(resp.Results) < limit; i-- { // newest first
 		v := all[i]
-		held, ok := holder[v.ID]
-		if !ok {
-			continue
-		}
 		hay := strings.ToLower(strings.Join([]string{v.Subject, v.Snippet, v.FromName, v.FromEmail}, "\n"))
 		if !strings.Contains(hay, q) {
 			continue
@@ -621,28 +683,12 @@ func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*plugin
 		}
 		resp.Results = append(resp.Results, &pluginv1.SearchResult{
 			Entry:       entries[0],
-			ContextPath: []string{held},
+			ContextPath: []string{mailbox.AllMailContext},
 			Snippet:     v.Preview(),
 			Score:       1,
 		})
 	}
 	return resp, nil
-}
-
-// holders maps each message to a context that currently holds it, read once
-// per search. The collections are visited in the order they are declared, so
-// a starred message that is also in the inbox is navigated to in the inbox —
-// where a message is looked for first.
-func (p *Plugin) holders() map[string]string {
-	out := map[string]string{}
-	for _, c := range mailbox.Collections {
-		for _, v := range p.mem.Collection(c.Key) {
-			if _, already := out[v.ID]; !already {
-				out[v.ID] = c.Key
-			}
-		}
-	}
-	return out
 }
 
 // Delete is refused rather than left to the embedded Unimplemented, so the

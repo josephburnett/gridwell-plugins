@@ -268,9 +268,8 @@ func listAll(t *testing.T, p *Plugin) {
 	landed(t, p)
 }
 
-// The two collections are two contexts, and the inbox is the root: the
-// plugin's own (+) row lands there, and starred rides beside it. An empty
-// root_context would draw that row as a broken plugin.
+// Every context is a (+) menu entry, and none is a root: root_context is
+// retired.
 func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	p := stable(newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
@@ -289,9 +288,9 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	if info.Writable {
 		t.Error("a read-only projection declared itself writable")
 	}
-	if len(info.MenuEntries) != 2 || info.MenuEntries[0].Context != mailbox.InboxContext ||
-		info.MenuEntries[1].Context != mailbox.StarredContext {
-		t.Fatalf("menu entries = %+v, want one per collection", info.MenuEntries)
+	if len(info.MenuEntries) != 3 || info.MenuEntries[0].Context != mailbox.InboxContext ||
+		info.MenuEntries[1].Context != mailbox.StarredContext || info.MenuEntries[2].Context != mailbox.AllMailContext {
+		t.Fatalf("menu entries = %+v, want one per context", info.MenuEntries)
 	}
 }
 
@@ -307,9 +306,6 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key})
 		if err != nil {
 			t.Fatalf("%s: %v", c.Key, err)
-		}
-		if resp.Authoritative {
-			t.Errorf("%s listed authoritatively; absence is Probe's answer", c.Key)
 		}
 		if len(resp.Entries) != 1 {
 			t.Fatalf("%s: %d entries", c.Key, len(resp.Entries))
@@ -875,7 +871,7 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 	if len(res.Results) != 1 || res.Results[0].Entry.Key != "msg:b" {
 		t.Fatalf("results = %+v", res.Results)
 	}
-	if got := res.Results[0].ContextPath; len(got) != 1 || got[0] != mailbox.StarredContext {
+	if got := res.Results[0].ContextPath; len(got) != 1 || got[0] != mailbox.AllMailContext {
 		t.Errorf("context path = %v", got)
 	}
 	if f.count("STARRED") != before {
@@ -1220,14 +1216,14 @@ func TestWatchAnnouncesExactlyWhatARefreshChanged(t *testing.T) {
 
 	f.deleted("d") // starred only
 	refreshed(t, p, clock, 2*time.Minute)
-	if got := announced(w); !slices.Equal(got, []string{mailbox.StarredContext}) {
+	if got := announced(w); !slices.Equal(got, []string{mailbox.StarredContext, mailbox.AllMailContext}) {
 		t.Errorf("a starred deletion announced %v", got)
 	}
 
-	f.hold("STARRED", msg("a", "one", "2026-01-05T09:00:00Z")) // a gains a star: both faces change
+	f.hold("STARRED", msg("a", "one", "2026-01-05T09:00:00Z")) // a gains a star: every face changes
 	f.changed("a")
 	refreshed(t, p, clock, 2*time.Minute)
-	if got := announced(w); !slices.Equal(got, []string{mailbox.InboxContext, mailbox.StarredContext}) {
+	if got := announced(w); !slices.Equal(got, []string{mailbox.InboxContext, mailbox.StarredContext, mailbox.AllMailContext}) {
 		t.Errorf("starring an inbox message announced %v", got)
 	}
 }
@@ -1253,7 +1249,7 @@ func TestASlowWatcherNeverBlocksARefresh(t *testing.T) {
 	defer p.watchers.mu.Unlock()
 	for s := range p.watchers.subs {
 		s.mu.Lock()
-		if len(s.pending) > len(mailbox.Collections) {
+		if len(s.pending) > len(mailbox.Contexts()) {
 			t.Errorf("a slow watcher holds %d marks", len(s.pending))
 		}
 		s.mu.Unlock()

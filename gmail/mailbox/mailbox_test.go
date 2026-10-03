@@ -193,8 +193,8 @@ func TestEntriesAndMenu(t *testing.T) {
 	}
 
 	menu := MenuEntries()
-	if len(menu) != len(Collections) || menu[0].Context != InboxContext ||
-		menu[1].Context != StarredContext || menu[1].Label != "starred" {
-		t.Fatalf("menu = %+v, want one entry per collection", menu)
+	if len(menu) != len(Collections)+1 || menu[0].Context != InboxContext ||
+		menu[1].Context != StarredContext || menu[1].Label != "starred" || menu[2].Context != AllMailContext {
+		t.Fatalf("menu = %+v, want one entry per label, then all mail", menu)
 	}
 }

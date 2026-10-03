@@ -39,10 +39,12 @@ type Snapshot struct {
 	SweptAt     time.Time               `json:"sweptAt,omitempty"`
 }
 
-// CollectionIn is one collection's remembered membership: what it held, and
-// whether the walk that read it produced a usable membership.
+// CollectionIn is one collection's remembered membership: what it held,
+// whether the walk that read it produced a usable membership, and whether it
+// read the whole label.
 type CollectionIn struct {
 	Complete bool     `json:"complete"`
+	Whole    bool     `json:"whole,omitempty"`
 	IDs      []string `json:"ids"`
 }
 
@@ -67,7 +69,7 @@ func (m *Memory) Snapshot() Snapshot {
 	for key, ids := range m.members {
 		out := make([]string, len(ids))
 		copy(out, ids)
-		cols[key] = CollectionIn{Complete: m.complete[key], IDs: out}
+		cols[key] = CollectionIn{Complete: m.complete[key], Whole: m.whole[key], IDs: out}
 	}
 	return Snapshot{Version: snapshotVersion, Messages: msgs, Unread: unread, Collections: cols, HistoryID: m.historyID}
 }
@@ -92,6 +94,7 @@ func (m *Memory) Restore(s Snapshot) {
 		if in.Complete {
 			m.complete[key] = true
 		}
+		m.whole[key] = in.Whole
 	}
 	m.historyID = s.HistoryID
 }

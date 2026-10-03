@@ -1,5 +1,5 @@
 // Package mailbox is the pure half of the gmail plugin: the message record,
-// the two Gmail labels it projects, the keys, labels and placement hints
+// the two Gmail labels it projects and all mail, their union, the keys, labels and placement hints
 // derived from them, the memory of every message seen, and the disposable
 // cache file that memory rewarms itself from. There is no HTTP and no gRPC
 // here, so everything is unit-tested against fakes, and the plugin package
@@ -66,7 +66,7 @@ func SameViews(a, b []View) bool {
 	return true
 }
 
-// Collection is one of the two Gmail labels this plugin projects. Key is the
+// Collection is one of the two Gmail labels this plugin walks. Key is the
 // plugin's context key, stable forever. LabelIDs are the label ids Gmail's
 // messages.list takes. Label is the face of the (+) menu row that opens it.
 type Collection struct {
@@ -91,14 +91,31 @@ const UnreadLabel = "UNREAD"
 // StarredLabel is Gmail's label id for a starred message.
 const StarredLabel = "STARRED"
 
-// Collections is the projection, in the order the (+) menu offers it.
+// Collections are the labels walked, in the order the (+) menu offers them.
 // InboxContext is first because it is the collection to read first.
 var Collections = []Collection{
 	{Key: InboxContext, LabelIDs: []string{"INBOX"}, Label: "inbox"},
 	{Key: StarredContext, LabelIDs: []string{StarredLabel}, Label: "starred"},
 }
 
-// LookupCollection resolves a context key to its collection.
+// AllMailContext is the union of the labels walked: each message once, its
+// one tile, which every label lists a link to. It is not Gmail's All Mail
+// label, which this plugin never walks.
+const (
+	AllMailContext = "all"
+	AllMailLabel   = "all mail"
+)
+
+// Contexts are every context this plugin lists: the labels, then all mail.
+func Contexts() []string {
+	out := make([]string, 0, len(Collections)+1)
+	for _, c := range Collections {
+		out = append(out, c.Key)
+	}
+	return append(out, AllMailContext)
+}
+
+// LookupCollection resolves a label's context key to its collection.
 func LookupCollection(key string) (Collection, bool) {
 	for _, c := range Collections {
 		if c.Key == key {

@@ -5,8 +5,8 @@ import (
 	"github.com/josephburnett/gridwell/api/rpc"
 )
 
-// CollectionEntries derives one collection's grid: every message it holds as
-// a url tile serving its own page, hinted as a calendar — a row per day,
+// CollectionEntries derives all mail's grid: every message as a url tile
+// serving its own page, hinted as a calendar — a row per day,
 // newest at the top, the day's messages left to right in arrival order.
 // views must be oldest first, which is what Memory.Collection answers.
 //
@@ -33,11 +33,22 @@ func CollectionEntries(views []View) []*pluginv1.Entry {
 	return out
 }
 
-// MenuEntries declares every collection this plugin serves, one (+) menu
-// entry each. There is no privileged collection and no landing grid: a plugin
-// is not a place, it contributes doorways, and each of these is one.
+// LabelEntries derives one label's grid: CollectionEntries, each a link to
+// the same message in all mail. The content facts stay, so a node that
+// predates link_target still shows the label as pages of its own.
+func LabelEntries(views []View) []*pluginv1.Entry {
+	out := CollectionEntries(views)
+	for _, e := range out {
+		e.LinkTarget = &pluginv1.EntryRef{Context: AllMailContext, Key: e.Key}
+	}
+	return out
+}
+
+// MenuEntries declares every context, one (+) menu entry each, all mail
+// last. There is no privileged collection and no landing grid: a plugin is
+// not a place, it contributes doorways, and each of these is one.
 func MenuEntries() []*pluginv1.MenuEntry {
-	out := make([]*pluginv1.MenuEntry, 0, len(Collections))
+	out := make([]*pluginv1.MenuEntry, 0, len(Collections)+1)
 	for _, c := range Collections {
 		out = append(out, &pluginv1.MenuEntry{
 			Id:      c.Key,
@@ -45,5 +56,5 @@ func MenuEntries() []*pluginv1.MenuEntry {
 			Context: c.Key,
 		})
 	}
-	return out
+	return append(out, &pluginv1.MenuEntry{Id: AllMailContext, Label: AllMailLabel, Context: AllMailContext})
 }
