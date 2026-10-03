@@ -420,7 +420,7 @@ func (p *Plugin) sweep(ctx context.Context) error {
 // by its labels, and each deleted one, or one Gmail no longer answers for,
 // leaves. A message whose read failed costs its change this refresh, not the
 // others: the id stays where it was, so the next refresh reads that change
-// again. Every read failing is the refresh failing, with its reason.
+// again. The source failing every read is the refresh failing (sourceDown).
 func (p *Plugin) catchUp(ctx context.Context) error {
 	d, err := p.src.History(ctx, p.mem.HistoryID(), mailbox.WatchedLabels())
 	if err != nil {
@@ -428,7 +428,7 @@ func (p *Plugin) catchUp(ctx context.Context) error {
 	}
 	fetched := make([]mailbox.Labelled, 0, len(d.Touched))
 	deleted := append([]string(nil), d.Deleted...)
-	var firstErr error
+	var down error
 	failed := 0
 	for _, id := range d.Touched {
 		m, labels, err := p.src.Headers(ctx, id)
@@ -439,16 +439,14 @@ func (p *Plugin) catchUp(ctx context.Context) error {
 		case status.Code(err) == codes.NotFound:
 			deleted = append(deleted, id)
 		case err != nil:
-			if firstErr == nil {
-				firstErr = err
-			}
+			down = sourceDown(down, err)
 			failed++
 		default:
 			fetched = append(fetched, mailbox.Labelled{Message: m, Labels: labels})
 		}
 	}
-	if failed > 0 && failed == len(d.Touched) {
-		return firstErr
+	if down != nil && failed == len(d.Touched) {
+		return down
 	}
 	p.mem.Apply(fetched, deleted)
 	if failed == 0 {
@@ -479,7 +477,7 @@ func (p *Plugin) walk(ctx context.Context, c mailbox.Collection) (int, error) {
 
 	missing := p.mem.Missing(ids)
 	fetched := make([]mailbox.Message, 0, len(missing))
-	var firstErr error
+	var down error
 	for _, id := range missing {
 		m, _, err := p.src.Headers(ctx, id)
 		p.episodes.note("message "+id, err, "gmail plugin: message %s: %v", id, err)
@@ -487,21 +485,32 @@ func (p *Plugin) walk(ctx context.Context, c mailbox.Collection) (int, error) {
 			// One message the metadata read could not reach costs a tile this
 			// pass, not the walk: the id stays in the membership, so nothing
 			// calls it gone, and the next walk reads it. It is never silent.
-			if firstErr == nil {
-				firstErr = err
-			}
+			down = sourceDown(down, err)
 			continue
 		}
 		fetched = append(fetched, m)
 	}
-	// Every read failing is not "a message was skipped", it is the walk
-	// failing — a revoked token, or Gmail down — and it must surface with its
-	// reason instead of leaving an empty grid with nothing said.
-	if firstErr != nil && len(fetched) == 0 && len(missing) > 0 {
-		return 0, firstErr
+	if down != nil && len(fetched) == 0 {
+		return 0, down
 	}
 	p.mem.Absorb(c.Key, ids, unread, fetched, whole)
 	return len(ids), nil
+}
+
+// sourceDown is down, else err when err says the source failed rather than
+// one message: Gmail out of reach or the token refused. Every read failing
+// that way is the walk failing, which must surface with its reason; a
+// message Gmail will not answer for (NotFound, a body it cannot give) costs
+// its own tile only, however few messages a walk has left to read.
+func sourceDown(down, err error) error {
+	if down != nil {
+		return down
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.PermissionDenied, codes.Unauthenticated, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Canceled:
+		return err
+	}
+	return nil
 }
 
 // shows reports whether memory has an answer for a context: all mail has one

@@ -48,6 +48,8 @@ type fakeGmail struct {
 	err    error
 	// headerErr fails Headers only, which is the one failure a walk survives.
 	headerErr error
+	// idErr fails Headers for one message.
+	idErr map[string]error
 	// failLabel fails the listing of that one label intersection.
 	failLabel string
 	// profileErr fails HistoryID only.
@@ -153,6 +155,9 @@ func (f *fakeGmail) Headers(ctx context.Context, id string) (mailbox.Message, []
 	}
 	if f.headerErr != nil {
 		return mailbox.Message{}, nil, f.headerErr
+	}
+	if err := f.idErr[id]; err != nil {
+		return mailbox.Message{}, nil, err
 	}
 	m, ok := f.recs[id]
 	if !ok {
@@ -735,6 +740,40 @@ func TestOneUnreadableMessageDoesNotCostTheWalk(t *testing.T) {
 	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:b"})
 	if got.Presence == pluginv1.ProbeResponse_PRESENCE_GONE {
 		t.Error("a message whose metadata read failed was declared gone")
+	}
+}
+
+// One message Gmail will not answer for costs its tile, never the walk, on
+// the first walk or any later one, when it is the only message left to read:
+// a refresh that failed forever on one email would mark the whole account
+// unreachable.
+func TestAMessageGmailWillNotReadNeverFailsAWalk(t *testing.T) {
+	for name, err := range map[string]error{
+		"not found": status.Error(codes.NotFound, "no message b"),
+		"malformed": status.Error(codes.Internal, "message b is malformed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake()
+			f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"), msg("b", "two", "2026-01-05T10:00:00Z"))
+			f.idErr = map[string]error{"b": err}
+			clock := at("2026-01-06T12:00:00Z")
+			p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
+			listAll(t, p)
+			refreshed(t, p, &clock, 2*time.Minute) // b is all this walk has to read
+			resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+			if err != nil {
+				t.Fatalf("the walk after one unreadable message = %v", err)
+			}
+			if got := entryKeys(resp.Entries); got != "msg:a" {
+				t.Errorf("inbox = %s", got)
+			}
+			p.mu.Lock()
+			failed := p.failed
+			p.mu.Unlock()
+			if failed != nil {
+				t.Errorf("the refresh failed on one message: %v", failed)
+			}
+		})
 	}
 }
 
