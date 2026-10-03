@@ -160,8 +160,8 @@ func TestAbsenceIsA404Page(t *testing.T) {
 	}
 }
 
-// ReadContent answers the markdown body for every doc, page or not. An
-// unknown key is an empty chunk: Probe is where absence is decided.
+// ReadContent answers a text doc's markdown body. A page doc has none, and an
+// unknown key is an empty chunk too: Probe is where absence is decided.
 func TestReadContentAnswersMarkdown(t *testing.T) {
 	p := New()
 	r := &reader{}
@@ -177,8 +177,8 @@ func TestReadContentAnswersMarkdown(t *testing.T) {
 	if err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "hello"}, r); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.chunks) != 1 || len(r.chunks[0].Data) == 0 {
-		t.Errorf("a page tile still has a document body, got %v", r.chunks)
+	if len(r.chunks) != 1 || len(r.chunks[0].Data) != 0 {
+		t.Errorf("a page tile has no document body, got %v", r.chunks)
 	}
 
 	r = &reader{}

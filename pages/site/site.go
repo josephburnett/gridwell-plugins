@@ -37,11 +37,11 @@ type Doc struct {
 	// changing one orphans every stored reference to the tile.
 	Key   string
 	Label string
-	// Note is the doc's markdown body: what ReadContent answers, and what the
-	// tile reads as a document. Every doc has one, page or not.
+	// Note is a text doc's markdown body: what ReadContent answers. A doc
+	// has a Note or a Page, never both; a page tile has no document body.
 	Note string
-	// Page is the doc's web half, or nil for a doc that is only text. A
-	// non-nil Page is what makes the entry declare serves_page.
+	// Page is the doc's web half, or nil for a text doc. A non-nil Page is
+	// what makes the entry declare serves_page.
 	Page *Page
 	// Col and Row seed the tile's first placement. A hint is a suggestion for
 	// a tile the node has not placed yet; the user's arrangement wins from
@@ -90,8 +90,6 @@ var docs = []*Doc{
 		Key:   "hello",
 		Label: "hello",
 		Col:   2, Row: 0,
-		Note: "The smallest thing a plugin can put on the web: one page, no " +
-			"resources, generated when it is asked for.",
 		Page: &Page{
 			Title:  "Hello, world",
 			Accent: color.RGBA{R: 0x2f, G: 0x6f, B: 0x4f, A: 0xff},
@@ -106,8 +104,6 @@ is the whole answer.</p>`,
 		Key:   "styled",
 		Label: "styled",
 		Col:   4, Row: 0,
-		Note: "A page with resources of its own: a stylesheet and an image, " +
-			"each fetched back through the door by its subpath.",
 		Page: &Page{
 			Title:      "A page with resources",
 			Accent:     styledAccent,
@@ -129,8 +125,6 @@ border the subpath fetch worked.</p>`,
 		Key:   "report",
 		Label: "report",
 		Col:   6, Row: 0,
-		Note: "A page built from data rather than written out: the table is " +
-			"this plugin's own listing, rendered at request time.",
 		Page: &Page{
 			Title:  "What this plugin serves",
 			Accent: color.RGBA{R: 0x8f, G: 0x52, B: 0x2f, A: 0xff},

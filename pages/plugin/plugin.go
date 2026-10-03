@@ -79,7 +79,7 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 		if d.Page != nil {
 			// A doc with a page is a url entry serving from the plugin: the
 			// node derives its address at the /content/ door, so there is
-			// none to declare, and its note is not offered as a text body.
+			// none to declare.
 			e.Kind = rpc.KindURL
 			e.ServesPage = true
 			// The face is the plugin's thumbnail. The site never changes, so
@@ -87,7 +87,7 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 			e.PreviewStamp = site.PreviewStamp
 		} else {
 			e.Kind = rpc.KindText
-			// Every note ReadContent answers is markdown.
+			// Every note is markdown.
 			e.TextPresentation = rpc.TextPresentationBoth
 		}
 		resp.Entries = append(resp.Entries, e)
@@ -95,11 +95,9 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 	return resp, nil
 }
 
-// ReadContent answers a doc's markdown note, which is the body of the text
-// entries. A doc with a page is a url entry and nothing reads its note; the
-// note stays here for the day this plugin offers it as an entry of its own. An
-// unknown key is an empty chunk, not an error — absence is Probe's answer to
-// give.
+// ReadContent answers a text doc's markdown note. A page doc has no body and
+// an unknown key is an empty chunk, not an error — absence is Probe's answer
+// to give.
 func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {
 	d := site.Lookup(req.Key)
 	if d == nil {
