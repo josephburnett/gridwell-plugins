@@ -322,23 +322,25 @@ func (p *Plugin) publish(box string, eff mail.Effect) {
 }
 
 // read makes one collection answerable (memo.Flights.Read): a read memory
-// has a listing for never waits.
-func (p *Plugin) read(ctx context.Context, key string) error {
+// has a listing for never waits. A refresh that failed is not the read's
+// failure: memory answers, and unreachable says why (rule 7). err is only
+// the caller hanging up, or the feed's verdict.
+func (p *Plugin) read(ctx context.Context, key string) (unreachable string, err error) {
 	reason, err := p.flights.Read(ctx, key, p.mem.Shows(key))
 	if err != nil {
-		return err
-	}
-	if reason != "" {
-		return status.Error(codes.Unavailable, reason)
+		if ctx.Err() != nil {
+			return "", err
+		}
+		reason = memo.Reason(err)
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.watchErr
+	return reason, p.watchErr
 }
 
-// List answers one collection. A walk failure with a transport-shaped code
-// degrades at the node to the remembered listing, stamped stale; a verdict
-// such as "not signed in" surfaces.
+// List answers one collection from memory, refreshed first when it is not
+// current. A failed refresh is the listing's unreachable reason, which the
+// node reports as the source's health while it keeps serving the rows.
 //
 // The listing is NOT authoritative even after a whole walk. Absence is the
 // node's question to settle through Probe, which is the one place that knows
@@ -350,24 +352,26 @@ func (p *Plugin) read(ctx context.Context, key string) error {
 // thread once, and is as current as every box is.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	if req.Context == mail.EverythingContext {
-		if err := p.readAll(ctx); err != nil {
+		reason, err := p.readAll(ctx)
+		if err != nil {
 			return nil, err
 		}
 		threads := p.mem.Everything()
-		return listing(mail.EverythingLabel, threads, mail.CollectionEntries(threads)), nil
+		return listing(mail.EverythingLabel, threads, mail.CollectionEntries(threads), reason), nil
 	}
 	c, ok := mail.LookupCollection(req.Context)
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "hey plugin: unknown context %q", req.Context)
 	}
-	if err := p.read(ctx, c.Key); err != nil {
+	reason, err := p.read(ctx, c.Key)
+	if err != nil {
 		return nil, err
 	}
 	threads := p.mem.Collection(c.Key)
-	return listing(c.Label, threads, mail.BoxEntries(threads)), nil
+	return listing(c.Label, threads, mail.BoxEntries(threads), reason), nil
 }
 
-func listing(label string, threads []mail.Thread, entries []*pluginv1.Entry) *pluginv1.ListResponse {
+func listing(label string, threads []mail.Thread, entries []*pluginv1.Entry, unreachable string) *pluginv1.ListResponse {
 	unseen := 0
 	for i := range threads {
 		if !threads[i].Seen {
@@ -378,23 +382,33 @@ func listing(label string, threads []mail.Thread, entries []*pluginv1.Entry) *pl
 		Entries:       entries,
 		Authoritative: false,
 		SourceLabel:   fmt.Sprintf("%s · %d threads · %d unseen", label, len(threads), unseen),
+		Unreachable:   unreachable,
 	}
 }
 
-// readAll is read over every box at once, answering the first failure.
-func (p *Plugin) readAll(ctx context.Context) error {
+// readAll is read over every box at once. Everything is the union of what
+// memory holds for each, so a box that cannot be read costs it that box's
+// news, never the listing: its reason is everything's, the first in box
+// order.
+func (p *Plugin) readAll(ctx context.Context) (unreachable string, err error) {
+	reasons := make([]string, len(mail.Collections))
 	errs := make([]error, len(mail.Collections))
 	var wg sync.WaitGroup
 	for i, c := range mail.Collections {
-		wg.Go(func() { errs[i] = p.read(ctx, c.Key) })
+		wg.Go(func() { reasons[i], errs[i] = p.read(ctx, c.Key) })
 	}
 	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return err
+	for i := range errs {
+		if errs[i] != nil {
+			return "", errs[i]
 		}
 	}
-	return nil
+	for _, r := range reasons {
+		if r != "" {
+			return r, nil
+		}
+	}
+	return "", nil
 }
 
 // ReadContent answers the thread's markdown card: the tile's face and its

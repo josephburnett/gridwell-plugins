@@ -44,15 +44,17 @@ type fakeHEY struct {
 	html  map[int64]string
 	// threadErr is what ThreadHTML answers for one thread, over err.
 	threadErr map[int64]error
-	err       error
-	calls     map[string]int
-	block     chan struct{} // when non-nil, Box waits on it
-	feed      *feed         // when nil, Watch runs silent until cancelled
+	// boxErr is what Box answers for one box, over err.
+	boxErr map[string]error
+	err    error
+	calls  map[string]int
+	block  chan struct{} // when non-nil, Box waits on it
+	feed   *feed         // when nil, Watch runs silent until cancelled
 }
 
 func newFake() *fakeHEY {
 	return &fakeHEY{boxes: map[string][]mail.Thread{}, whole: map[string]bool{},
-		html: map[int64]string{}, threadErr: map[int64]error{}, calls: map[string]int{}}
+		html: map[int64]string{}, threadErr: map[int64]error{}, boxErr: map[string]error{}, calls: map[string]int{}}
 }
 
 func (f *fakeHEY) Box(ctx context.Context, box string) ([]mail.Thread, bool, error) {
@@ -69,6 +71,9 @@ func (f *fakeHEY) Box(ctx context.Context, box string) ([]mail.Thread, bool, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls[box]++
+	if err := f.boxErr[box]; err != nil {
+		return nil, false, err
+	}
 	if f.err != nil {
 		return nil, false, f.err
 	}
@@ -497,15 +502,65 @@ func TestAThreadKeepsItsKeyAcrossCollections(t *testing.T) {
 	}
 }
 
-// A failed walk is the CLI's verdict, unchanged: "not signed in" must reach
-// the user rather than becoming an empty grid.
-func TestAWalkFailureSurfaces(t *testing.T) {
+// A first walk that fails is no verdict that blanks the grid: memory answers
+// what it has, nothing, and "not signed in" reaches the user as the reason.
+func TestAFailedFirstWalkAnswersMemoryWithItsReason(t *testing.T) {
 	f := newFake()
-	f.err = status.Error(codes.PermissionDenied, "Not logged in")
+	f.err = status.Error(codes.PermissionDenied, "hey plugin: box view imbox: Not logged in")
 	p := stable(t, f, Options{})
-	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
-	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "Not logged in") {
-		t.Fatalf("err = %v", err)
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+	if err != nil {
+		t.Fatalf("a failed walk refused the listing: %v", err)
+	}
+	if len(resp.Entries) != 0 || !strings.Contains(resp.Unreachable, "Not logged in") {
+		t.Fatalf("listing = %+v, want memory (empty) and the reason", resp)
+	}
+}
+
+// A warm read answers memory, and the refresh that failed behind it is the
+// next read's unreachable reason, until a walk lands (rule 7).
+func TestAWarmReadAnswersMemoryAndTheLastFailure(t *testing.T) {
+	f := newFake()
+	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
+	var mu sync.Mutex
+	clock := at("2026-01-06T12:00:00Z")
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	p := stable(t, f, Options{Refresh: time.Minute, Now: now})
+	ctx := context.Background()
+	list := func() *pluginv1.ListResponse {
+		t.Helper()
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+		if err != nil {
+			t.Fatalf("a warm read refused: %v", err)
+		}
+		return resp
+	}
+	if r := list(); r.Unreachable != "" {
+		t.Fatalf("a walk that landed answered %q", r.Unreachable)
+	}
+	stale := func() {
+		mu.Lock()
+		clock = clock.Add(2 * time.Minute)
+		mu.Unlock()
+	}
+	stale()
+	f.mu.Lock()
+	f.err = status.Error(codes.Unavailable, "network")
+	f.mu.Unlock()
+	list()
+	idle(t, p)
+	if r := list(); len(r.Entries) != 1 || !strings.Contains(r.Unreachable, "network") {
+		t.Fatalf("warm read after a failed walk = %+v, want the remembered thread and the reason", r)
+	}
+	f.mu.Lock()
+	f.err = nil
+	f.mu.Unlock()
+	idle(t, p)
+	stale()
+	list()
+	idle(t, p)
+	if r := list(); len(r.Entries) != 1 || r.Unreachable != "" {
+		t.Fatalf("a walk that landed left %+v", r)
 	}
 }
 
@@ -747,41 +802,6 @@ func TestAColdReadWaitsTheFirstAnswer(t *testing.T) {
 	}
 	if d := time.Since(start); d < bound {
 		t.Fatalf("a cold read answered after %s, before the %s bound", d, bound)
-	}
-}
-
-// A warm read does not wait to hear a walk fail, so it answers the last
-// failure instead: an outage still reaches the node as Unavailable.
-func TestAWarmReadAnswersTheLastFailedWalk(t *testing.T) {
-	f := newFake()
-	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
-	var mu sync.Mutex
-	clock := at("2026-01-06T12:00:00Z")
-	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
-	p := stable(t, f, Options{Refresh: time.Minute, Now: now})
-	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	clock = clock.Add(2 * time.Minute)
-	mu.Unlock()
-	f.mu.Lock()
-	f.err = status.Error(codes.Unavailable, "network")
-	f.mu.Unlock()
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
-	idle(t, p)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); status.Code(err) != codes.Unavailable {
-		t.Fatalf("err = %v, want the failed walk's Unavailable", err)
-	}
-	f.mu.Lock()
-	f.err = nil
-	f.mu.Unlock()
-	idle(t, p)
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
-	idle(t, p)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
-		t.Fatalf("a walk that landed left the failure standing: %v", err)
 	}
 }
 
