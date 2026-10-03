@@ -127,8 +127,6 @@ func TestARefusedTokenNamesTheAuthCommand(t *testing.T) {
 
 func TestFromConfigComposesTheClient(t *testing.T) {
 	dir := t.TempDir()
-	// A long refresh: FromConfig starts the refresher, and this test has no
-	// Gmail for it to walk.
 	impl, err := FromConfig(map[string]string{
 		"credentials": credentials(), "token": aToken(t),
 		"state_dir": dir, "refresh": "1h", "max_messages": "50"})
@@ -139,7 +137,7 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 	if p.src == nil || p.refresh != time.Hour || p.max != 50 {
 		t.Errorf("plugin = src %v refresh %v max %d", p.src, p.refresh, p.max)
 	}
-	if got, want := p.cache, filepath.Join(dir, mailbox.CacheFile); got != want {
+	if got, want := p.file.Path(), filepath.Join(dir, cacheFile); got != want {
 		t.Errorf("cache path = %q, want %q", got, want)
 	}
 
@@ -156,7 +154,7 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := impl.(*Plugin).cache; got != "" {
+	if got := impl.(*Plugin).file.Path(); got != "" {
 		t.Errorf("cache path = %q with no state_dir in the config", got)
 	}
 	// The user-facing name is server.yaml's label; the plugin's own

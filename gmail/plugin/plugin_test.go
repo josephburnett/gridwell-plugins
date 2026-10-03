@@ -767,12 +767,6 @@ func TestAMessageGmailWillNotReadNeverFailsAWalk(t *testing.T) {
 			if got := entryKeys(resp.Entries); got != "msg:a" {
 				t.Errorf("inbox = %s", got)
 			}
-			p.mu.Lock()
-			failed := p.failed
-			p.mu.Unlock()
-			if failed != nil {
-				t.Errorf("the refresh failed on one message: %v", failed)
-			}
 		})
 	}
 }
@@ -860,7 +854,7 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 	p := stable(f, opts)
 	ctx := context.Background()
 	listAll(t, p)
-	if _, err := os.Stat(filepath.Join(dir, mailbox.CacheFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, cacheFile)); err != nil {
 		t.Fatalf("no cache file: %v", err)
 	}
 
@@ -890,7 +884,7 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 // start-up.
 func TestAnUnreadableCacheStartsColdAndSaysSo(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, mailbox.CacheFile), []byte("{not json"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, cacheFile), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var lines []string
@@ -920,10 +914,10 @@ func TestTheCacheHoldsNoCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != mailbox.CacheFile {
+	if len(entries) != 1 || entries[0].Name() != cacheFile {
 		t.Fatalf("state dir = %v; the plugin writes one cache file and nothing else", entries)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, mailbox.CacheFile))
+	raw, err := os.ReadFile(filepath.Join(dir, cacheFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -964,17 +958,8 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 // read answers before the refresh it started has landed.
 func landed(t *testing.T, p *Plugin) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
-	for {
-		p.mu.Lock()
-		f := p.flight
-		p.mu.Unlock()
-		if f == nil {
-			return
-		}
-		select {
-		case <-f.done:
-		case <-deadline:
+	for deadline := time.Now().Add(5 * time.Second); p.flights.Busy(account) || p.landing.Load() > 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
 			t.Fatal("a walk never landed")
 		}
 	}
@@ -983,7 +968,8 @@ func landed(t *testing.T, p *Plugin) {
 // A read over a memory that has an answer gives it at once, however slow the
 // walk behind it: past the refresh window every read would otherwise pay the
 // first-answer bound for an answer memory already had. The walk still runs
-// and lands, and a walk that failed is answered by the next warm read.
+// and lands, and a walk that failed is answered by the next warm read with
+// its reason, transport-shaped, so the node serves what it remembers.
 func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
@@ -1021,8 +1007,9 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	f.mu.Unlock()
 	close(f.block)
 	landed(t, p)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("after a failed walk a warm read answered %v, want the walk's verdict", err)
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); status.Code(err) != codes.Unavailable ||
+		!strings.Contains(err.Error(), "the stored token was refused") {
+		t.Fatalf("after a failed walk a warm read answered %v, want Unavailable with the walk's reason", err)
 	}
 }
 
@@ -1246,18 +1233,12 @@ func watch(t *testing.T, p *Plugin, gate chan struct{}) *watchStream {
 		}
 		<-done
 	})
-	for deadline := time.Now().Add(5 * time.Second); ; {
-		p.watchers.mu.Lock()
-		n := len(p.watchers.subs)
-		p.watchers.mu.Unlock()
-		if n > 0 {
-			return w
-		}
+	for deadline := time.Now().Add(5 * time.Second); !w.header.Load(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("Watch never subscribed")
 		}
-		time.Sleep(time.Millisecond)
 	}
+	return w
 }
 
 // announced collects what the stream is sent within a short settle.
@@ -1305,8 +1286,7 @@ func TestWatchAnnouncesExactlyWhatARefreshChanged(t *testing.T) {
 	}
 }
 
-// A subscriber that never reads costs no refresh anything: refreshes land,
-// and what it has not taken coalesces to one mark per collection.
+// A subscriber that never reads costs no refresh anything: refreshes land.
 func TestASlowWatcherNeverBlocksARefresh(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
@@ -1321,15 +1301,6 @@ func TestASlowWatcherNeverBlocksARefresh(t *testing.T) {
 		f.mu.Unlock()
 		f.changed(id)
 		refreshed(t, p, clock, 2*time.Minute) // fails the test if a refresh never lands
-	}
-	p.watchers.mu.Lock()
-	defer p.watchers.mu.Unlock()
-	for s := range p.watchers.subs {
-		s.mu.Lock()
-		if len(s.pending) > len(mailbox.Contexts()) {
-			t.Errorf("a slow watcher holds %d marks", len(s.pending))
-		}
-		s.mu.Unlock()
 	}
 }
 

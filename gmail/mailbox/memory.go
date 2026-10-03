@@ -8,9 +8,8 @@ import (
 
 // Memory is everything the plugin has seen: the record of every message, the
 // unread set, and which messages each collection last held. It survives a
-// restart through the cache file in the plugin's state directory — see
-// Snapshot and store.go — which holds this plugin's memory of ITS SOURCE and
-// never a node fact.
+// restart as a Snapshot in the plugin's cache file, which holds this
+// plugin's memory of ITS SOURCE and never a node fact.
 //
 // It is the one owner of every fact about a message that can change. A
 // Message record holds only what cannot: the id, the subject, the sender, the
@@ -416,4 +415,85 @@ func sortViews(vs []View) {
 		}
 		return vs[i].ID < vs[j].ID
 	})
+}
+
+// Snapshot is everything the memory holds, as the plugin's cache file keeps
+// it: every message seen, the unread set, each collection's membership, and
+// the history id all of it is current to.
+type Snapshot struct {
+	Messages    []Message               `json:"messages"`
+	Unread      []string                `json:"unread"`
+	Collections map[string]CollectionIn `json:"collections"`
+	HistoryID   uint64                  `json:"historyId,omitempty"`
+}
+
+// CollectionIn is one collection's remembered membership: what it held,
+// whether the walk that read it produced a usable membership, and whether it
+// read the whole label.
+type CollectionIn struct {
+	Complete bool     `json:"complete"`
+	Whole    bool     `json:"whole,omitempty"`
+	IDs      []string `json:"ids"`
+}
+
+// Snapshot copies out everything the memory holds, messages oldest first and
+// the unread set in the same order, so two snapshots of the same memory are
+// byte-identical.
+func (m *Memory) Snapshot() Snapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	msgs := make([]Message, 0, len(m.messages))
+	for _, msg := range m.messages {
+		msgs = append(msgs, *msg)
+	}
+	sortMessages(msgs)
+	unread := make([]string, 0, len(m.unread))
+	for _, msg := range msgs {
+		if m.unread[msg.ID] {
+			unread = append(unread, msg.ID)
+		}
+	}
+	cols := make(map[string]CollectionIn, len(m.members))
+	for key, ids := range m.members {
+		out := make([]string, len(ids))
+		copy(out, ids)
+		cols[key] = CollectionIn{Complete: m.complete[key], Whole: m.whole[key], IDs: out}
+	}
+	return Snapshot{Messages: msgs, Unread: unread, Collections: cols, HistoryID: m.historyID}
+}
+
+// Restore folds a snapshot into the memory. It is the boot path only: the
+// membership it carries is taken as read, because it is this plugin's own
+// last word about the same collections.
+func (m *Memory) Restore(s Snapshot) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range s.Messages {
+		msg := s.Messages[i]
+		m.messages[msg.ID] = &msg
+	}
+	for _, id := range s.Unread {
+		m.unread[id] = true
+	}
+	for key, in := range s.Collections {
+		ids := make([]string, len(in.IDs))
+		copy(ids, in.IDs)
+		m.members[key] = ids
+		if in.Complete {
+			m.complete[key] = true
+		}
+		m.whole[key] = in.Whole
+	}
+	m.historyID = s.HistoryID
+}
+
+func sortMessages(ms []Message) {
+	views := make([]View, len(ms))
+	for i := range ms {
+		views[i] = View{Message: ms[i]}
+	}
+	sortViews(views)
+	for i := range views {
+		ms[i] = views[i].Message
+	}
 }

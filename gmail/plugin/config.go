@@ -14,17 +14,17 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// FromConfig builds the production plugin from the shared config vocabulary
-// and starts its refresher. It is the one owner of the config-to-plugin
-// derivation, so the subprocess main and any other door compose exactly the
-// same plugin.
+// FromConfig builds the production plugin from the shared config vocabulary.
+// It is the one owner of the config-to-plugin derivation, so the subprocess
+// main and any other door compose exactly the same plugin. Nothing runs until
+// a call or a Watch asks.
 //
 // The config carries PATHS and never secrets:
 //
 //	credentials  the OAuth client JSON from the Google Cloud console (required)
 //	token        the token file `-auth` wrote (required)
 //	refresh      how often memory catches up with Gmail (default: 1m)
-//	max_messages how many of the newest messages a grid holds (default: 500)
+//	max_messages how many of a label's newest messages one walk reads (default: 500)
 //	endpoint     the Gmail API base URL (default: Gmail's own)
 //
 // endpoint is the same ordinary knob gitlab's url is — the address of the
@@ -97,9 +97,5 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 		return nil, err
 	}
 	opts.Reauth = fmt.Sprintf("gridwell-plugin-gmail -auth -credentials %s -token %s", credentials, tokenPath)
-	p := New(src, opts)
-	// The refresher lives as long as the process does: a plugin subprocess is
-	// stopped by the node killing it, and there is nothing else to unwind.
-	go p.Run(ctx)
-	return p, nil
+	return New(src, opts), nil
 }

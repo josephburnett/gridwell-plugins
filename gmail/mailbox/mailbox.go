@@ -1,7 +1,7 @@
 // Package mailbox is the pure half of the gmail plugin: the message record,
 // the two Gmail labels it projects and all mail, their union, the keys and
-// entries derived from them, the memory of every message seen, and the
-// disposable cache file that memory rewarms itself from. There is no HTTP and no gRPC
+// entries derived from them, and the memory of every message seen, with the
+// snapshot of it the plugin's cache file keeps. There is no HTTP and no gRPC
 // here, so everything is unit-tested against fakes, and the plugin package
 // only wires it to the wire.
 package mailbox

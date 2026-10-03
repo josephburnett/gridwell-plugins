@@ -1,8 +1,7 @@
 package mailbox
 
 import (
-	"os"
-	"path/filepath"
+	"encoding/json"
 	"testing"
 )
 
@@ -143,9 +142,9 @@ func TestAMemberWithNoRecordIsNotATileAndIsNotGone(t *testing.T) {
 	}
 }
 
-// The cache is the plugin's memory of Gmail across a restart, and it must
-// carry every fact the memory owns: the records, the unread set, each
-// membership and its usability.
+// The snapshot is the plugin's memory of Gmail across a restart, as the cache
+// file's JSON, and it must carry every fact the memory owns: the records, the
+// unread set, each membership, its usability and its wholeness.
 func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	m := NewMemory()
 	m.Absorb(InboxContext, []string{"b", "a"}, map[string]bool{"b": true},
@@ -153,19 +152,12 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	m.Absorb(StarredContext, []string{"b"}, map[string]bool{"b": true}, nil, true)
 	m.SetHistoryID(4242)
 
-	path := filepath.Join(t.TempDir(), CacheFile)
-	if err := SaveCache(path, m.Snapshot()); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
+	raw, err := json.Marshal(m.Snapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("cache mode = %v", info.Mode().Perm())
-	}
-	snap, err := LoadCache(path)
-	if err != nil {
+	var snap Snapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
 		t.Fatal(err)
 	}
 	back := NewMemory()
@@ -180,6 +172,9 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	if !back.Swept() {
 		t.Error("a restored sweep did not count")
 	}
+	if !back.Definitive(InboxContext) {
+		t.Error("a restored whole read did not count")
+	}
 	if got := back.HistoryID(); got != 4242 {
 		t.Errorf("restored history id = %d; a restart would re-walk every collection", got)
 	}
@@ -188,21 +183,6 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	a, b := m.Snapshot(), m.Snapshot()
 	if len(a.Messages) != len(b.Messages) || a.Messages[0].ID != b.Messages[0].ID {
 		t.Error("the snapshot order is not stable")
-	}
-}
-
-// A cache from a future format is refused rather than misread: a refused file
-// costs one walk, a misread one costs the truth.
-func TestACacheOfTheWrongVersionIsRefused(t *testing.T) {
-	path := filepath.Join(t.TempDir(), CacheFile)
-	if err := os.WriteFile(path, []byte(`{"version":99}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadCache(path); err == nil {
-		t.Fatal("a cache from another format was accepted")
-	}
-	if _, err := LoadCache(filepath.Join(t.TempDir(), "absent")); !os.IsNotExist(err) {
-		t.Fatalf("a missing cache = %v, want a not-exist error the caller can read as a first boot", err)
 	}
 }
 
