@@ -161,9 +161,11 @@ func (p *Plugin) GetPreview(_ context.Context, req *pluginv1.GetPreviewRequest) 
 }
 
 // Probe answers definitively either way: the site is a fixed list, so a key
-// it does not hold is gone, not merely unreadable this pass.
+// it does not hold is gone, not merely unreadable this pass. It answers for
+// the context asked, and the site lists every key in its one context; an
+// empty context asks after the plugin as a whole.
 func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
-	if site.Lookup(req.Key) == nil {
+	if (req.Context != "" && req.Context != site.RootContext) || site.Lookup(req.Key) == nil {
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
 	}
 	return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil

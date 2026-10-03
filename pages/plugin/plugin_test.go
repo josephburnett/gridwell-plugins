@@ -195,13 +195,33 @@ func TestReadContentAnswersMarkdown(t *testing.T) {
 func TestProbeIsDefinitiveBothWays(t *testing.T) {
 	p := New()
 	ctx := context.Background()
-	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "hello"})
+	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "hello", Context: site.RootContext})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_PRESENT {
 		t.Errorf("Probe(hello) = %v", got.Presence)
 	}
-	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "gone"})
+	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "gone", Context: site.RootContext})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_GONE {
 		t.Errorf("Probe(gone) = %v", got.Presence)
+	}
+}
+
+// Probe answers for the context the request names (standard rule 6): a key
+// the site holds is GONE from a context the site does not list it in, and an
+// empty context asks after the plugin as a whole.
+func TestProbeAnswersForTheContextAsked(t *testing.T) {
+	p := New()
+	for _, c := range []struct {
+		context string
+		want    pluginv1.ProbeResponse_Presence
+	}{
+		{site.RootContext, pluginv1.ProbeResponse_PRESENCE_PRESENT},
+		{"elsewhere", pluginv1.ProbeResponse_PRESENCE_GONE},
+		{"", pluginv1.ProbeResponse_PRESENCE_PRESENT},
+	} {
+		got, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: "hello", Context: c.context})
+		if err != nil || got.Presence != c.want {
+			t.Errorf("Probe(hello in %q) = %v, %v; want %v", c.context, got.GetPresence(), err, c.want)
+		}
 	}
 }
 
