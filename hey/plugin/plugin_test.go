@@ -15,6 +15,7 @@ import (
 
 	"github.com/josephburnett/gridwell-plugins/hey/heycli"
 	"github.com/josephburnett/gridwell-plugins/hey/mail"
+	"github.com/josephburnett/gridwell-plugins/memo"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell/api/rpc"
 )
@@ -54,9 +55,16 @@ func newFake() *fakeHEY {
 		html: map[int64]string{}, threadErr: map[int64]error{}, calls: map[string]int{}}
 }
 
-func (f *fakeHEY) Box(_ context.Context, box string) ([]mail.Thread, bool, error) {
-	if f.block != nil {
-		<-f.block
+func (f *fakeHEY) Box(ctx context.Context, box string) ([]mail.Thread, bool, error) {
+	f.mu.Lock()
+	block := f.block
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -150,7 +158,12 @@ func (s *server) Context() context.Context { return context.Background() }
 
 // stable is a plugin whose clock does not move, so nothing refreshes behind a
 // test's back.
-func stable(src Source, o Options) *Plugin {
+func stable(t *testing.T, src Source, o Options) *Plugin {
+	t.Helper()
+	if o.Life == nil {
+		o.Life = memo.NewLife()
+		t.Cleanup(o.Life.End)
+	}
 	if o.Now == nil {
 		now := at("2026-01-06T12:00:00Z")
 		o.Now = func() time.Time { return now }
@@ -168,7 +181,7 @@ func stable(src Source, o Options) *Plugin {
 // There is no wrapper grid above them and no landing among them: a plugin is
 // not a place, it contributes doorways, and each collection is one.
 func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
-	p := stable(newFake(), Options{})
+	p := stable(t, newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +224,7 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	f.boxes["trailbox"] = []mail.Thread{th(5, "receipt", "2026-01-01T09:00:00Z")}
 	f.boxes["bubblebox"] = []mail.Thread{th(6, "follow up", "2025-12-31T09:00:00Z")}
 	clock := at("2026-01-06T12:00:00Z")
-	p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
+	p := stable(t, f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
 
 	for _, c := range mail.Collections {
@@ -251,7 +264,7 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 }
 
 func TestUnknownContextIsRefused(t *testing.T) {
-	p := stable(newFake(), Options{})
+	p := stable(t, newFake(), Options{})
 	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "box:spambox"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("err = %v, want InvalidArgument", err)
@@ -264,7 +277,7 @@ func TestOneWalkServesABurst(t *testing.T) {
 	f := newFake()
 	f.block = make(chan struct{})
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -286,7 +299,7 @@ func TestOneWalkServesABurst(t *testing.T) {
 func TestASlowWalkAnswersFromMemory(t *testing.T) {
 	f := newFake()
 	f.block = make(chan struct{})
-	p := stable(f, Options{FirstAnswer: 20 * time.Millisecond})
+	p := stable(t, f, Options{FirstAnswer: 20 * time.Millisecond})
 	start := time.Now()
 	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
 	if err != nil {
@@ -307,7 +320,7 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	f.html[1] = "<!doctype html><html><body><article>lunch</article></body></html>"
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	ctx := context.Background()
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
 		t.Fatal(err)
@@ -340,7 +353,7 @@ func TestReadContentIsTheCardAndServeContentIsTheEmail(t *testing.T) {
 // and it must not spend a CLI run finding that out.
 func TestServeContentAnswers404ForASubpath(t *testing.T) {
 	f := newFake()
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	s := &server{}
 	if err := p.ServeContent(&pluginv1.ServeContentRequest{Key: "thread:1", Subpath: "logo.png"}, s); err != nil {
 		t.Fatal(err)
@@ -358,7 +371,7 @@ func TestServeContentAnswers404ForASubpath(t *testing.T) {
 func TestServeContentSaysWhenThereIsNoBody(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +393,7 @@ func TestServeContentSaysWhenThereIsNoBody(t *testing.T) {
 func TestServeContentSurfacesAFailure(t *testing.T) {
 	f := newFake()
 	f.err = status.Error(codes.PermissionDenied, "Not logged in")
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	err := p.ServeContent(&pluginv1.ServeContentRequest{Key: "thread:1"}, &server{})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("err = %v", err)
@@ -393,7 +406,7 @@ func TestServeContentSurfacesAFailure(t *testing.T) {
 func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	ctx := context.Background()
 
 	// Nothing walked yet: cannot say.
@@ -434,7 +447,7 @@ func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 func TestACappedWalkNeverSweeps(t *testing.T) {
 	f := newFake()
 	f.whole["asidebox"] = false
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	ctx := context.Background()
 	for _, c := range mail.Collections {
 		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
@@ -453,7 +466,7 @@ func TestAThreadKeepsItsKeyAcrossCollections(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	clock := at("2026-01-06T12:00:00Z")
-	p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
+	p := stable(t, f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
 	for _, c := range mail.Collections {
 		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
@@ -489,7 +502,7 @@ func TestAThreadKeepsItsKeyAcrossCollections(t *testing.T) {
 func TestAWalkFailureSurfaces(t *testing.T) {
 	f := newFake()
 	f.err = status.Error(codes.PermissionDenied, "Not logged in")
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
 	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "Not logged in") {
 		t.Fatalf("err = %v", err)
@@ -499,7 +512,7 @@ func TestAWalkFailureSurfaces(t *testing.T) {
 // Before any sweep, a key the memory does not hold is "not yet", not "gone":
 // a Gone body stored over the node's remembered one would be a loss.
 func TestReadContentWaitsRatherThanDeclaringAThreadGone(t *testing.T) {
-	p := stable(newFake(), Options{})
+	p := stable(t, newFake(), Options{})
 	err := p.ReadContent(&pluginv1.ReadContentRequest{Key: "thread:1"}, &reader{})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v, want Unavailable", err)
@@ -507,7 +520,7 @@ func TestReadContentWaitsRatherThanDeclaringAThreadGone(t *testing.T) {
 }
 
 func TestDeleteIsRefusedWithItsReason(t *testing.T) {
-	p := stable(newFake(), Options{})
+	p := stable(t, newFake(), Options{})
 	_, err := p.Delete(context.Background(), &pluginv1.DeleteRequest{Key: "thread:1"})
 	if status.Code(err) != codes.Unimplemented {
 		t.Fatalf("err = %v", err)
@@ -526,7 +539,7 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 	clock := at("2026-01-06T12:00:00Z")
 	opts := Options{StateDir: dir, Refresh: time.Hour, Now: func() time.Time { return clock },
 		Logf: func(string, ...any) {}}
-	p := stable(f, opts)
+	p := stable(t, f, opts)
 	ctx := context.Background()
 	for _, c := range mail.Collections {
 		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
@@ -538,7 +551,7 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 	}
 
 	cold := newFake() // a source that answers nothing: only the cache can
-	back := stable(cold, opts)
+	back := stable(t, cold, opts)
 	resp, err := back.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
 	if err != nil {
 		t.Fatal(err)
@@ -566,7 +579,7 @@ func TestAnUnreadableCacheStartsColdAndSaysSo(t *testing.T) {
 	var lines []string
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
-	p := stable(f, Options{StateDir: dir, Logf: func(format string, args ...any) {
+	p := stable(t, f, Options{StateDir: dir, Logf: func(format string, args ...any) {
 		lines = append(lines, format)
 	}})
 	if len(lines) == 0 {
@@ -581,7 +594,7 @@ func TestAnUnreadableCacheStartsColdAndSaysSo(t *testing.T) {
 func TestSearchReadsMemoryOnly(t *testing.T) {
 	f := newFake()
 	f.boxes["laterbox"] = []mail.Thread{th(2, "invoice", "2026-01-04T09:00:00Z")}
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	ctx := context.Background()
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ReplyLaterContext}); err != nil {
 		t.Fatal(err)
@@ -633,7 +646,7 @@ func TestOverTheRealCLIContract(t *testing.T) {
 	if _, err := os.Stat(bin); err != nil {
 		t.Fatalf("the CLI contract is missing: %v", err)
 	}
-	p := stable(heycli.New(heycli.Exec{Binary: bin}), Options{StateDir: t.TempDir()})
+	p := stable(t, heycli.New(heycli.Exec{Binary: bin}), Options{StateDir: t.TempDir()})
 	ctx := context.Background()
 
 	resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
@@ -689,7 +702,7 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	var mu sync.Mutex
 	clock := at("2026-01-06T12:00:00Z")
 	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
-	p := stable(f, Options{Refresh: time.Minute, FirstAnswer: time.Hour, Now: now})
+	p := stable(t, f, Options{Refresh: time.Minute, FirstAnswer: time.Hour, Now: now})
 	ctx := context.Background()
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
 		t.Fatal(err)
@@ -697,7 +710,9 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	mu.Lock()
 	clock = clock.Add(2 * time.Minute)
 	mu.Unlock()
+	f.mu.Lock()
 	f.block = make(chan struct{})
+	f.mu.Unlock()
 	done := make(chan *pluginv1.ListResponse, 1)
 	go func() {
 		resp, _ := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
@@ -725,7 +740,7 @@ func TestAColdReadWaitsTheFirstAnswer(t *testing.T) {
 	f.block = make(chan struct{})
 	defer close(f.block)
 	const bound = 50 * time.Millisecond
-	p := stable(f, Options{FirstAnswer: bound})
+	p := stable(t, f, Options{FirstAnswer: bound})
 	start := time.Now()
 	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
 		t.Fatal(err)
@@ -743,7 +758,7 @@ func TestAWarmReadAnswersTheLastFailedWalk(t *testing.T) {
 	var mu sync.Mutex
 	clock := at("2026-01-06T12:00:00Z")
 	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
-	p := stable(f, Options{Refresh: time.Minute, Now: now})
+	p := stable(t, f, Options{Refresh: time.Minute, Now: now})
 	ctx := context.Background()
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
 		t.Fatal(err)
@@ -776,7 +791,7 @@ func TestAWarmReadAnswersTheLastFailedWalk(t *testing.T) {
 func TestInfoRefusesWhileTheCLIIsMissing(t *testing.T) {
 	missing := errors.New(`the hey CLI "hey" is not installed: it is not on PATH`)
 	ready := missing
-	p := stable(newFake(), Options{Ready: func() error { return ready }})
+	p := stable(t, newFake(), Options{Ready: func() error { return ready }})
 	_, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
 	if status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != missing.Error() {
 		t.Fatalf("missing CLI → Info %v, want FailedPrecondition %q", err, missing)
@@ -792,7 +807,7 @@ func TestInfoRefusesWhileTheCLIIsMissing(t *testing.T) {
 }
 
 // A walk that works says nothing; a walk that fails says so once per
-// episode, and the walk that ends the episode says so once.
+// episode, and a new episode starts only after a walk lands.
 func TestAWalkLogsOnlyTheEdgesOfAFailure(t *testing.T) {
 	var mu sync.Mutex
 	var logs []string
@@ -802,7 +817,7 @@ func TestAWalkLogsOnlyTheEdgesOfAFailure(t *testing.T) {
 		logs = append(logs, format)
 	}
 	f := newFake()
-	p := stable(f, Options{Logf: logf})
+	p := stable(t, f, Options{Logf: logf})
 	c := mail.Collections[0]
 	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: c.Key})
 	idle(t, p)
@@ -816,7 +831,7 @@ func TestAWalkLogsOnlyTheEdgesOfAFailure(t *testing.T) {
 	f.err = errors.New("no network")
 	f.mu.Unlock()
 	for i := 0; i < 2; i++ {
-		p.rewalk(c)
+		p.flights.Rewalk(c.Key)
 		idle(t, p)
 	}
 	mu.Lock()
@@ -828,11 +843,16 @@ func TestAWalkLogsOnlyTheEdgesOfAFailure(t *testing.T) {
 	f.mu.Lock()
 	f.err = nil
 	f.mu.Unlock()
-	p.rewalk(c)
+	p.flights.Rewalk(c.Key)
+	idle(t, p)
+	f.mu.Lock()
+	f.err = errors.New("no network")
+	f.mu.Unlock()
+	p.flights.Rewalk(c.Key)
 	idle(t, p)
 	mu.Lock()
 	defer mu.Unlock()
-	if len(logs) != 2 || !strings.Contains(logs[1], "reads again") {
-		t.Fatalf("the recovery was not logged once: %v", logs)
+	if len(logs) != 2 {
+		t.Fatalf("a landing and a new failure logged %v, want one more line", logs)
 	}
 }

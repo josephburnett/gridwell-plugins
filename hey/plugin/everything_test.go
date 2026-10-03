@@ -19,7 +19,7 @@ func TestEverythingIsEveryThreadOnceAndBoxesLinkToIt(t *testing.T) {
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	f.boxes["laterbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z"), th(2, "invoice", "2026-01-04T09:00:00Z")}
 	f.boxes["feedbox"] = []mail.Thread{th(3, "digest", "2026-01-03T09:00:00Z")}
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	ctx := context.Background()
 
 	all, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext})
@@ -60,7 +60,7 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 	f.threadErr[9] = status.Error(codes.NotFound, "hey plugin: thread read: resource not found")
 	f.threadErr[7] = status.Error(codes.Unavailable, "hey plugin: thread read: network")
 	f.html[8] = "<!doctype html>"
-	p := stable(f, Options{})
+	p := stable(t, f, Options{})
 	ctx := context.Background()
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext}); err != nil {
 		t.Fatal(err)

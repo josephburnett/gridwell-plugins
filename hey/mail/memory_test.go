@@ -1,7 +1,7 @@
 package mail
 
 import (
-	"path/filepath"
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -108,18 +108,18 @@ func TestCollectionIsOldestFirstAndTotal(t *testing.T) {
 	}
 }
 
-func TestCacheRoundTrips(t *testing.T) {
+func TestSnapshotRoundTrips(t *testing.T) {
 	m := NewMemory()
 	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
 	m.Absorb(ReplyLaterContext, []Thread{thread(2, "b", "2026-01-03")}, false)
 
-	path := filepath.Join(t.TempDir(), "sub", CacheFile)
-	if err := SaveCache(path, m.Snapshot()); err != nil {
-		t.Fatalf("SaveCache: %v", err)
-	}
-	snap, err := LoadCache(path)
+	raw, err := json.Marshal(m.Snapshot())
 	if err != nil {
-		t.Fatalf("LoadCache: %v", err)
+		t.Fatal(err)
+	}
+	var snap Snapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatal(err)
 	}
 	back := NewMemory()
 	back.Restore(snap)
@@ -130,8 +130,8 @@ func TestCacheRoundTrips(t *testing.T) {
 	if got, want := keys(back.Collection(ReplyLaterContext)), []int64{2}; !reflect.DeepEqual(got, want) {
 		t.Errorf("reply later = %v, want %v", got, want)
 	}
-	// Completeness rides the file: a restart must not be able to say GONE on
-	// the strength of a walk that never finished.
+	// Completeness rides the snapshot: a restart must not be able to say GONE
+	// on the strength of a walk that never finished.
 	if back.Swept() {
 		t.Error("a restored half sweep reports itself swept")
 	}
@@ -140,16 +140,5 @@ func TestCacheRoundTrips(t *testing.T) {
 	}
 	if !back.Swept() {
 		t.Error("the restored imbox forgot its completed walk")
-	}
-}
-
-func TestLoadCacheRefusesAnotherVersion(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, CacheFile)
-	if err := SaveCache(path, Snapshot{Version: snapshotVersion + 1}); err != nil {
-		t.Fatalf("SaveCache: %v", err)
-	}
-	if _, err := LoadCache(path); err == nil {
-		t.Fatal("LoadCache accepted a foreign version")
 	}
 }
