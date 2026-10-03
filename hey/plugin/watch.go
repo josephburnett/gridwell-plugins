@@ -133,7 +133,7 @@ func (p *Plugin) apply(ev mail.Event) {
 		p.setLive(false)
 	case mail.ChangeResync:
 		if c, ok := mail.LookupBox(ev.Box); ok {
-			p.flights.Rewalk(c.Key)
+			p.ask(c.Key)
 		}
 	case mail.ChangeAdded, mail.ChangeUpdated, mail.ChangeDeleted:
 		c, ok := mail.LookupBox(ev.Box)
@@ -146,7 +146,7 @@ func (p *Plugin) apply(ev mail.Event) {
 		}
 		p.publish(c.Key, eff)
 		if eff.Rewalk {
-			p.flights.Rewalk(c.Key)
+			p.ask(c.Key)
 		}
 	}
 }

@@ -94,10 +94,14 @@ type Plugin struct {
 	mu sync.Mutex
 	// live is true from the feed's ready until it disconnects or ends.
 	// liveGen counts readies, and caughtUp holds, per collection, the ready
-	// whose catch-up walk landed: memory is current while both agree.
+	// whose catch-up walk landed: memory is current while both agree. asked
+	// counts the re-reads the feed asked of each collection (a resync, a
+	// delete memory could not map), so a walk begun before the latest ask
+	// catches nothing up.
 	live     bool
 	liveGen  int
-	caughtUp map[string]int
+	caughtUp map[string]catchUp
+	asked    map[string]int
 	// watchErr is the verdict the feed last ended on — not signed in —
 	// until a feed reaches ready. With the feed down, memory is only as
 	// current as the walks, and every read says why.
@@ -117,6 +121,13 @@ type Plugin struct {
 	// readied latches the first Info ready passed: a CLI that goes missing
 	// later is a source gone dark, which every read reports.
 	readied atomic.Bool
+}
+
+// catchUp is the walk that last caught one collection up with the feed: the
+// ready it followed, and whether it read the whole box.
+type catchUp struct {
+	gen   int
+	whole bool
 }
 
 // Options tunes a plugin. Zero values take the defaults.
@@ -163,7 +174,8 @@ func New(src Source, o Options) *Plugin {
 		life:         o.Life,
 		refresh:      o.Refresh,
 		logf:         o.Logf,
-		caughtUp:     map[string]int{},
+		caughtUp:     map[string]catchUp{},
+		asked:        map[string]int{},
 		effects:      map[string]mail.Effect{},
 		failing:      map[string]bool{},
 		watchBackoff: o.WatchBackoff,
@@ -263,9 +275,38 @@ func (p *Plugin) fresh(key string, walkedAt time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.live {
-		return p.caughtUp[key] == p.liveGen
+		return p.caughtUpLocked(key)
 	}
 	return memo.Within(p.clock.Now(), walkedAt, p.refresh)
+}
+
+// caughtUpLocked says the collection's last landed walk followed the feed's
+// latest ready and every re-read the feed asked of it since. The caller
+// holds p.mu.
+func (p *Plugin) caughtUpLocked(key string) bool {
+	cu, ok := p.caughtUp[key]
+	return ok && cu.gen == p.liveGen
+}
+
+// authoritative says a box's listing is definitive (rule 4): its catch-up
+// walk read the whole box, and the live feed has kept it since. A capped
+// walk, a feed that is down, or a re-read the feed asked for and no walk has
+// answered is silence, and absence is never inferred from silence.
+func (p *Plugin) authoritative(key string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.live && p.caughtUpLocked(key) && p.caughtUp[key].whole
+}
+
+// ask marks a collection as needing a re-read the feed cannot give, and
+// starts it: until a walk begun after now lands, the collection is neither
+// current nor definitive.
+func (p *Plugin) ask(key string) {
+	p.mu.Lock()
+	p.asked[key]++
+	delete(p.caughtUp, key)
+	p.mu.Unlock()
+	p.flights.Rewalk(key)
 }
 
 // walk is one detached walk of one collection, run by memo.Flights under the
@@ -278,7 +319,7 @@ func (p *Plugin) walk(ctx context.Context, key string) error {
 		return status.Errorf(codes.InvalidArgument, "hey plugin: unknown context %q", key)
 	}
 	p.mu.Lock()
-	gen := p.liveGen
+	gen, ask := p.liveGen, p.asked[key]
 	p.mu.Unlock()
 	p.mem.BeginWalk(key)
 	threads, whole, err := p.src.Box(ctx, c.Box)
@@ -288,7 +329,9 @@ func (p *Plugin) walk(ctx context.Context, key string) error {
 	}
 	eff := p.mem.Absorb(key, threads, whole)
 	p.mu.Lock()
-	p.caughtUp[key] = gen
+	if p.asked[key] == ask {
+		p.caughtUp[key] = catchUp{gen: gen, whole: whole}
+	}
 	p.effects[key] = merge(p.effects[key], eff)
 	p.mu.Unlock()
 	return nil
@@ -359,11 +402,10 @@ func (p *Plugin) read(ctx context.Context, key string) (unreachable string, err 
 // current. A failed refresh is the listing's unreachable reason, which the
 // node reports as the source's health while it keeps serving the rows.
 //
-// The listing is NOT authoritative even after a whole walk. Absence is the
-// node's question to settle through Probe, which is the one place that knows
-// whether every collection has been read: a thread missing from the Imbox is
-// usually in Reply Later, and an authoritative Imbox would retire its id and
-// lose the user's placement on the way past.
+// A box is authoritative when its listing is definitive (authoritative): the
+// node then retires its link to a thread that left, which costs nothing, since
+// the thread's one tile is in everything. Everything never is: a thread in no
+// box may still be in HEY, which only Probe asks.
 //
 // A box lists links into everything (mail.BoxEntries); everything lists each
 // thread once, and is as current as every box is.
@@ -374,7 +416,7 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 			return nil, err
 		}
 		threads := p.mem.Everything()
-		return listing(mail.EverythingLabel, threads, mail.CollectionEntries(threads), reason), nil
+		return listing(mail.EverythingLabel, threads, mail.CollectionEntries(threads), reason, false), nil
 	}
 	c, ok := mail.LookupCollection(req.Context)
 	if !ok {
@@ -384,11 +426,12 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 	if err != nil {
 		return nil, err
 	}
+	definitive := reason == "" && p.authoritative(c.Key)
 	threads := p.mem.Collection(c.Key)
-	return listing(c.Label, threads, mail.BoxEntries(threads), reason), nil
+	return listing(c.Label, threads, mail.BoxEntries(threads), reason, definitive), nil
 }
 
-func listing(label string, threads []mail.Thread, entries []*pluginv1.Entry, unreachable string) *pluginv1.ListResponse {
+func listing(label string, threads []mail.Thread, entries []*pluginv1.Entry, unreachable string, authoritative bool) *pluginv1.ListResponse {
 	unseen := 0
 	for i := range threads {
 		if !threads[i].Seen {
@@ -397,7 +440,7 @@ func listing(label string, threads []mail.Thread, entries []*pluginv1.Entry, unr
 	}
 	return &pluginv1.ListResponse{
 		Entries:       entries,
-		Authoritative: false,
+		Authoritative: authoritative,
 		SourceLabel:   fmt.Sprintf("%s · %d threads · %d unseen", label, len(threads), unseen),
 		Unreachable:   unreachable,
 	}

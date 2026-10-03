@@ -601,6 +601,76 @@ func TestTheEdgesOfAFailedWalkRepaint(t *testing.T) {
 	expect(t, w, mail.EverythingContext)
 }
 
+// A box's listing is authoritative only when it is definitive (rule 4): its
+// last walk read the whole box, the feed is live, and that walk is the
+// catch-up of the feed's latest ready, with nothing the feed asked to be
+// re-read since. Everything never is: a thread in no box is Probe's to
+// settle against HEY.
+func TestAuthoritativeOnlyWhenDefinitive(t *testing.T) {
+	authoritative := func(p *Plugin, ctx string) bool {
+		t.Helper()
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctx})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Authoritative
+	}
+	for _, c := range []struct {
+		name    string
+		context string
+		then    func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event)
+		want    bool
+	}{
+		{"a whole walk under a live feed", mail.ImboxContext, nil, true},
+		{"everything", mail.EverythingContext, nil, false},
+		{"a capped walk", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, _ []mail.Event) {
+			f.mu.Lock()
+			f.whole["imbox"] = false
+			f.mu.Unlock()
+			p.flights.Rewalk(mail.ImboxContext)
+			idle(t, p)
+		}, false},
+		{"the feed down", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+			send(t, f.feed, evs[lineDisconnected])
+			eventually(t, "the feed is down", func() bool { return !isLive(p) })
+		}, false},
+		{"a resync in flight", mail.ReplyLaterContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+			f.mu.Lock()
+			f.block = make(chan struct{})
+			f.mu.Unlock()
+			t.Cleanup(func() { close(f.block) })
+			send(t, f.feed, evs[lineResync])
+			eventually(t, "the resync walks", func() bool { return p.flights.Busy(mail.ReplyLaterContext) })
+		}, false},
+		{"a resync whose walk failed", mail.ReplyLaterContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+			f.mu.Lock()
+			f.boxErr["laterbox"] = status.Error(codes.Unavailable, "network")
+			f.mu.Unlock()
+			send(t, f.feed, evs[lineResync])
+			eventually(t, "the resync walks", func() bool { return f.count("laterbox") == 2 })
+			idle(t, p)
+		}, false},
+		{"a catch-up that failed", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+			f.mu.Lock()
+			f.boxErr["imbox"] = status.Error(codes.Unavailable, "network")
+			f.mu.Unlock()
+			send(t, f.feed, evs[lineReadyAgain])
+			eventually(t, "the catch-up runs", func() bool { return f.count("imbox") == 2 })
+			idle(t, p)
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, f, _, evs := live(t, Options{})
+			if c.then != nil {
+				c.then(t, p, f, evs)
+			}
+			if got := authoritative(p, c.context); got != c.want {
+				t.Errorf("authoritative = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // A feed that keeps ending is one episode in the log: the first end is said,
 // the retries are not, and the feed reaching ready again is said once.
 func TestAFeedThatKeepsEndingLogsOnce(t *testing.T) {
