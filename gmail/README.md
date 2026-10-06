@@ -203,4 +203,7 @@ the plugin's health, until a refresh lands again.
 
 The node hears about a change without asking: after each refresh the plugin
 sends a `ContextChanged` on its `Watch` stream for every grid whose listing
-changed, and nothing when none did.
+changed, and nothing when none did. It never sends an `EntryChanged`: Gmail
+does not change a message's content once it has it, so a message's page
+never changes in place; read, starred and which label holds it are the
+listing's.

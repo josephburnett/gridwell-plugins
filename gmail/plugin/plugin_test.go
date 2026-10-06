@@ -1200,6 +1200,10 @@ func (w *watchStream) Send(c *pluginv1.Change) error {
 	if w.gate != nil {
 		<-w.gate
 	}
+	if e := c.GetEntryChanged(); e != nil {
+		w.sent <- "entry " + e.GetContext() + "/" + e.GetEntry().GetKey()
+		return nil
+	}
 	w.sent <- c.GetContextChanged().GetContext()
 	return nil
 }
@@ -1261,7 +1265,8 @@ func announced(w *watchStream) []string {
 }
 
 // A refresh announces exactly the collections whose answer it changed, and a
-// quiet one announces nothing.
+// quiet one announces nothing. A message touched at Gmail is never told as
+// an entry changed in place: its labels moved, and its page cannot.
 func TestWatchAnnouncesExactlyWhatARefreshChanged(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
