@@ -4,9 +4,10 @@ go 1.27.1
 
 require (
 	github.com/josephburnett/gridwell-plugins/guest v0.1.0
-	github.com/josephburnett/gridwell-plugins/memo v0.1.0
-	github.com/josephburnett/gridwell/api v0.4.0
+	github.com/josephburnett/gridwell-plugins/memo v0.3.0
+	github.com/josephburnett/gridwell/api v0.7.0
 	google.golang.org/grpc v1.84.0
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -22,5 +23,4 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 )

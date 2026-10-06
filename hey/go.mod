@@ -4,8 +4,8 @@ go 1.27.1
 
 require (
 	github.com/josephburnett/gridwell-plugins/guest v0.1.0
-	github.com/josephburnett/gridwell-plugins/memo v0.2.0
-	github.com/josephburnett/gridwell/api v0.5.0
+	github.com/josephburnett/gridwell-plugins/memo v0.3.0
+	github.com/josephburnett/gridwell/api v0.7.0
 	golang.org/x/net v0.59.0
 	google.golang.org/grpc v1.84.0
 )
