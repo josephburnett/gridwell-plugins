@@ -135,8 +135,17 @@ func (s *fakeStream) Send(c *pluginv1.Change) error {
 	if !s.header {
 		s.beforeHeader++
 	}
-	s.sent = append(s.sent, c.GetContextChanged().GetContext())
+	s.sent = append(s.sent, said(c))
 	return nil
+}
+
+// said is one change as a test reads it: a context's key, or an entry's
+// context, key and label.
+func said(c *pluginv1.Change) string {
+	if e := c.GetEntryChanged(); e != nil {
+		return "entry " + e.GetContext() + "/" + e.GetEntry().GetKey() + "@" + e.GetEntry().GetLabel()
+	}
+	return c.GetContextChanged().GetContext()
 }
 
 func (s *fakeStream) hasHeader() bool {

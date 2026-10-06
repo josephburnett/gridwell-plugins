@@ -69,7 +69,10 @@ type unit struct {
 }
 
 // sub is one stream's queue: distinct contexts in announcement order, since a
-// context changed twice needs one repaint.
+// context changed twice needs one repaint, then distinct entries, each as it
+// was last published. Entries are not bounded by the buffer: a whole-scope
+// listing does not carry an entry's bytes, so one dropped would never be
+// told, and there are only as many as the plugin has entries.
 type sub struct {
 	scope []string
 	units []string
@@ -78,7 +81,11 @@ type sub struct {
 	mu      sync.Mutex
 	pending []string
 	queued  map[string]bool
+	owed    []entryRef
+	entries map[entryRef]*pluginv1.Entry
 }
+
+type entryRef struct{ context, key string }
 
 // NewChanges builds the fan-out for one plugin, its work run under life.
 func NewChanges(life *Life, o ChangeOptions) *Changes {
@@ -100,15 +107,17 @@ func NewChanges(life *Life, o ChangeOptions) *Changes {
 // Serve is a plugin's Watch method: it takes the stream's scope, starts the
 // work that scope needs, sends the header (the node counts the stream open
 // only then), and sends a ContextChanged per queued context until the node
-// hangs up. Every change goes to every stream whatever its scope, because a
-// change to one context can be what repaints another that links to it; the
-// scope decides what work runs and what an overflow announces.
+// hangs up, then an EntryChanged per queued entry. Every change goes to
+// every stream whatever its scope, because a change to one context can be
+// what repaints another that links to it; the scope decides what work runs
+// and what an overflow announces.
 func (c *Changes) Serve(contexts []string, stream Stream) error {
 	scope := contexts
 	if len(scope) == 0 {
 		scope = c.o.Unscoped
 	}
-	s := &sub{scope: slices.Clone(scope), wake: make(chan struct{}, 1), queued: map[string]bool{}}
+	s := &sub{scope: slices.Clone(scope), wake: make(chan struct{}, 1), queued: map[string]bool{},
+		entries: map[entryRef]*pluginv1.Entry{}}
 	c.attach(s)
 	defer c.detach(s)
 	if err := stream.SendHeader(nil); err != nil {
@@ -120,10 +129,8 @@ func (c *Changes) Serve(contexts []string, stream Stream) error {
 			return nil
 		case <-s.wake:
 		}
-		for key, ok := s.next(); ok; key, ok = s.next() {
-			if err := stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{
-				ContextChanged: &pluginv1.ContextChanged{Context: key},
-			}}); err != nil {
+		for ch := s.next(); ch != nil; ch = s.next() {
+			if err := stream.Send(ch); err != nil {
 				return err
 			}
 		}
@@ -139,6 +146,18 @@ func (c *Changes) Publish(contexts ...string) {
 	defer c.mu.Unlock()
 	for s := range c.subs {
 		s.add(contexts, c.o.Buffer)
+	}
+}
+
+// PublishEntry tells every stream that one entry changed in place: e is the
+// entry re-read exactly as List answers it in context now, its content_stamp
+// moved with its bytes. An entry published again before its send is sent
+// once, as published last.
+func (c *Changes) PublishEntry(context string, e *pluginv1.Entry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for s := range c.subs {
+		s.addEntry(context, e)
 	}
 }
 
@@ -247,17 +266,42 @@ func (s *sub) add(contexts []string, buffer int) {
 	}
 }
 
-// next hands out one context, so the queue is the stream's only buffer. A
-// context announced again while in flight queues again: it changed after its
-// send.
-func (s *sub) next() (string, bool) {
+func (s *sub) addEntry(context string, e *pluginv1.Entry) {
+	ref := entryRef{context, e.GetKey()}
+	s.mu.Lock()
+	if _, ok := s.entries[ref]; !ok {
+		s.owed = append(s.owed, ref)
+	}
+	s.entries[ref] = e
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+// next hands out one change, every listing before any entry, so the queue is
+// the stream's only buffer; nil when none is owed. A context or an entry
+// announced again while in flight queues again: it changed after its send.
+func (s *sub) next() *pluginv1.Change {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.pending) == 0 {
-		return "", false
+	if len(s.pending) > 0 {
+		ctx := s.pending[0]
+		s.pending = s.pending[1:]
+		delete(s.queued, ctx)
+		return &pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{
+			ContextChanged: &pluginv1.ContextChanged{Context: ctx},
+		}}
 	}
-	ctx := s.pending[0]
-	s.pending = s.pending[1:]
-	delete(s.queued, ctx)
-	return ctx, true
+	if len(s.owed) > 0 {
+		ref := s.owed[0]
+		s.owed = s.owed[1:]
+		e := s.entries[ref]
+		delete(s.entries, ref)
+		return &pluginv1.Change{Payload: &pluginv1.Change_EntryChanged{
+			EntryChanged: &pluginv1.EntryChanged{Context: ref.context, Entry: e},
+		}}
+	}
+	return nil
 }

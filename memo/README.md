@@ -8,7 +8,7 @@ four things.
 |---|---|---|
 | `File[T]` | the cache file in `state_dir` | `cache.db`'s contract, 14 |
 | `Flights` | one shared walk per key, and how a read answers | 7, 13, 14 |
-| `Changes` | the `Watch` fan-out, and when background work runs | 8, 9 |
+| `Changes` | the `Watch` fan-out, and when background work runs | 8, 9, 18 |
 | `Life` | the context walks and work run under | 13 |
 
 ## File
@@ -49,10 +49,14 @@ the File is nil and both are no-ops.
 
 - `Serve(req.Contexts, stream)` is the plugin's whole `Watch`. It starts the
   scope's work, sends the header, and sends one `ContextChanged` per queued
-  context.
+  context, then one `EntryChanged` per queued entry.
 - `Publish(contexts...)` reaches every stream without waiting on any. A
   context queued twice is sent once. A stream owed more than `Buffer`
   contexts is sent its whole scope instead.
+- `PublishEntry(context, entry)` says one entry changed in place (rule 18):
+  the entry as `List` answers it now, its `content_stamp` moved with its
+  bytes. An entry queued twice is sent once, as published last, and no
+  overflow drops one.
 - `Work` maps a context in scope to units of background work, and `Do` runs
   each unit while some stream needs it, ending `Linger` after the last
   leaves. This is the only place background work starts. `Poll` is the loop

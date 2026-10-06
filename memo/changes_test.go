@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
 // serving is one Watch stream being served.
@@ -131,6 +133,28 @@ func TestChangesFanOut(t *testing.T) {
 			a.hangUp(t)
 			b.hangUp(t)
 		}},
+		{"an entry changed in place is sent as it is now, after the listings", ChangeOptions{}, func(t *testing.T, c *Changes) {
+			s := serve(t, c, []string{"todos"}, held())
+			c.Publish("todos")
+			s.entered(t, 1)
+			c.PublishEntry("week:1", entry("todo:1", "a"))
+			c.PublishEntry("week:1", entry("todo:2", "a"))
+			c.PublishEntry("week:1", entry("todo:1", "b"))
+			c.Publish("week:1")
+			s.release(4)
+			s.want(t, "todos", "week:1", "entry week:1/todo:1@b", "entry week:1/todo:2@a")
+			s.hangUp(t)
+		}},
+		{"an entry is owed past a full buffer", ChangeOptions{Buffer: 1}, func(t *testing.T, c *Changes) {
+			s := serve(t, c, []string{"todos"}, held())
+			c.Publish("a")
+			s.entered(t, 1)
+			c.PublishEntry("week:1", entry("todo:1", "b"))
+			c.Publish("b", "c")
+			s.release(4)
+			s.want(t, "a", "todos", "c", "entry week:1/todo:1@b")
+			s.hangUp(t)
+		}},
 		{"a stream naming no scope watches Unscoped", ChangeOptions{Buffer: 1, Unscoped: []string{"imbox", "feed"}}, func(t *testing.T, c *Changes) {
 			s := serve(t, c, nil, held())
 			if !c.Watching("imbox") || !c.Watching("feed") {
@@ -150,6 +174,10 @@ func TestChangesFanOut(t *testing.T) {
 			tc.run(t, NewChanges(life, tc.o))
 		})
 	}
+}
+
+func entry(key, label string) *pluginv1.Entry {
+	return &pluginv1.Entry{Key: key, Kind: "text", Label: label}
 }
 
 // worklog records which units ran, and when each stopped.
