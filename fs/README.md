@@ -92,11 +92,14 @@ macOS and the BSDs, ReadDirectoryChangesW on Windows. kqueue holds an open
 file for every file in a watched directory, so on macOS the limit is the
 open-file limit.
 
-- Changes in one directory within 200 ms (`DebounceWindow`) are one
-  `ContextChanged` for that directory: an editor's save or a build is many
-  events.
-- A file created, written, renamed or removed announces its directory. The
-  plugin never sends `EntryRemoved`: the node's next listing retires the key.
+- Changes in one directory within 200 ms (`DebounceWindow`) are told once:
+  an editor's save or a build is many events.
+- A file created, removed, renamed or re-stamped (its attributes changed)
+  announces its directory as a `ContextChanged`; the node lists it and tells
+  clients only if the listing moved, and that listing retires a gone key.
+- A file written in place, or created over its own name as an editor's save
+  does, is an `EntryChanged` carrying the file's entry re-read, so a pane
+  showing the file, and the file's face in its grid, show the new bytes.
 - A shown directory that stops existing announces itself and its parent (if
   shown) and drops its watch. One created again at a shown path is watched
   again.

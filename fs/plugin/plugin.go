@@ -254,23 +254,30 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 	}
 	resp := &pluginv1.ListResponse{Authoritative: true, SourceLabel: dir}
 	for _, e := range entries {
-		key := e.Name
-		if req.Context != "." && req.Context != "" {
-			key = req.Context + "/" + e.Name
-		}
-		out := &pluginv1.Entry{Key: key, Label: e.Name}
-		switch e.Kind {
-		case fssource.KindDir:
-			out.Kind = "well"
-			out.ChildContext = key
-		case fssource.KindLink:
-			linkEntry(out, root, e)
-		default:
-			fileFacts(out, dir, e.Name)
-		}
-		resp.Entries = append(resp.Entries, out)
+		resp.Entries = append(resp.Entries, entryOf(req.Context, dir, root, e))
 	}
 	return resp, nil
+}
+
+// entryOf is what List answers for e, read from dir, which context names
+// under the real root: the one owner, so a Watch's EntryChanged carries the
+// entry a listing would.
+func entryOf(context, dir, root string, e fssource.Entry) *pluginv1.Entry {
+	key := e.Name
+	if context != "." && context != "" {
+		key = context + "/" + e.Name
+	}
+	out := &pluginv1.Entry{Key: key, Label: e.Name}
+	switch e.Kind {
+	case fssource.KindDir:
+		out.Kind = "well"
+		out.ChildContext = key
+	case fssource.KindLink:
+		linkEntry(out, root, e)
+	default:
+		fileFacts(out, dir, e.Name)
+	}
+	return out
 }
 
 // fileFacts declares a file's content facts from its name. dir "" is a file
