@@ -14,8 +14,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -145,6 +147,14 @@ func PreviewStamp(dirPath, name string) int64 {
 		return 0
 	}
 	return fi.ModTime().UnixNano()
+}
+
+// ContentStamp names a file's bytes by its mtime to the nanosecond and its
+// size, so a write that lands within one mtime tick still moves it unless it
+// keeps the size. It travels as Entry.content_stamp and with the bytes
+// ReadContent answers, and a write must claim it.
+func ContentStamp(mtime time.Time, size int64) string {
+	return strconv.FormatInt(mtime.UnixNano(), 10) + "-" + strconv.FormatInt(size, 10)
 }
 
 // renderableBodyCap bounds how much of a file the descent body carries: a

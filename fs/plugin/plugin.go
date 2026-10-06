@@ -276,6 +276,9 @@ func entryOf(context, dir, root string, e fssource.Entry) *pluginv1.Entry {
 		linkEntry(out, root, e)
 	default:
 		fileFacts(out, dir, e.Name)
+		if out.Kind == "text" {
+			out.ContentStamp = fsfile.ContentStamp(e.ModTime, e.Size)
+		}
 	}
 	return out
 }
@@ -337,8 +340,10 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 		// A directory or a vanished file has no document body.
 		return stream.Send(&pluginv1.ContentChunk{})
 	}
+	// The stamp is taken before the read, so bytes written during it read
+	// as a stamp they do not match, never as one they do.
 	data, mediaType := fsfile.Body(filepath.Dir(real), filepath.Base(real))
-	chunk := &pluginv1.ContentChunk{MediaType: mediaType}
+	chunk := &pluginv1.ContentChunk{MediaType: mediaType, ContentStamp: fsfile.ContentStamp(fi.ModTime(), fi.Size())}
 	for {
 		n := min(len(data), fsfile.ChunkBytes)
 		chunk.Data, data = data[:n], data[n:]
