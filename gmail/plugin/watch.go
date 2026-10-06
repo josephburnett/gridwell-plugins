@@ -37,7 +37,9 @@ func (p *Plugin) changedSince(before map[string][]mailbox.View) []string {
 // the node hangs up, and polls Gmail's history while the stream's scope
 // holds a context this plugin lists (memo.Changes, work, poll). Whether a
 // message has left is the listing's and Probe's to say, so "the inbox
-// changed, list it again" is the whole announcement.
+// changed, list it again" is the whole announcement. It sends no
+// EntryChanged: Gmail never changes a message's content once it has it, so
+// no page changes in place.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	return p.changes.Serve(req.GetContexts(), stream)
 }

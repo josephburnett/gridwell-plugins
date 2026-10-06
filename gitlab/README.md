@@ -17,7 +17,9 @@ only while one of its grids is shown: the node holds the plugin's change
 stream open exactly then, and the polling stops ten seconds after it closes.
 The frequent read is one request; only the full read can tell that a todo
 has left the pending list. When either read changes what the plugin knows,
-it tells the node which grids changed, and every view showing them repaints.
+it tells the node which grids changed, and every view showing them repaints;
+a todo whose text changed while its name stayed (a new note, a done mark) is
+told as that todo, so an open todo shows its text as it is now.
 
 At start the plugin asks GitLab whether it takes the token. If GitLab
 refuses it, the plugin shows as broken with the reason until a working

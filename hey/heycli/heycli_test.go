@@ -294,6 +294,11 @@ func TestParseWatchLinesPinsTheFeed(t *testing.T) {
 	if !got[2].Thread.Seen || got[2].Change != mail.ChangeUpdated {
 		t.Errorf("updated = %+v", got[2])
 	}
+	// HEY's active_at, the thread's page's stamp: read once, it stays.
+	if a := added.Thread.ActiveAt; !a.Equal(time.Date(2026, 9, 28, 19, 1, 3, 0, time.UTC)) || !got[2].Thread.ActiveAt.Equal(a) {
+		t.Errorf("active_at = %v, then %v", a, got[2].Thread.ActiveAt)
+	}
+
 	if got[3].Box != "feedbox" {
 		t.Errorf("a box outside the projection = %+v", got[3])
 	}

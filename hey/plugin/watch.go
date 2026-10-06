@@ -172,10 +172,10 @@ func (p *Plugin) setLive(live bool) {
 // Watch streams a ContextChanged for every collection whose listing changes
 // from now on, by the feed or by a walk, everything included: a thread's
 // record changing moves everything, which the node passes on to every box
-// that links into it. Absence is Probe's to settle, not the feed's. The feed
-// is account-wide, so every context in any
-// scope needs the one feed unit, and a stream that names none watches every
-// collection.
+// that links into it. A thread whose page changed is its EntryChanged in
+// everything (publish). Absence is Probe's to settle, not the feed's. The
+// feed is account-wide, so every context in any scope needs the one feed
+// unit, and a stream that names none watches every collection.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	return p.changes.Serve(req.GetContexts(), stream)
 }

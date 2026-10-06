@@ -115,7 +115,7 @@ func TestOnlyTheFullWalkJudgesAbsence(t *testing.T) {
 	if got := weekState(t, p, "week:2026-08-17", "todo:1"); got != todos.StateDone {
 		t.Errorf("after the full walk todo 1 is %q", got)
 	}
-	if got := changed(t, w, 2); !reflect.DeepEqual(got, []string{"todos", "week:2026-08-17"}) {
+	if got := changed(t, w, 3); !reflect.DeepEqual(got, []string{"entry week:2026-08-17/todo:1", "todos", "week:2026-08-17"}) {
 		t.Errorf("the full walk announced %v", got)
 	}
 }

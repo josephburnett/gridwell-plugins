@@ -69,6 +69,10 @@ func (w *watcher) Send(c *pluginv1.Change) error {
 	if w.block != nil {
 		<-w.block
 	}
+	if e := c.GetEntryChanged(); e != nil {
+		w.got <- "entry " + e.GetContext() + "/" + e.GetEntry().GetKey() + "@" + e.GetEntry().GetContentStamp()
+		return nil
+	}
 	w.got <- c.GetContextChanged().GetContext()
 	return nil
 }
@@ -252,6 +256,55 @@ func TestTheFeedMovesTheListingAndTellsTheWatcher(t *testing.T) {
 	if got := quiet(w); len(got) != 0 {
 		t.Errorf("owed nothing, got %v", got)
 	}
+}
+
+// A reply lands on a thread in place: its key and name stay, and HEY moves
+// its active_at. The feed's line tells the thread's one entry, in
+// everything, as everything's List answers it under the new stamp; a line
+// that moves only its seen state tells no entry.
+func TestAReplyIsToldAsTheThreadsEntry(t *testing.T) {
+	p, f, w, evs := live(t, Options{})
+	send(t, f.feed, evs[lineAdded])
+	expect(t, w, mail.ImboxContext)
+	expect(t, w, mail.EverythingContext)
+	before := everythingEntry(t, p, "thread:103")
+
+	reply := evs[lineAdded]
+	reply.Change = mail.ChangeUpdated
+	reply.Thread.ActiveAt = reply.Thread.ActiveAt.Add(time.Hour)
+	send(t, f.feed, reply)
+	expect(t, w, mail.ImboxContext)
+	expect(t, w, mail.EverythingContext)
+	now := everythingEntry(t, p, "thread:103")
+	if now.GetContentStamp() == before.GetContentStamp() {
+		t.Fatalf("the stamp stayed %q across a reply", now.GetContentStamp())
+	}
+	expect(t, w, "entry everything/thread:103@"+now.GetContentStamp())
+
+	seen := reply
+	seen.Thread.Seen = true
+	send(t, f.feed, seen)
+	expect(t, w, mail.ImboxContext)
+	expect(t, w, mail.EverythingContext)
+	if got := quiet(w); len(got) != 0 {
+		t.Errorf("a seen line told %v", got)
+	}
+}
+
+// everythingEntry is key's entry as everything's List answers it.
+func everythingEntry(t *testing.T, p *Plugin, key string) *pluginv1.Entry {
+	t.Helper()
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.EverythingContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range resp.GetEntries() {
+		if e.GetKey() == key {
+			return e
+		}
+	}
+	t.Fatalf("everything lists no %s", key)
+	return nil
 }
 
 // resync says the feed skipped: the box is read again and the watcher told.

@@ -30,9 +30,9 @@ func RootEntries(weeks []WeekSummary) []*pluginv1.Entry {
 const TodoTileW = 2
 
 // WeekEntries derives one week's grid: every todo created that week as a
-// markdown text tile, which is its face and its rendered document, hinted by
-// calendar.Cell from its creation time alone. The hint seeds first placement
-// only; the user's arrangement wins from then on.
+// markdown text tile, which is its face and its rendered document, named by
+// its Stamp and hinted by calendar.Cell from its creation time alone. The
+// hint seeds first placement only; the user's arrangement wins from then on.
 func WeekEntries(start time.Time, todos []Todo) []*pluginv1.Entry {
 	out := make([]*pluginv1.Entry, 0, len(todos))
 	for i := range todos {
@@ -48,6 +48,7 @@ func WeekEntries(start time.Time, todos []Todo) []*pluginv1.Entry {
 			Label:            t.Label(),
 			StatusDetail:     t.StatusDetail(),
 			PlacementHint:    &pluginv1.PlacementHint{X: x, Y: y, W: TodoTileW, H: 1},
+			ContentStamp:     Stamp(Markdown(t)),
 		})
 	}
 	return out

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/josephburnett/gridwell-plugins/gitlab/todos"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
@@ -115,8 +117,9 @@ func unwatched(t *testing.T, p *Plugin) {
 	}
 }
 
-// changed collects the contexts announced until want of them arrived, or
-// until a quiet spell when want is zero, sorted.
+// changed collects the changes sent until want of them arrived, or until a
+// quiet spell when want is zero, sorted: a context by its key, an entry as
+// "entry <context>/<key>".
 func changed(t *testing.T, w *watchStream, want int) []string {
 	t.Helper()
 	var got []string
@@ -127,7 +130,7 @@ func changed(t *testing.T, w *watchStream, want int) []string {
 	for want == 0 || len(got) < want {
 		select {
 		case c := <-w.sent:
-			got = append(got, c.GetContextChanged().GetContext())
+			got = append(got, said(c))
 		case <-time.After(quiet):
 			if want > 0 {
 				t.Fatalf("announced %v, want %d contexts", got, want)
@@ -144,6 +147,73 @@ func changed(t *testing.T, w *watchStream, want int) []string {
 	}
 	sort.Strings(got)
 	return got
+}
+
+func said(c *pluginv1.Change) string {
+	if e := c.GetEntryChanged(); e != nil {
+		return "entry " + e.GetContext() + "/" + e.GetEntry().GetKey()
+	}
+	return c.GetContextChanged().GetContext()
+}
+
+// A walk that learns a todo's body changed behind its unchanged name tells
+// it as one EntryChanged: the entry as its week's List answers it, under a
+// new stamp, and no listing. A walk that learns nothing tells nothing.
+func TestAWalkTellsAChangedBodyAsItsEntry(t *testing.T) {
+	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
+	clock := at("2026-08-25T12:00:00Z")
+	p := New(src, Options{Now: func() time.Time { return clock }})
+	w := watching(t, p, nil)
+	walk := func() []*pluginv1.Change {
+		t.Helper()
+		clock = clock.Add(DefaultFullRefresh + time.Second)
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+			t.Fatal(err)
+		}
+		landed(t, p)
+		var got []*pluginv1.Change
+		for {
+			select {
+			case c := <-w.sent:
+				got = append(got, c)
+			case <-time.After(50 * time.Millisecond):
+				return got
+			}
+		}
+	}
+	walk()
+	before := listed(t, p, "week:2026-08-17", "todo:1")
+	src.pending[0].Body = "a new note"
+	got := walk()
+	if len(got) != 1 || got[0].GetEntryChanged() == nil {
+		t.Fatalf("a body change sent %v, want one EntryChanged", got)
+	}
+	now := listed(t, p, "week:2026-08-17", "todo:1")
+	if e := got[0].GetEntryChanged(); e.GetContext() != "week:2026-08-17" || !proto.Equal(e.GetEntry(), now) {
+		t.Errorf("told %v, want the week's listed entry %v", e, now)
+	}
+	if now.GetContentStamp() == before.GetContentStamp() {
+		t.Errorf("the stamp stayed %q across a changed body", now.GetContentStamp())
+	}
+	if got := walk(); len(got) != 0 {
+		t.Errorf("an unchanged walk sent %v", got)
+	}
+}
+
+// listed is key's entry as context's List answers it.
+func listed(t *testing.T, p *Plugin, context, key string) *pluginv1.Entry {
+	t.Helper()
+	resp, err := p.List(t.Context(), &pluginv1.ListRequest{Context: context})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range resp.GetEntries() {
+		if e.GetKey() == key {
+			return e
+		}
+	}
+	t.Fatalf("%s lists no %s", context, key)
+	return nil
 }
 
 // A landed walk that changed memory tells every watcher exactly the listings
@@ -172,17 +242,18 @@ func TestAWalkAnnouncesExactlyTheContextsItMoved(t *testing.T) {
 	if got := changed(t, w, 0); got != nil {
 		t.Errorf("an unchanged walk announced %v", got)
 	}
-	// Todo 1 is done at GitLab: its week and the root's counts move.
+	// Todo 1 is done at GitLab: its week and the root's counts move, and its
+	// body, which says done.
 	src.pending = src.pending[1:]
 	walk()
-	if got := changed(t, w, 2); !reflect.DeepEqual(got, []string{"todos", "week:2026-08-17"}) {
+	if got := changed(t, w, 3); !reflect.DeepEqual(got, []string{"entry week:2026-08-17/todo:1", "todos", "week:2026-08-17"}) {
 		t.Errorf("a derived done announced %v", got)
 	}
 	// The trash gesture announces its flip without waiting for a walk.
 	if _, err := p.Delete(context.Background(), &pluginv1.DeleteRequest{Key: "todo:2"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := changed(t, w, 2); !reflect.DeepEqual(got, []string{"todos", "week:2026-08-24"}) {
+	if got := changed(t, w, 3); !reflect.DeepEqual(got, []string{"entry week:2026-08-24/todo:2", "todos", "week:2026-08-24"}) {
 		t.Errorf("mark-done announced %v", got)
 	}
 }

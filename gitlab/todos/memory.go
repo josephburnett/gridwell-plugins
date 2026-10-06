@@ -1,6 +1,7 @@
 package todos
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"sync"
@@ -55,10 +56,11 @@ type Memory struct {
 	// resumes is where a failed walk stopped, by the window it was walking.
 	// A walk that succeeds leaves none.
 	resumes map[string]*resumePoint
-	// changedWeeks and rootChanged are what the memory changed since the last
-	// TakeChanges; see note.
+	// changedWeeks, rootChanged and changedTodos are what the memory changed
+	// since the last TakeChanges; see noteLocked.
 	changedWeeks map[time.Time]bool
 	rootChanged  bool
+	changedTodos map[int64]bool
 	// marks holds, per todo marked done here, the clock tick of the mark. A
 	// page asked for before that tick may still say pending, and absorb keeps
 	// the mark over it; the first page asked for after it is GitLab's word
@@ -78,14 +80,17 @@ type resumePoint struct {
 
 // NewMemory builds an empty memory.
 func NewMemory() *Memory {
-	return &Memory{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}, changedWeeks: map[time.Time]bool{}, marks: map[int64]uint64{}}
+	return &Memory{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}, changedWeeks: map[time.Time]bool{},
+		changedTodos: map[int64]bool{}, marks: map[int64]uint64{}}
 }
 
 // Changes is what the memory changed since it was last asked: the weeks whose
-// listing moved, newest first, and whether the root's did.
+// listing moved, newest first, whether the root's did, and the todos whose
+// body changed in place, as they are now, by id.
 type Changes struct {
 	Root  bool
 	Weeks []time.Time
+	Todos []Todo
 }
 
 // Contexts names the contexts whose listings moved: the root first, then each
@@ -111,27 +116,38 @@ func (m *Memory) TakeChanges() Changes {
 		c.Weeks = append(c.Weeks, w)
 	}
 	sort.Slice(c.Weeks, func(i, j int) bool { return c.Weeks[i].After(c.Weeks[j]) })
-	m.changedWeeks, m.rootChanged = map[time.Time]bool{}, false
+	for id := range m.changedTodos {
+		c.Todos = append(c.Todos, *m.todos[id])
+	}
+	sort.Slice(c.Todos, func(i, j int) bool { return c.Todos[i].ID < c.Todos[j].ID })
+	m.changedWeeks, m.rootChanged, m.changedTodos = map[time.Time]bool{}, false, map[int64]bool{}
 	return c
 }
 
 // noteLocked records that a todo's record went from was (nil when new) to now.
-// A week's listing shows every field of its todos; the root's shows only the
-// weeks and their open and done counts, so it moves when a todo arrives, flips
-// state, or changes week. The caller holds m.mu.
+// A week's listing shows each todo's label, status and week; the root's shows
+// only the weeks and their open and done counts, so it moves when a todo
+// arrives, flips state, or changes week. A known todo whose Markdown changed
+// changed in place, whatever its listing did. The caller holds m.mu.
 func (m *Memory) noteLocked(was *Todo, now *Todo) {
 	if was != nil && sameRecord(*was, *now) {
 		return
 	}
 	week := WeekStart(now.CreatedAt)
-	m.changedWeeks[week] = true
+	if was == nil || was.Label() != now.Label() || was.StatusDetail() != now.StatusDetail() {
+		m.changedWeeks[week] = true
+	}
 	if was == nil || was.State != now.State {
 		m.rootChanged = true
 	}
 	if was != nil {
 		if old := WeekStart(was.CreatedAt); !old.Equal(week) {
 			m.changedWeeks[old] = true
+			m.changedWeeks[week] = true
 			m.rootChanged = true
+		}
+		if !bytes.Equal(Markdown(was), Markdown(now)) {
+			m.changedTodos[now.ID] = true
 		}
 	}
 }

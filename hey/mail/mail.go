@@ -34,6 +34,20 @@ type Thread struct {
 	FromEmail  string    `json:"fromEmail"`
 	CreatedAt  time.Time `json:"createdAt"`
 	Seen       bool      `json:"seen"`
+	// ActiveAt is HEY's active_at, when the thread last had an entry: a reply
+	// landing moves it, so it names the page (Stamp). Zero when HEY did not
+	// say, or the record is from a cache that predates it.
+	ActiveAt time.Time `json:"activeAt"`
+}
+
+// Stamp is the thread's content stamp, naming the page ServeContent answers:
+// its ActiveAt, HEY's own word for when the thread last changed. Empty when
+// unknown.
+func (t *Thread) Stamp() string {
+	if t.ActiveAt.IsZero() {
+		return ""
+	}
+	return t.ActiveAt.UTC().Format(time.RFC3339Nano)
 }
 
 // Collection is one of the six HEY boxes this plugin projects. Key is the
