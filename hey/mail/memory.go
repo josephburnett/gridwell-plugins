@@ -45,6 +45,8 @@ type Memory struct {
 	// strays are threads that left every box and have not been asked about
 	// since: the candidates to forget, once HEY says it no longer has them.
 	strays map[int64]bool
+	// moved holds the threads whose stamp moved since the last effect.
+	moved map[int64]bool
 }
 
 // NewMemory builds an empty memory.
@@ -57,6 +59,7 @@ func NewMemory() *Memory {
 		journal:  map[string][]Event{},
 		left:     map[string]map[int64]bool{},
 		strays:   map[int64]bool{},
+		moved:    map[int64]bool{},
 	}
 }
 
@@ -95,7 +98,7 @@ func (m *Memory) Absorb(collection string, read []Thread, whole bool) Effect {
 	for i := range read {
 		t := read[i]
 		t.Collection = collection
-		m.threads[t.TopicID] = &t
+		m.putLocked(&t)
 		seen = append(seen, t.TopicID)
 		posts[t.TopicID] = t.PostingID
 	}
@@ -150,8 +153,24 @@ func (m *Memory) effectLocked(collection string, before, beforeAll []Thread) Eff
 			m.strays[id] = true
 		}
 	}
-	return Effect{Changed: !sameListing(before, m.collectionLocked(collection)),
+	eff := Effect{Changed: !sameListing(before, m.collectionLocked(collection)),
 		Everything: !sameListing(beforeAll, all)}
+	for id := range m.moved {
+		eff.Moved = append(eff.Moved, id)
+	}
+	slices.Sort(eff.Moved)
+	clear(m.moved)
+	return eff
+}
+
+// putLocked records t. A thread whose known stamp moved to another known one
+// changed in place, a reply landed on it, and is noted moved; a stamp first
+// learned, or a read that does not say, is no change to the page anyone saw.
+func (m *Memory) putLocked(t *Thread) {
+	if was, ok := m.threads[t.TopicID]; ok && !was.ActiveAt.IsZero() && !t.ActiveAt.IsZero() && !was.ActiveAt.Equal(t.ActiveAt) {
+		m.moved[t.TopicID] = true
+	}
+	m.threads[t.TopicID] = t
 }
 
 // TakeStrays hands out at most n threads that left every box and have not
@@ -202,7 +221,8 @@ func (m *Memory) applyLocked(collection string, ev Event) (rewalk bool) {
 		}
 		t := ev.Thread
 		t.Collection = collection
-		m.threads[t.TopicID] = &t
+		m.putLocked(&t)
+
 		ids, listed := m.members[collection]
 		if !listed {
 			return false

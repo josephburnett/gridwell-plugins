@@ -7,9 +7,9 @@ import (
 )
 
 // CollectionEntries derives everything's grid: every thread it holds as a
-// url tile serving its own page, at calendar.Cell of its creation time, so a
-// thread's hint is the same whatever else arrives. Seen is a box's fact, so
-// these tiles carry no status.
+// url tile serving its own page, named by its Stamp, at calendar.Cell of its
+// creation time, so a thread's hint is the same whatever else arrives. Seen
+// is a box's fact, so these tiles carry no status.
 //
 // A thread is a page, so it is a url entry that serves one: the node derives
 // the address at its /content/ door, so there is none to declare here, and a
@@ -25,6 +25,7 @@ func CollectionEntries(threads []Thread) []*pluginv1.Entry {
 			Label:         t.Label(),
 			ServesPage:    true,
 			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: ThreadTileW, H: 1},
+			ContentStamp:  t.Stamp(),
 		})
 	}
 	return out

@@ -213,6 +213,7 @@ type posting struct {
 	Summary   string    `json:"summary"`
 	Seen      bool      `json:"seen"`
 	CreatedAt time.Time `json:"created_at"`
+	ActiveAt  time.Time `json:"active_at"`
 	Creator   struct {
 		Name         string `json:"name"`
 		EmailAddress string `json:"email_address"`
@@ -265,6 +266,7 @@ func (p *posting) thread(topicID int64) mail.Thread {
 		FromEmail: p.Creator.EmailAddress,
 		CreatedAt: p.CreatedAt,
 		Seen:      p.Seen,
+		ActiveAt:  p.ActiveAt,
 	}
 }
 

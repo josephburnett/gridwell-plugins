@@ -193,9 +193,12 @@ verdict the feed ended on (not signed in), is the listing's `unreachable`
 until a walk lands or the feed is live again. Each edge of a failure tells the
 node, so the reason reaches an open grid and leaves it without a gesture.
 
-`Watch` sends only `ContextChanged`, one per collection whose listing changed,
-whether the feed or a walk changed it. A burst is one change per collection:
-a stream that falls behind is owed each context once, never once per line,
+`Watch` sends a `ContextChanged` per collection whose listing changed,
+whether the feed or a walk changed it, and an `EntryChanged` for a thread
+whose page changed in place: a reply landed, which HEY says by moving the
+thread's `active_at`, the entry's `content_stamp`. The entry is the thread's
+one tile, in everything. A burst is one change per collection and one per
+thread: a stream that falls behind is owed each once, never once per line,
 and the feed never waits on it.
 
 A box's listing is authoritative when it is definitive: its last walk read

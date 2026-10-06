@@ -37,4 +37,7 @@ type Effect struct {
 	// Rewalk says the memory could not apply the event and only a read of the
 	// box can: a deleted posting it cannot map to a thread it shows.
 	Rewalk bool
+	// Moved names the threads whose page changed in place, by topic id: a
+	// known stamp moved to another (Memory.putLocked).
+	Moved []int64
 }

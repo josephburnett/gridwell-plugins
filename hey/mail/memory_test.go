@@ -38,6 +38,34 @@ func TestWholeWalkReplacesMembership(t *testing.T) {
 	}
 }
 
+// A thread whose stamp moved, a reply landed on it, is the effect's to name,
+// by the feed or by a walk; a line or a walk that moves only its seen state,
+// or a stamp that was never known, names nothing.
+func TestARepliedThreadIsMovedInPlace(t *testing.T) {
+	m := NewMemory()
+	one := thread(1, "a", "2026-01-02")
+	m.Absorb(ImboxContext, []Thread{one}, true)
+	one.ActiveAt = at("2026-01-02T10:00:00Z")
+	if eff := m.Apply(ImboxContext, Event{Change: ChangeUpdated, Thread: one}); len(eff.Moved) != 0 {
+		t.Errorf("a stamp first known moved %v", eff.Moved)
+	}
+	one.Seen = true
+	if eff := m.Apply(ImboxContext, Event{Change: ChangeUpdated, Thread: one}); len(eff.Moved) != 0 || !eff.Changed {
+		t.Errorf("a seen line: %+v, want the listing changed and nothing moved", eff)
+	}
+	one.ActiveAt = at("2026-01-03T10:00:00Z")
+	if eff := m.Apply(ImboxContext, Event{Change: ChangeUpdated, Thread: one}); !reflect.DeepEqual(eff.Moved, []int64{1}) {
+		t.Errorf("a reply moved %v, want [1]", eff.Moved)
+	}
+	one.ActiveAt = at("2026-01-04T10:00:00Z")
+	if eff := m.Absorb(ImboxContext, []Thread{one}, true); !reflect.DeepEqual(eff.Moved, []int64{1}) {
+		t.Errorf("a walk that read a reply moved %v, want [1]", eff.Moved)
+	}
+	if eff := m.Absorb(ImboxContext, []Thread{one}, true); len(eff.Moved) != 0 {
+		t.Errorf("an unchanged walk moved %v", eff.Moved)
+	}
+}
+
 // A partial read proves nothing about what it did not reach: merging is the
 // only safe fold, or a capped listing would empty the user's grid.
 func TestPartialWalkOnlyAdds(t *testing.T) {

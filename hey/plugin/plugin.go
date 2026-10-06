@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -382,11 +383,15 @@ func (p *Plugin) landed(key string, err error) {
 }
 
 func merge(a, b mail.Effect) mail.Effect {
-	return mail.Effect{Changed: a.Changed || b.Changed, Everything: a.Everything || b.Everything, Rewalk: a.Rewalk || b.Rewalk}
+	moved := append(slices.Clone(a.Moved), b.Moved...)
+	slices.Sort(moved)
+	return mail.Effect{Changed: a.Changed || b.Changed, Everything: a.Everything || b.Everything, Rewalk: a.Rewalk || b.Rewalk,
+		Moved: slices.Compact(moved)}
 }
 
 // publish tells every Watch stream what one change moved: the box's listing,
-// everything's, or both.
+// everything's, or both, and each thread whose page changed in place as its
+// one entry, everything's, which every box's link reads through.
 func (p *Plugin) publish(box string, eff mail.Effect) {
 	var keys []string
 	if eff.Changed {
@@ -396,6 +401,13 @@ func (p *Plugin) publish(box string, eff mail.Effect) {
 		keys = append(keys, mail.EverythingContext)
 	}
 	p.changes.Publish(keys...)
+	for _, id := range eff.Moved {
+		t, ok := p.mem.Get(id)
+		if !ok || !p.mem.Member(id) {
+			continue // everything lists only what some box holds
+		}
+		p.changes.PublishEntry(mail.EverythingContext, mail.CollectionEntries([]mail.Thread{t})[0])
+	}
 }
 
 // read makes one collection answerable (memo.Flights.Read): a read memory
