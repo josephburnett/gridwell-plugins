@@ -2,8 +2,8 @@ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek
 github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
-github.com/josephburnett/gridwell/api v0.4.0 h1:bzk+/0IpplhpBJbH+mZJ7ys53jMW5W8iDbLCQaERM34=
-github.com/josephburnett/gridwell/api v0.4.0/go.mod h1:YOip8PZe0bfa17occHRbMLZAeDRFnuSS4nvzCB8z+oc=
+github.com/josephburnett/gridwell/api v0.6.0 h1:uDRK5SGP2FEhVrSi9z/LDA9n3uSQIEdytR0Ga0glZrU=
+github.com/josephburnett/gridwell/api v0.6.0/go.mod h1:YOip8PZe0bfa17occHRbMLZAeDRFnuSS4nvzCB8z+oc=
 golang.org/x/net v0.59.0 h1:5zfYln+w5XCxwrnMMJPufRgNoXEaGxl0wo5GqPXyues=
 golang.org/x/net v0.59.0/go.mod h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=
 golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
