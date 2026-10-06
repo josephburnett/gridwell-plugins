@@ -48,9 +48,10 @@ version of the file it was typed over (its modified time and size); if the
 file changed on disk since, the save is refused as a conflict, the tile
 shows the file as it is now, and nothing on disk is overwritten.
 
-A save is refused with its reason, and the file left alone, when the tile
-shows a summary rather than the bytes, the file is past 4 MiB, the file or
-its directory does not let you write, or the key is not in the tree.
+Any other text tile is read-only, and the bar says why: it shows a summary
+rather than the bytes, the file is past 4 MiB, or the file or its directory
+does not let you write. A save that reaches such a file anyway, or a key not
+in the tree, is refused with its reason and the file left alone.
 
 Listings are authoritative: a directory read is the whole directory, so a
 file that is not listed is gone, and its tile goes with it. A directory that
