@@ -5,6 +5,7 @@ package fsfile
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/gif"
 	"image/jpeg"
@@ -14,8 +15,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -147,6 +150,14 @@ func PreviewStamp(dirPath, name string) int64 {
 	return fi.ModTime().UnixNano()
 }
 
+// ContentStamp names a file's bytes by its mtime to the nanosecond and its
+// size, so a write that lands within one mtime tick still moves it unless it
+// keeps the size. It travels as Entry.content_stamp and with the bytes
+// ReadContent answers, and a write must claim it.
+func ContentStamp(mtime time.Time, size int64) string {
+	return strconv.FormatInt(mtime.UnixNano(), 10) + "-" + strconv.FormatInt(size, 10)
+}
+
 // renderableBodyCap bounds how much of a file the descent body carries: a
 // document view, not a file transfer. A file past the cap shows its
 // beginning.
@@ -176,6 +187,26 @@ func Body(dirPath, name string) (data []byte, mediaType string) {
 	}
 	return []byte(fssource.MetadataMarkdown(entry)), mediaType
 }
+
+// Unwritable says why a file's body cannot be saved back to it, nil when it
+// can: only a body that is the file's own bytes, whole, writes back. A
+// summary is not the file, a file past the body cap shows only its head, and
+// a page has no body. It is Body's rule read the other way.
+func Unwritable(name string, size int64) error {
+	switch {
+	case ServesPage(name):
+		return errors.New("is a page, which has no body to edit")
+	case !Renderable(name) && !IsPlainText(name):
+		return errors.New("is shown as a summary of the file, not its bytes")
+	case size > renderableBodyCap:
+		return fmt.Errorf("is larger than the %d MiB a body shows, so its bytes are not all here to save", renderableBodyCap>>20)
+	}
+	return nil
+}
+
+// MaxWrite is the most a write may carry, the body cap: a body longer than
+// it would read back cut short.
+const MaxWrite = renderableBodyCap
 
 func readHead(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
