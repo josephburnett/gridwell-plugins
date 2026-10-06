@@ -35,10 +35,9 @@ func (p *Plugin) changedSince(before map[string][]mailbox.View) []string {
 
 // Watch streams ContextChanged for each context a refresh changed, until
 // the node hangs up, and polls Gmail's history while the stream's scope
-// holds a context this plugin lists (memo.Changes, work, poll). It never
-// sends EntryRemoved: whether a message has left is the listing's and
-// Probe's to say, so "the inbox changed, list it again" is the whole
-// announcement.
+// holds a context this plugin lists (memo.Changes, work, poll). Whether a
+// message has left is the listing's and Probe's to say, so "the inbox
+// changed, list it again" is the whole announcement.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	return p.changes.Serve(req.GetContexts(), stream)
 }
