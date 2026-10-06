@@ -5,6 +5,7 @@ package fsfile
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/gif"
 	"image/jpeg"
@@ -186,6 +187,26 @@ func Body(dirPath, name string) (data []byte, mediaType string) {
 	}
 	return []byte(fssource.MetadataMarkdown(entry)), mediaType
 }
+
+// Unwritable says why a file's body cannot be saved back to it, nil when it
+// can: only a body that is the file's own bytes, whole, writes back. A
+// summary is not the file, a file past the body cap shows only its head, and
+// a page has no body. It is Body's rule read the other way.
+func Unwritable(name string, size int64) error {
+	switch {
+	case ServesPage(name):
+		return errors.New("is a page, which has no body to edit")
+	case !Renderable(name) && !IsPlainText(name):
+		return errors.New("is shown as a summary of the file, not its bytes")
+	case size > renderableBodyCap:
+		return fmt.Errorf("is larger than the %d MiB a body shows, so its bytes are not all here to save", renderableBodyCap>>20)
+	}
+	return nil
+}
+
+// MaxWrite is the most a write may carry, the body cap: a body longer than
+// it would read back cut short.
+const MaxWrite = renderableBodyCap
 
 func readHead(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)

@@ -38,6 +38,20 @@ directory it resolves to.
 - A text body is at most 4 MiB. A longer file shows its first 4 MiB, in the
   same presentation.
 
+## Editing
+
+A text tile whose body is the file's own bytes, a plain-text or markdown/org
+file of at most 4 MiB, is editable, and a save writes the whole file: a
+temporary file beside it, renamed over it, so the file is the old bytes or
+the new and never half of each, and keeps its mode. A save names the
+version of the file it was typed over (its modified time and size); if the
+file changed on disk since, the save is refused as a conflict, the tile
+shows the file as it is now, and nothing on disk is overwritten.
+
+A save is refused with its reason, and the file left alone, when the tile
+shows a summary rather than the bytes, the file is past 4 MiB, the file or
+its directory does not let you write, or the key is not in the tree.
+
 Listings are authoritative: a directory read is the whole directory, so a
 file that is not listed is gone, and its tile goes with it. A directory that
 is gone, or is now a file, lists empty. A directory that cannot be read

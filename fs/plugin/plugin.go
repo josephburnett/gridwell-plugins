@@ -179,6 +179,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	// declares no label, so the swatch reads as the configured instance.
 	resp.MenuEntries = []*pluginv1.MenuEntry{{Id: ".", Context: "."}}
 	resp.Watch = true
+	resp.Writable = true
 	if label := filepath.Base(p.root); label != "/" && label != "." {
 		resp.DisplayName = label
 	}
@@ -352,6 +353,124 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 		}
 		chunk = &pluginv1.ContentChunk{}
 	}
+}
+
+// WriteContent replaces a text file's bytes, the whole file, by a temp file
+// in its directory renamed over it, so a reader sees the old bytes or the
+// new and a broken stream writes nothing. The write claims the stamp its
+// bytes were read under, and a file whose stamp has moved is refused as a
+// conflict, so bytes the writer has not seen are never overwritten. Every
+// refusal is a verdict with its reason; an I/O failure is Unavailable.
+func (p *Plugin) WriteContent(stream pluginv1.Plugin_WriteContentServer) error {
+	first, err := stream.Recv()
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "fs plugin: write: empty stream")
+	}
+	data := append([]byte(nil), first.Data...)
+	for {
+		msg, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if data = append(data, msg.Data...); len(data) > fsfile.MaxWrite {
+			return status.Errorf(codes.InvalidArgument, "fs plugin: %q: a body is at most %d MiB", first.Key, fsfile.MaxWrite>>20)
+		}
+	}
+	if len(data) > fsfile.MaxWrite {
+		return status.Errorf(codes.InvalidArgument, "fs plugin: %q: a body is at most %d MiB", first.Key, fsfile.MaxWrite>>20)
+	}
+	stamp, err := p.write(first.Key, first.ContentStamp, data)
+	if err != nil {
+		return err
+	}
+	return stream.SendAndClose(&pluginv1.WriteContentResponse{ContentStamp: stamp})
+}
+
+// write puts data in place of key's file if claimed is its stamp, and
+// answers the stamp of the bytes written.
+func (p *Plugin) write(key, claimed string, data []byte) (string, error) {
+	real, err := p.content(key)
+	switch {
+	case errors.Is(err, errOutside) || errors.Is(err, fsfile.ErrOutside):
+		return "", status.Errorf(codes.PermissionDenied, "fs plugin: %q %v, and nothing outside it is written", key, err)
+	case gone(err):
+		return "", status.Errorf(codes.NotFound, "fs plugin: %q is gone", key)
+	case err != nil:
+		return "", status.Errorf(codes.Unavailable, "fs plugin: write %s: %v", key, pathErr(err))
+	}
+	fi, err := os.Stat(real)
+	switch {
+	case gone(err):
+		return "", status.Errorf(codes.NotFound, "fs plugin: %q is gone", key)
+	case err != nil:
+		return "", status.Errorf(codes.Unavailable, "fs plugin: write %s: %v", key, pathErr(err))
+	case fi.IsDir():
+		return "", status.Errorf(codes.InvalidArgument, "fs plugin: %q is a directory", key)
+	}
+	if err := fsfile.Unwritable(filepath.Base(real), fi.Size()); err != nil {
+		return "", status.Errorf(codes.InvalidArgument, "fs plugin: %q %v", key, err)
+	}
+	if now := fsfile.ContentStamp(fi.ModTime(), fi.Size()); claimed != now {
+		return "", status.Errorf(codes.FailedPrecondition, "fs plugin: %q changed on disk since it was read", key)
+	}
+	// The rename would replace a file its mode refuses writes to, so the
+	// file itself is asked first.
+	f, err := os.OpenFile(real, os.O_WRONLY, 0)
+	if err != nil {
+		return "", writeRefusal(key, err)
+	}
+	_ = f.Close()
+	return replace(real, fi.Mode().Perm(), data, key)
+}
+
+// replace writes data beside real and renames it over real, answering the
+// stamp of what was written.
+func replace(real string, perm os.FileMode, data []byte, key string) (string, error) {
+	tmp, err := os.CreateTemp(filepath.Dir(real), "."+filepath.Base(real)+".gridwell-*")
+	if err != nil {
+		return "", writeRefusal(key, err)
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp.Name(), perm)
+	}
+	var fi os.FileInfo
+	if err == nil {
+		fi, err = os.Stat(tmp.Name())
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), real)
+	}
+	if err != nil {
+		return "", writeRefusal(key, err)
+	}
+	keep = true
+	return fsfile.ContentStamp(fi.ModTime(), fi.Size()), nil
+}
+
+// writeRefusal answers a failed write: a permission the file or its
+// directory refuses is a verdict with that reason, anything else a source
+// that cannot answer right now.
+func writeRefusal(key string, err error) error {
+	if errors.Is(err, iofs.ErrPermission) || errors.Is(err, syscall.EROFS) {
+		return status.Errorf(codes.PermissionDenied, "fs plugin: %q cannot be written: %v", key, pathErr(err))
+	}
+	return status.Errorf(codes.Unavailable, "fs plugin: write %s: %v", key, pathErr(err))
 }
 
 // serveStream adapts the plugin chunk stream to fsfile's sender; the two chunk
