@@ -55,5 +55,7 @@ is shown. While some client shows a pid's grid (the node's
 (`PollEvery`), and when the set or a child's status emoji differs from the
 last read it sends one `ContextChanged` for the pid. A poll stops 10 s after
 the last client stops showing its pid (`memo.DefaultLinger`). Nothing shown,
-nothing read. `@info`'s body (memory, state) is not watched; it is read when
-the tile is.
+nothing read. The same poll reads the pid's `@info` body, and when it differs
+from the last read it sends one `EntryChanged` with the `@info` entry, so an
+open `@info` shows the process as it is now. Its `content_stamp` is a hash
+of the body: the process table keeps no version and the plugin no memory.

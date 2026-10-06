@@ -180,6 +180,34 @@ func TestReadingInfoOfAGoneOrUnreadableProcessIsAVerdict(t *testing.T) {
 	}
 }
 
+// @info's listing and its read name its bytes by one stamp, which moves when
+// they do and only then.
+func TestInfoNamesItsBytesByOneStamp(t *testing.T) {
+	root := stubProc(t, map[int64]int64{1: 0, 10: 1})
+	p := served(t, root, 1)
+	stamps := func() (listed, readAs string) {
+		t.Helper()
+		got, err := read(p, "info:1")
+		if err != nil || len(got) == 0 {
+			t.Fatalf("read info:1 → %v, %v", got, err)
+		}
+		return listedInfo(t, p, "1").GetContentStamp(), got[0].GetContentStamp()
+	}
+	listed, readAs := stamps()
+	if listed == "" || listed != readAs {
+		t.Fatalf("List stamps %q and ReadContent %q; want one stamp", listed, readAs)
+	}
+	if again, _ := stamps(); again != listed {
+		t.Errorf("unchanged bytes moved the stamp %q → %q", listed, again)
+	}
+	if err := os.WriteFile(filepath.Join(root, "1", "status"), []byte("Name:\tp1\nState:\tR (running)\nPPid:\t0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if moved, readNow := stamps(); moved == listed || moved != readNow {
+		t.Errorf("changed bytes: List %q, ReadContent %q, before %q; want one new stamp", moved, readNow, listed)
+	}
+}
+
 // Probe answers for the context it names. A process is under the context of
 // its parent now, so a child reparented after its parent died (30, once
 // under 10) is gone from the old grid and present in its new parent's; an

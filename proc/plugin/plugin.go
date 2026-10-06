@@ -8,6 +8,8 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -195,10 +197,8 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 	}
 	resp := &pluginv1.ListResponse{Authoritative: false, SourceLabel: req.Context}
 	if up {
-		resp.Entries = append(resp.Entries, &pluginv1.Entry{
-			Key:  infoKeyPrefix + req.Context,
-			Kind: "text", Label: infoLabel, TextPresentation: "both",
-		})
+		_, stamp, _ := p.info(pid)
+		resp.Entries = append(resp.Entries, infoEntry(req.Context, stamp))
 	}
 	children, err := p.scan(ctx, pid)
 	if ctx.Err() != nil {
@@ -215,6 +215,28 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		})
 	}
 	return resp, nil
+}
+
+// infoEntry is context's @info entry, its body named by stamp.
+func infoEntry(context, stamp string) *pluginv1.Entry {
+	return &pluginv1.Entry{
+		Key:  infoKeyPrefix + context,
+		Kind: "text", Label: infoLabel, TextPresentation: "both",
+		ContentStamp: stamp,
+	}
+}
+
+// info is pid's @info body and its content stamp: a hash of the body, since
+// the process table keeps no version and this plugin no memory, so the stamp
+// moves exactly when the bytes do.
+func (p *Plugin) info(pid int64) (body []byte, stamp string, err error) {
+	info, err := procsource.Get(p.procRoot, pid)
+	if err != nil {
+		return nil, "", err
+	}
+	body = []byte(procsource.MetadataMarkdown(info))
+	sum := sha256.Sum256(body)
+	return body, hex.EncodeToString(sum[:8]), nil
 }
 
 // stateMark is a process's status_detail: one emoji for the states worth
@@ -239,17 +261,14 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 		// A process well carries no document body.
 		return stream.Send(&pluginv1.ContentChunk{})
 	}
-	info, err := procsource.Get(p.procRoot, pid)
+	body, stamp, err := p.info(pid)
 	switch {
 	case procsource.IsGone(err):
 		return status.Errorf(codes.NotFound, "proc plugin: pid %d has exited", pid)
 	case err != nil:
 		return status.Errorf(codes.Unavailable, "proc plugin: pid %d cannot be read: %v", pid, err)
 	}
-	return stream.Send(&pluginv1.ContentChunk{
-		Data:      []byte(procsource.MetadataMarkdown(info)),
-		MediaType: "text/markdown",
-	})
+	return stream.Send(&pluginv1.ContentChunk{Data: body, MediaType: "text/markdown", ContentStamp: stamp})
 }
 
 // Probe answers for the context named, or for the plugin as a whole when none

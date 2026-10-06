@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/josephburnett/gridwell-plugins/proc/procsource"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
@@ -126,10 +127,11 @@ func (w *watched) tick(t *testing.T) {
 
 type watchStream struct {
 	grpc.ServerStream
-	ctx    context.Context
-	mu     sync.Mutex
-	header bool
-	sent   []string
+	ctx     context.Context
+	mu      sync.Mutex
+	header  bool
+	sent    []string
+	entries []*pluginv1.EntryChanged
 }
 
 func (s *watchStream) Context() context.Context { return s.ctx }
@@ -144,8 +146,18 @@ func (s *watchStream) SendHeader(metadata.MD) error {
 func (s *watchStream) Send(c *pluginv1.Change) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if e := c.GetEntryChanged(); e != nil {
+		s.entries = append(s.entries, e)
+		return nil
+	}
 	s.sent = append(s.sent, c.GetContextChanged().GetContext())
 	return nil
+}
+
+func (s *watchStream) told() []*pluginv1.EntryChanged {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*pluginv1.EntryChanged(nil), s.entries...)
 }
 
 func (s *watchStream) got() []string {
@@ -210,8 +222,8 @@ func TestNoStreamNoReads(t *testing.T) {
 
 // A poll announces a shown pid once however many children came and went
 // since the last, and announces nothing for a pid nobody shows or for a
-// change that is not in the listing (@info's body: memory, state letters
-// with no mark). A child that turns zombie changes its mark, which is.
+// change that is not in the listing (a state letter with no mark). A child
+// that turns zombie changes its mark, which is.
 func TestAPollAnnouncesOnlyAShownChildSetThatDiffers(t *testing.T) {
 	w := newWatched(t, map[int64]int64{1: 0, 10: 1, 20: 10})
 	s := open(t, w.Plugin, "1")
@@ -228,10 +240,6 @@ func TestAPollAnnouncesOnlyAShownChildSetThatDiffers(t *testing.T) {
 
 	w.spawn(t, 21, 10)
 	setState(t, w.root, 10, 1, 'R')
-	status := "Name:\tp1\nState:\tR (running)\nPPid:\t0\nVmRSS:\t999 kB\n"
-	if err := os.WriteFile(filepath.Join(w.root, "1", "status"), []byte(status), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	w.tick(t)
 	w.tick(t)
 	if got := s.got(); len(got) != 1 || got[0] != "1" {
@@ -241,4 +249,53 @@ func TestAPollAnnouncesOnlyAShownChildSetThatDiffers(t *testing.T) {
 	setState(t, w.root, 11, 1, 'Z')
 	w.tick(t)
 	eventually(t, "the zombie's change", func() bool { return len(s.got()) == 2 })
+}
+
+// @info's body changes in place behind its unchanged key, so a poll that
+// reads it changed tells it as one EntryChanged: the entry as List answers
+// it now, under a new stamp. A poll that reads it unchanged tells nothing,
+// and no listing is announced for it.
+func TestAPollTellsAChangedInfoBodyOnce(t *testing.T) {
+	w := newWatched(t, map[int64]int64{1: 0, 10: 1})
+	before := listedInfo(t, w.Plugin, "1")
+	s := open(t, w.Plugin, "1")
+	w.tick(t)
+	status := "Name:\tp1\nState:\tR (running)\nPPid:\t0\nVmRSS:\t999 kB\n"
+	if err := os.WriteFile(filepath.Join(w.root, "1", "status"), []byte(status), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(t)
+	eventually(t, "the entry change", func() bool { return len(s.told()) > 0 })
+	w.tick(t)
+	w.tick(t)
+	told := s.told()
+	if len(told) != 1 {
+		t.Fatalf("told %d entry changes, want 1", len(told))
+	}
+	now := listedInfo(t, w.Plugin, "1")
+	if told[0].GetContext() != "1" || !proto.Equal(told[0].GetEntry(), now) {
+		t.Errorf("told %v, want context 1 and List's entry %v", told[0], now)
+	}
+	if now.GetContentStamp() == before.GetContentStamp() {
+		t.Errorf("the stamp stayed %q across a changed body", now.GetContentStamp())
+	}
+	if got := s.got(); len(got) != 0 {
+		t.Errorf("announced listings %v for a body change", got)
+	}
+}
+
+// listedInfo is context's @info entry as List answers it.
+func listedInfo(t *testing.T, p *Plugin, context string) *pluginv1.Entry {
+	t.Helper()
+	resp, err := p.List(t.Context(), &pluginv1.ListRequest{Context: context})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range resp.GetEntries() {
+		if e.GetKey() == infoKeyPrefix+context {
+			return e
+		}
+	}
+	t.Fatalf("no @info in %v", resp.GetEntries())
+	return nil
 }
