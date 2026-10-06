@@ -132,7 +132,8 @@ func IsPlainText(name string) bool {
 }
 
 // PreviewStamp returns the cheap preview generation for a file: an image's
-// mtime, and 0 for everything else. It travels as Entry.preview_stamp, and the
+// mtime to the nanosecond, so two saves within a second are two pictures, and
+// 0 for everything else. It travels as Entry.preview_stamp, and the
 // node keys the tile's face by it until a screenshot exists (see
 // pluginhost.faceKey).
 func PreviewStamp(dirPath, name string) int64 {
@@ -143,7 +144,7 @@ func PreviewStamp(dirPath, name string) int64 {
 	if err != nil {
 		return 0
 	}
-	return fi.ModTime().Unix()
+	return fi.ModTime().UnixNano()
 }
 
 // renderableBodyCap bounds how much of a file the descent body carries: a
