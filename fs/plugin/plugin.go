@@ -279,6 +279,7 @@ func entryOf(context, dir, root string, e fssource.Entry) *pluginv1.Entry {
 		fileFacts(out, dir, e.Name)
 		if out.Kind == "text" {
 			out.ContentStamp = fsfile.ContentStamp(e.ModTime, e.Size)
+			out.ReadOnly = fsfile.ReadOnly(filepath.Join(dir, e.Name), e.Size)
 		}
 	}
 	return out
@@ -416,13 +417,10 @@ func (p *Plugin) write(key, claimed string, data []byte) (string, error) {
 	if now := fsfile.ContentStamp(fi.ModTime(), fi.Size()); claimed != now {
 		return "", status.Errorf(codes.FailedPrecondition, "fs plugin: %q changed on disk since it was read", key)
 	}
-	// The rename would replace a file its mode refuses writes to, so the
-	// file itself is asked first.
-	f, err := os.OpenFile(real, os.O_WRONLY, 0)
-	if err != nil {
+	// The rename would replace a file its mode refuses writes to.
+	if err := fsfile.Denied(real); err != nil {
 		return "", writeRefusal(key, err)
 	}
-	_ = f.Close()
 	return replace(real, fi.Mode().Perm(), data, key)
 }
 

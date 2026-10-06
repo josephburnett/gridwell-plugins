@@ -204,6 +204,33 @@ func Unwritable(name string, size int64) error {
 	return nil
 }
 
+// Denied says why this process may not replace the file at path, nil when it
+// may. A save renames a new file in beside it, so the directory's mode binds
+// as well as the file's.
+func Denied(path string) error {
+	if err := writeAccess(path); err != nil {
+		return err
+	}
+	if err := writeAccess(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("its directory takes no new files: %w", err)
+	}
+	return nil
+}
+
+// ReadOnly is the sentence Entry.read_only carries for the text file at path
+// of size, "" when a write would take its body: Unwritable's rule, then
+// Denied's.
+func ReadOnly(path string, size int64) string {
+	name := filepath.Base(path)
+	if err := Unwritable(name, size); err != nil {
+		return name + " " + err.Error()
+	}
+	if err := Denied(path); err != nil {
+		return name + " cannot be written: " + err.Error()
+	}
+	return ""
+}
+
 // MaxWrite is the most a write may carry, the body cap: a body longer than
 // it would read back cut short.
 const MaxWrite = renderableBodyCap
