@@ -816,6 +816,45 @@ func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
 	}
 }
 
+// A todo whose body changed while its name, state and week stayed is that
+// todo's change, not its week's: the listing did not move, the bytes did.
+// Its body's stamp moves with them, and a walk that changes nothing names no
+// todo.
+func TestABodyChangedInPlaceIsItsTodoNotItsWeek(t *testing.T) {
+	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(2, "2026-08-18T10:00:00Z", StatePending)}}
+	m := NewMemory()
+	sync := func() Changes {
+		t.Helper()
+		if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+		return m.TakeChanges()
+	}
+	if got := sync(); len(got.Todos) != 0 {
+		t.Errorf("a first walk named %d todos changed in place; new ones have no body anyone holds", len(got.Todos))
+	}
+	before, _ := m.Get(2)
+	src.pending[1].Body = "a new note"
+	got := sync()
+	if got.Contexts() != nil {
+		t.Errorf("a body change moved listings %v", got.Contexts())
+	}
+	if len(got.Todos) != 1 || got.Todos[0].ID != 2 || got.Todos[0].Body != "a new note" {
+		t.Fatalf("a body change named %v, want todo 2 as it is now", got.Todos)
+	}
+	if Stamp(Markdown(&before)) == Stamp(Markdown(&got.Todos[0])) {
+		t.Error("the body moved and its stamp did not")
+	}
+	if got := sync(); got.Contexts() != nil || len(got.Todos) != 0 {
+		t.Errorf("an unchanged walk changed %v and %d todos", got.Contexts(), len(got.Todos))
+	}
+	// Done shows in the body and in the listing: both move.
+	m.MarkDone(1)
+	if got := m.TakeChanges(); len(got.Todos) != 1 || got.Todos[0].ID != 1 || got.Contexts() == nil {
+		t.Errorf("mark-done changed %v and %v; want todo 1 and its listings", got.Contexts(), got.Todos)
+	}
+}
+
 // A glance pages newest-first until a page carries a todo memory knows:
 // above it everything is new. It never judges absence.
 func TestAGlancePagesOnlyToTheFirstKnownTodo(t *testing.T) {

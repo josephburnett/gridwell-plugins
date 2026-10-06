@@ -334,9 +334,11 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 		if !p.mem.Walked() {
 			return status.Error(codes.Unavailable, "gitlab plugin: the first walk has not completed")
 		}
-		return stream.Send(&pluginv1.ContentChunk{Data: todos.GoneMarkdown(req.Key), MediaType: "text/markdown"})
+		body := todos.GoneMarkdown(req.Key)
+		return stream.Send(&pluginv1.ContentChunk{Data: body, MediaType: "text/markdown", ContentStamp: todos.Stamp(body)})
 	}
-	return stream.Send(&pluginv1.ContentChunk{Data: todos.Markdown(&t), MediaType: "text/markdown"})
+	body := todos.Markdown(&t)
+	return stream.Send(&pluginv1.ContentChunk{Data: body, MediaType: "text/markdown", ContentStamp: todos.Stamp(body)})
 }
 
 // Delete is what the trash gesture means here: mark the todo done at GitLab.

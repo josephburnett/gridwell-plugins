@@ -1,6 +1,8 @@
 package todos
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -80,6 +82,14 @@ func Markdown(t *Todo) []byte {
 		fmt.Fprintf(&b, "[Open %s in GitLab](%s)\n", label, t.TargetURL)
 	}
 	return []byte(b.String())
+}
+
+// Stamp is a todo body's content stamp: a hash of the bytes Markdown renders.
+// GitLab's updated_at does not move when the plugin derives a todo done, and
+// the body says done, so the bytes are the stamp's one owner.
+func Stamp(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:8])
 }
 
 // GoneMarkdown is the content for a key the memory does not hold. The node
