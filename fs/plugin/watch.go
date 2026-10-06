@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,27 +20,21 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/josephburnett/gridwell-plugins/fs/fssource"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// DebounceWindow is how long a directory's changes gather before one
-// ContextChanged names it: an editor's save or a build writes many files
-// within milliseconds, and every announcement costs each client showing the
-// directory a listing.
+// DebounceWindow is how long a directory's changes gather before they are
+// told, once each: an editor's save or a build writes many files within
+// milliseconds, and every announcement costs the node a listing.
 const DebounceWindow = 200 * time.Millisecond
 
-// SubscriberBuffer is how many announcements one Watch stream may fall behind.
-// Past it the stream is told its whole scope changed, which is always true
-// enough to list again.
-const SubscriberBuffer = 64
-
-// Watch announces a ContextChanged for each shown directory whose listing
-// may have changed. It never sends EntryRemoved: the node treats that as
-// ContextChanged for the context and retires the key by the listing's sweep,
-// so naming the key would add nothing. Empty contexts is a node from before
-// scopes, and no directory is cheap to watch, so it watches none. A context
-// not in the tree, such as a dead link's target, never changes and is not
-// watched.
+// Watch tells a shown directory's changes: a ContextChanged when a name in it
+// may have come, gone or moved, and an EntryChanged, the entry as List would
+// answer it now, for each file in it written or replaced in place, whose
+// bytes no listing carries. Empty contexts is a node from before scopes, and
+// no directory is cheap to watch, so it watches none. A context not in the
+// tree, such as a dead link's target, never changes and is not watched.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	scope := map[string]string{}
 	for _, key := range req.GetContexts() {
@@ -62,29 +57,50 @@ func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchS
 	if err := stream.SendHeader(nil); err != nil {
 		return err
 	}
-	send := func(key string) error {
-		return stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{
-			ContextChanged: &pluginv1.ContextChanged{Context: key},
-		}})
-	}
 	for {
 		select {
 		case <-stream.Context().Done():
 			return nil
-		case key := <-s.ch:
-			if err := send(key); err != nil {
+		case <-s.ready:
+			if err := p.tell(stream, s); err != nil {
 				return err
-			}
-		case <-s.lost:
-			for _, key := range s.keys() {
-				if err := send(key); err != nil {
-					return err
-				}
 			}
 		case err := <-s.failed:
 			return err
 		}
 	}
+}
+
+// tell sends what s is owed, every listing before any entry. A file that is
+// gone or a directory by now has no entry to send; its listing says so.
+func (p *Plugin) tell(stream pluginv1.Plugin_WatchServer, s *watchSub) error {
+	contexts, files := p.watch.take(s)
+	for _, key := range contexts {
+		if err := stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{
+			ContextChanged: &pluginv1.ContextChanged{Context: key},
+		}}); err != nil {
+			return err
+		}
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	root, err := p.realRoot()
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "fs plugin: watch: %v", pathErr(err))
+	}
+	for _, f := range files {
+		e, err := fssource.Stat(f.path)
+		if err != nil || e.Kind == fssource.KindDir {
+			continue
+		}
+		if err := stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_EntryChanged{
+			EntryChanged: &pluginv1.EntryChanged{Context: f.context, Entry: entryOf(f.context, filepath.Dir(f.path), root, e)},
+		}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // watcher owns the one OS notification instance. It watches the union of its
@@ -98,7 +114,7 @@ type watcher struct {
 	fsw     *fsnotify.Watcher
 	watched map[string]bool
 	subs    map[*watchSub]struct{}
-	pending map[string]bool
+	pending map[string]*window
 	// limitLogged and errLogged hold each condition to one log line per
 	// episode: the limit's ends at a subscribe the OS accepts, an OS error's
 	// at the next event delivered.
@@ -106,22 +122,57 @@ type watcher struct {
 	errLogged   bool
 }
 
-// watchSub is one Watch stream: its scope (absolute directory to context
-// key) and its queue.
-type watchSub struct {
-	scope  map[string]string
-	ch     chan string
-	lost   chan struct{}
-	failed chan error
+// window is one directory's changes while its debounce is open: whether its
+// listing may have moved, and the files whose entries were touched.
+type window struct {
+	listing bool
+	files   map[string]bool
 }
 
-func (s *watchSub) keys() []string {
-	var out []string
-	for _, k := range s.scope {
-		out = append(out, k)
+// watchSub is one Watch stream: its scope (absolute directory to context
+// key) and what it is owed, under the watcher's mu. Owing is a set, so a
+// stream that falls behind owes each thing once and loses none; all is owed
+// after an OS overflow, when which things changed is lost.
+type watchSub struct {
+	scope    map[string]string
+	contexts map[string]bool
+	files    map[string]string // path to its directory's context key
+	all      bool
+	ready    chan struct{}
+	failed   chan error
+}
+
+// owedFile is a file whose entry a stream is owed.
+type owedFile struct {
+	context, path string
+}
+
+// take empties what s is owed, sorted, for its stream to send. After an
+// overflow that is every directory of the scope and every file in them.
+func (w *watcher) take(s *watchSub) (contexts []string, files []owedFile) {
+	w.mu.Lock()
+	all := s.all
+	for k := range s.contexts {
+		contexts = append(contexts, k)
 	}
-	slices.Sort(out)
-	return out
+	for path, k := range s.files {
+		files = append(files, owedFile{context: k, path: path})
+	}
+	s.all, s.contexts, s.files = false, map[string]bool{}, map[string]string{}
+	w.mu.Unlock()
+	if all {
+		contexts, files = nil, nil
+		for dir, k := range s.scope {
+			contexts = append(contexts, k)
+			entries, _ := fssource.Read(dir)
+			for _, e := range entries {
+				files = append(files, owedFile{context: k, path: e.AbsPath})
+			}
+		}
+	}
+	slices.Sort(contexts)
+	slices.SortFunc(files, func(a, b owedFile) int { return strings.Compare(a.path, b.path) })
+	return contexts, files
 }
 
 func newWatcher() *watcher {
@@ -130,7 +181,7 @@ func newWatcher() *watcher {
 		add:     (*fsnotify.Watcher).Add,
 		watched: map[string]bool{},
 		subs:    map[*watchSub]struct{}{},
-		pending: map[string]bool{},
+		pending: map[string]*window{},
 	}
 }
 
@@ -138,10 +189,11 @@ func newWatcher() *watcher {
 // whole is the stream's error, and leaves no watch of its behind.
 func (w *watcher) subscribe(scope map[string]string) (*watchSub, error) {
 	s := &watchSub{
-		scope:  scope,
-		ch:     make(chan string, SubscriberBuffer),
-		lost:   make(chan struct{}, 1),
-		failed: make(chan error, 1),
+		scope:    scope,
+		contexts: map[string]bool{},
+		files:    map[string]string{},
+		ready:    make(chan struct{}, 1),
+		failed:   make(chan error, 1),
 	}
 	w.mu.Lock()
 	w.subs[s] = struct{}{}
@@ -279,9 +331,12 @@ func (w *watcher) run(fsw *fsnotify.Watcher) {
 	}
 }
 
-// event maps one OS event to the directories whose listings it touches: the
-// directory holding the path, and the path itself when it is a shown
-// directory that vanished or appeared. A vanished directory drops its watch.
+// event maps one OS event to what it touches. A name that came, went or
+// moved, or whose attributes changed (an image's mtime is its picture's
+// stamp), touches the listing of the directory holding it; bytes written, or
+// a file created over its name as an editor's save does, touch that file's
+// entry. A shown directory that vanished or appeared touches its own listing,
+// and a vanished one drops its watch.
 func (w *watcher) event(fsw *fsnotify.Watcher, ev fsnotify.Event) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -294,16 +349,22 @@ func (w *watcher) event(fsw *fsnotify.Watcher, ev fsnotify.Event) {
 	case w.watched[path] && ev.Has(fsnotify.Remove|fsnotify.Rename):
 		_ = fsw.Remove(path)
 		delete(w.watched, path)
-		w.touch(path)
+		w.touch(path, true, "")
 	case !w.watched[path] && ev.Has(fsnotify.Create) && w.wanted(path):
 		if err := w.watchDir(path); err != nil {
 			w.fail(path, err)
 		}
-		w.touch(path)
+		w.touch(path, true, "")
 	}
-	if parent := filepath.Dir(path); w.watched[parent] {
-		w.touch(parent)
+	parent := filepath.Dir(path)
+	if !w.watched[parent] {
+		return
 	}
+	file := ""
+	if ev.Has(fsnotify.Write | fsnotify.Create) {
+		file = path
+	}
+	w.touch(parent, ev.Has(fsnotify.Create|fsnotify.Remove|fsnotify.Rename|fsnotify.Chmod), file)
 }
 
 // eventError is an asynchronous OS verdict. An overflow lost events, so every
@@ -322,33 +383,46 @@ func (w *watcher) eventError(fsw *fsnotify.Watcher, err error) {
 		return
 	}
 	for s := range w.subs {
-		raise(s.lost)
+		s.all = true
+		raise(s.ready)
 	}
 }
 
-// touch opens dir's debounce window if none is open; its close announces dir
-// once to every stream showing it.
-func (w *watcher) touch(dir string) {
-	if w.pending[dir] {
-		return
+// touch adds to dir's debounce window, opening one if none is open; its
+// close owes what it gathered, once, to every stream showing dir. Callers
+// hold mu.
+func (w *watcher) touch(dir string, listing bool, file string) {
+	win := w.pending[dir]
+	if win == nil {
+		win = &window{files: map[string]bool{}}
+		w.pending[dir] = win
+		time.AfterFunc(w.window, func() { w.owe(dir) })
 	}
-	w.pending[dir] = true
-	time.AfterFunc(w.window, func() {
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		delete(w.pending, dir)
-		for s := range w.subs {
-			key, ok := s.scope[dir]
-			if !ok {
-				continue
-			}
-			select {
-			case s.ch <- key:
-			default:
-				raise(s.lost)
-			}
+	win.listing = win.listing || listing
+	if file != "" {
+		win.files[file] = true
+	}
+}
+
+// owe closes dir's window.
+func (w *watcher) owe(dir string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	win := w.pending[dir]
+	delete(w.pending, dir)
+	for s := range w.subs {
+		key, ok := s.scope[dir]
+		if !ok {
+			continue
 		}
-	})
+		if win.listing {
+			s.contexts[key] = true
+		}
+		for f := range win.files {
+			s.files[f] = key
+		}
+		raise(s.ready)
+	}
 }
 
 func (w *watcher) fail(dir string, err error) {

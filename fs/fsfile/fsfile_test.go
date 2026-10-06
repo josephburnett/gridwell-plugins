@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -104,5 +105,26 @@ func TestServeFileTellsUnreadableFromAbsent(t *testing.T) {
 	err := ServeFile(&locked, dir, dir, "locked.html", "")
 	if status.Code(err) != codes.PermissionDenied || len(locked) != 0 {
 		t.Errorf("unreadable file = %v, %v; want PermissionDenied and no page", locked, err)
+	}
+}
+
+// Two saves of a picture within one second are two pictures: the stamp is the
+// mtime to the nanosecond, so the second save's face is asked for.
+func TestTwoSavesInOneSecondAreTwoStamps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pic.png")
+	if err := os.WriteFile(path, []byte("\x89PNG\r\n\x1a\nA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := time.Unix(1_700_000_000, 0)
+	stamps := map[int64]bool{}
+	for _, at := range []time.Time{second.Add(100 * time.Millisecond), second.Add(600 * time.Millisecond)} {
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+		stamps[PreviewStamp(dir, "pic.png")] = true
+	}
+	if len(stamps) != 2 {
+		t.Fatalf("two saves within one second stamped %v; want two stamps", stamps)
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
@@ -26,11 +27,14 @@ import (
 // patience bounds every wait on the OS, which delivers in milliseconds.
 const patience = 10 * time.Second
 
+// watchStream hears each ContextChanged's context on changes and each
+// EntryChanged on entries.
 type watchStream struct {
 	grpc.ServerStream
 	ctx     context.Context
 	header  chan struct{}
 	changes chan string
+	entries chan *pluginv1.EntryChanged
 }
 
 func (s *watchStream) Context() context.Context { return s.ctx }
@@ -41,6 +45,10 @@ func (s *watchStream) SendHeader(metadata.MD) error {
 }
 
 func (s *watchStream) Send(c *pluginv1.Change) error {
+	if e := c.GetEntryChanged(); e != nil {
+		s.entries <- e
+		return nil
+	}
 	s.changes <- c.GetContextChanged().GetContext()
 	return nil
 }
@@ -56,7 +64,8 @@ type opened struct {
 func openWatch(t *testing.T, p *Plugin, contexts ...string) *opened {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &watchStream{ctx: ctx, header: make(chan struct{}), changes: make(chan string, 100)}
+	s := &watchStream{ctx: ctx, header: make(chan struct{}), changes: make(chan string, 100),
+		entries: make(chan *pluginv1.EntryChanged, 100)}
 	o := &opened{watchStream: s, done: make(chan error, 1), stop: cancel}
 	go func() { o.done <- p.Watch(&pluginv1.WatchRequest{Contexts: contexts}, s) }()
 	t.Cleanup(func() { o.close(t) })
@@ -97,6 +106,22 @@ func (o *opened) until(t *testing.T, want string) []string {
 			got = append(got, key)
 		case <-deadline:
 			t.Fatalf("no ContextChanged{%q}; got %v", want, got)
+		}
+	}
+}
+
+// entry waits for the EntryChanged naming key, and returns it.
+func (o *opened) entry(t *testing.T, key string) *pluginv1.EntryChanged {
+	t.Helper()
+	deadline := time.After(patience)
+	for {
+		select {
+		case e := <-o.entries:
+			if e.GetEntry().GetKey() == key {
+				return e
+			}
+		case <-deadline:
+			t.Fatalf("no EntryChanged for %q", key)
 		}
 	}
 }
@@ -325,10 +350,12 @@ func TestWatchRewatchesADirectoryCreatedAgain(t *testing.T) {
 }
 
 // An OS overflow lost events, so every directory in the scope may have
-// changed and each is announced.
+// changed and each is announced, and every file in one may have been written
+// and each is told.
 func TestWatchOverflowAnnouncesTheWholeScope(t *testing.T) {
 	root := t.TempDir()
 	mkdirs(t, root, "a", "b")
+	write(t, filepath.Join(root, "a", "f"), "")
 	p := New(root, nil)
 	o := openWatch(t, p, ".", "a", "b")
 	p.watch.mu.Lock()
@@ -336,6 +363,59 @@ func TestWatchOverflowAnnouncesTheWholeScope(t *testing.T) {
 	p.watch.mu.Unlock()
 	p.watch.eventError(fsw, fsnotify.ErrEventOverflow)
 	o.all(t, ".", "a", "b")
+	o.entry(t, "a/f")
+}
+
+// A file written in place moves no name, so its directory's listing is not
+// announced; the file is told as an EntryChanged carrying exactly the entry
+// List now answers, its picture's stamp included.
+func TestWatchTellsAWrittenFileItsEntry(t *testing.T) {
+	root := t.TempDir()
+	mkdirs(t, root, "a", sentinel)
+	write(t, filepath.Join(root, "a", "notes.md"), "one")
+	pic := filepath.Join(root, "a", "pic.png")
+	write(t, pic, "\x89PNG\r\n\x1a\nA")
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(pic, old, old); err != nil {
+		t.Fatal(err)
+	}
+	p := New(root, nil)
+	_, was := listed(t, p, "a")
+	o := openWatch(t, p, "a", sentinel)
+
+	write(t, filepath.Join(root, "a", "notes.md"), "two")
+	write(t, pic, "\x89PNG\r\n\x1a\nB")
+	_, now := listed(t, p, "a")
+	for _, key := range []string{"a/notes.md", "a/pic.png"} {
+		got := o.entry(t, key)
+		if got.Context != "a" || !proto.Equal(got.Entry, now[key]) {
+			t.Errorf("EntryChanged = %v in %q, want %v in %q", got.Entry, got.Context, now[key], "a")
+		}
+	}
+	if now["a/pic.png"].PreviewStamp == was["a/pic.png"].PreviewStamp {
+		t.Error("the written picture kept its stamp")
+	}
+	poke(t, root)
+	if got := o.until(t, sentinel); len(got) != 0 {
+		t.Fatalf("writing two files in place announced %v", got)
+	}
+}
+
+// An editor that saves by writing a temporary file and renaming it over the
+// name moves no name either, but the bytes behind it changed: the directory
+// is announced, for the names that came and went, and the file is told.
+func TestWatchTellsAFileSavedByRenameItsEntry(t *testing.T) {
+	root := t.TempDir()
+	mkdirs(t, root, "a")
+	write(t, filepath.Join(root, "a", "notes.md"), "one")
+	p := New(root, nil)
+	o := openWatch(t, p, "a")
+	write(t, filepath.Join(root, "a", ".notes.md.tmp"), "two")
+	if err := os.Rename(filepath.Join(root, "a", ".notes.md.tmp"), filepath.Join(root, "a", "notes.md")); err != nil {
+		t.Fatal(err)
+	}
+	o.until(t, "a")
+	o.entry(t, "a/notes.md")
 }
 
 func captureLog(t *testing.T) *bytes.Buffer {
