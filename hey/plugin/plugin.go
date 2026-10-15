@@ -342,18 +342,17 @@ func (p *Plugin) walk(ctx context.Context, key string) error {
 // PrunePerWalk bounds how many threads one walk asks HEY about.
 const PrunePerWalk = 16
 
-// prune asks HEY about threads that left every box, and forgets each one
-// `thread read` says does not exist. One HEY still has (archived) is kept and
-// not asked about again; any other answer is doubt, and the thread waits for
-// the next walk. It runs inside a walk, so it is bounded by one and runs only
-// when something asked for that walk.
+// prune asks HEY about the threads that left every box and have waited
+// longest, and forgets each one `thread read` says does not exist. Any other
+// answer — archived, or doubt — sends the thread to the back of the queue,
+// because HEY may delete an archived thread later and no listing would say
+// so. It runs inside a walk, so it is bounded by one and runs only when
+// something asked for that walk.
 func (p *Plugin) prune(ctx context.Context) {
 	for _, id := range p.mem.TakeStrays(PrunePerWalk) {
-		_, err := p.src.ThreadHTML(ctx, id)
-		switch {
-		case status.Code(err) == codes.NotFound:
+		if _, err := p.src.ThreadHTML(ctx, id); status.Code(err) == codes.NotFound {
 			p.mem.Forget(id)
-		case err != nil:
+		} else {
 			p.mem.Stray(id)
 		}
 	}

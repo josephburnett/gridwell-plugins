@@ -246,8 +246,9 @@ a cold start, once. No credential is ever written there.
 
 A thread that leaves every box is remembered, so its tile still reads as the
 email it was, until HEY says it no longer has it: each walk asks `hey thread
-read` about at most 16 such threads, forgets one the CLI says does not exist
-(exit 2), keeps one HEY still has without asking again, and asks again next
-walk on any other answer.
+read` about the 16 such threads that have waited longest, forgets one the
+CLI says does not exist (exit 2), and on any other answer sends it to the
+back of the queue, so a thread HEY deletes after archiving is forgotten
+within one pass of the queue.
 
 Email bodies are not cached. A listing is small; a mailbox's bodies are not.

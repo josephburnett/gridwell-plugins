@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"cmp"
 	"slices"
 	"sort"
 	"sync"
@@ -42,9 +43,11 @@ type Memory struct {
 	// delete of the posting that held them. It is how a box no walk reads
 	// whole (a capped one) can still say a thread is not in it.
 	left map[string]map[int64]bool
-	// strays are threads that left every box and have not been asked about
-	// since: the candidates to forget, once HEY says it no longer has them.
-	strays map[int64]bool
+	// strays are threads that left every box: the candidates to forget, once
+	// HEY says it no longer has them. Each maps to its place in the queue
+	// TakeStrays serves, smallest first; next is the place after the last.
+	strays map[int64]uint64
+	next   uint64
 	// moved holds the threads whose stamp moved since the last effect.
 	moved map[int64]bool
 }
@@ -58,7 +61,7 @@ func NewMemory() *Memory {
 		complete: map[string]bool{},
 		journal:  map[string][]Event{},
 		left:     map[string]map[int64]bool{},
-		strays:   map[int64]bool{},
+		strays:   map[int64]uint64{},
 		moved:    map[int64]bool{},
 	}
 }
@@ -150,7 +153,7 @@ func (m *Memory) effectLocked(collection string, before, beforeAll []Thread) Eff
 	}
 	for i := range beforeAll {
 		if id := beforeAll[i].TopicID; !in[id] {
-			m.strays[id] = true
+			m.strayLocked(id)
 		}
 	}
 	eff := Effect{Changed: !sameListing(before, m.collectionLocked(collection)),
@@ -173,31 +176,43 @@ func (m *Memory) putLocked(t *Thread) {
 	m.threads[t.TopicID] = t
 }
 
-// TakeStrays hands out at most n threads that left every box and have not
-// been asked about since. The caller asks HEY whether each still exists and
-// answers with Forget or Stray.
+// TakeStrays hands out the n threads that left every box and have waited
+// longest to be asked about. The caller asks HEY whether each still exists
+// and answers with Forget or Stray.
 func (m *Memory) TakeStrays(n int) []int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]int64, 0, min(n, len(m.strays)))
-	for id := range m.strays {
-		if len(out) == n {
-			break
-		}
-		out = append(out, id)
+	out := m.strayOrderLocked()
+	out = out[:min(n, len(out))]
+	for _, id := range out {
 		delete(m.strays, id)
 	}
-	slices.Sort(out)
 	return out
 }
 
-// Stray hands a thread back to be asked about again: the answer was doubt.
+// Stray hands a thread back to the end of the queue, to be asked about again.
 func (m *Memory) Stray(topicID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, known := m.threads[topicID]; known && !m.memberLocked(topicID) {
-		m.strays[topicID] = true
+		m.strayLocked(topicID)
 	}
+}
+
+func (m *Memory) strayLocked(topicID int64) {
+	if _, queued := m.strays[topicID]; !queued {
+		m.strays[topicID] = m.next
+		m.next++
+	}
+}
+
+func (m *Memory) strayOrderLocked() []int64 {
+	out := make([]int64, 0, len(m.strays))
+	for id := range m.strays {
+		out = append(out, id)
+	}
+	slices.SortFunc(out, func(a, b int64) int { return cmp.Compare(m.strays[a], m.strays[b]) })
+	return out
 }
 
 // Forget drops a thread's record once HEY said it no longer has it. A thread
