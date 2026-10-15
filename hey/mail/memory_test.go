@@ -161,6 +161,43 @@ func TestAThreadInNoBoxIsAStray(t *testing.T) {
 	}
 }
 
+// Strays are asked about in turn: one handed back waits behind every other,
+// and the queue keeps its order across a restart.
+func TestStraysAreAskedAboutInTurn(t *testing.T) {
+	m := NewMemory()
+	m.Absorb(ImboxContext, []Thread{thread(3, "c", "2026-01-01"), thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ImboxContext, nil, true)
+	var asked []int64
+	for range 4 {
+		got := m.TakeStrays(2)
+		asked = append(asked, got...)
+		for _, id := range got {
+			m.Stray(id)
+		}
+		back := NewMemory()
+		back.Restore(m.Snapshot())
+		m = back
+	}
+	if want := []int64{3, 1, 2, 3, 1, 2, 3, 1}; !reflect.DeepEqual(asked[:len(want)], want) {
+		t.Errorf("asked %v, want each stray in turn %v", asked, want)
+	}
+}
+
+// A cache file that kept a thread in no box off the strays (an archived one
+// asked about once) queues it again on restore, behind the strays it names.
+func TestRestoreQueuesARecordInNoBox(t *testing.T) {
+	m := NewMemory()
+	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ImboxContext, nil, true)
+	snap := m.Snapshot()
+	snap.Strays = []int64{2}
+	back := NewMemory()
+	back.Restore(snap)
+	if got := back.TakeStrays(10); !reflect.DeepEqual(got, []int64{2, 1}) {
+		t.Errorf("strays = %v, want the named one then the unnamed one", got)
+	}
+}
+
 func TestSnapshotRoundTrips(t *testing.T) {
 	m := NewMemory()
 	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)

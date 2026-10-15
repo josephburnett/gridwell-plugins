@@ -600,7 +600,7 @@ func TestAWarmReadAnswersMemoryAndTheLastFailure(t *testing.T) {
 
 // Memory forgets a thread once it is in no box AND `hey thread read` says
 // HEY no longer has it, asked by a walk; never on doubt, and a thread HEY
-// still has (archived) is kept and not asked about again.
+// still has (archived) is kept and asked about again on a later walk.
 func TestMemoryForgetsOnlyWhatHEYNoLongerHas(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{
@@ -632,8 +632,8 @@ func TestMemoryForgetsOnlyWhatHEYNoLongerHas(t *testing.T) {
 	f.html[3] = "<!doctype html>"
 	f.mu.Unlock()
 	walk()
-	if n := f.count("thread") - asked; n != 1 {
-		t.Errorf("the next walk asked about %d threads, want only the one in doubt", n)
+	if n := f.count("thread") - asked; n != 2 {
+		t.Errorf("the next walk asked about %d threads, want the archived one and the one in doubt", n)
 	}
 }
 
