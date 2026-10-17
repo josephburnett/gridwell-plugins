@@ -186,6 +186,13 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	return resp, nil
 }
 
+// Search is refused: a file tree answers no search (docs/plugin-standard.md
+// rule 20), since the plugin holds no memory to look in and a walk of the
+// disk for a query is work done for nobody.
+func (p *Plugin) Search(context.Context, *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "fs plugin: a file tree answers no search")
+}
+
 // readableDir is the check Info makes until it passes, so a root created or
 // fixed after launch is served without a respawn. Its error is the sentence
 // the node shows on the plugin's row.
