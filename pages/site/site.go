@@ -23,9 +23,9 @@ import (
 // gives its keys a path shape, as fs does.
 const RootContext = "."
 
-// PreviewStamp is the generation number of every page face. The site is
+// PreviewStamp is the generation number of every page preview. The site is
 // fixed, so there is exactly one generation: the client's thumbnail cache
-// keys on this and never has to fetch a face twice.
+// keys on this and never has to fetch a preview twice.
 const PreviewStamp = 1
 
 // Doc is one thing in the site: a tile the plugin lists, and everything it can
@@ -54,7 +54,7 @@ type Doc struct {
 type Page struct {
 	Title string
 	// Accent is the page's one colour, and the reason it is here rather than
-	// written into the HTML: the page's CSS and the tile's preview face are
+	// written into the HTML: the page's CSS and the tile's preview are
 	// two renderings of the same fact.
 	Accent color.RGBA
 	// Body is the authored fragment that goes inside <body>, below the
@@ -172,7 +172,7 @@ const styledCSS = `.mark { display: block; margin: 0 auto 1.5rem; }
 `
 
 // styledAccent is the styled page's colour, named because three things read
-// it: the page's CSS, the tile's preview face, and the image below.
+// it: the page's CSS, the tile's preview, and the image below.
 var styledAccent = color.RGBA{R: 0x35, G: 0x52, B: 0x8f, A: 0xff}
 
 // markSVG is the styled page's image, served at the subpath "mark.svg". It is
@@ -308,16 +308,16 @@ func hexColor(c color.RGBA) string {
 }
 
 const (
-	// previewW and previewH are the face's pixels: a small card, since the
+	// previewW and previewH are the preview's pixels: a small card, since the
 	// page itself is one descent away.
 	previewW = 256
 	previewH = 160
 	// bandH is the height of the darker strip along the top, which is all the
-	// structure a face needs to read as a page rather than a colour swatch.
+	// structure a preview needs to read as a page rather than a colour swatch.
 	bandH = 40
 )
 
-// PreviewJPEG returns a doc's face: a flat card in the page's accent with a
+// PreviewJPEG returns a doc's preview: a flat card in the page's accent with a
 // darker band, or nil for a doc with no page. Nil is "no thumbnail", never an
 // error — the tile falls back to its label.
 func (d *Doc) PreviewJPEG() []byte {

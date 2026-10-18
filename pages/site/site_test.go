@@ -89,7 +89,7 @@ func TestEveryRelativeURLIsAnAssetThePageServes(t *testing.T) {
 	}
 }
 
-// The accent has one owner. It reached the CSS, the image and the face from
+// The accent has one owner. It reached the CSS, the image and the preview from
 // the same Go value, so a page cannot drift from the tile that represents it.
 func TestTheAccentHasOneOwner(t *testing.T) {
 	d := Lookup("styled")
@@ -102,10 +102,10 @@ func TestTheAccentHasOneOwner(t *testing.T) {
 	}
 }
 
-// The face is a decodable JPEG of the declared size, in the page's accent.
+// The preview is a decodable JPEG of the declared size, in the page's accent.
 // The tile shows it without asking what it is, so an undecodable answer is a
 // blank tile with nothing said about it.
-func TestTheFaceIsAJPEGInTheAccent(t *testing.T) {
+func TestThePreviewIsAJPEGInTheAccent(t *testing.T) {
 	d := Lookup("hello")
 	img, err := jpeg.Decode(bytes.NewReader(d.PreviewJPEG()))
 	if err != nil {
@@ -114,7 +114,7 @@ func TestTheFaceIsAJPEGInTheAccent(t *testing.T) {
 	if b := img.Bounds(); b.Dx() != previewW || b.Dy() != previewH {
 		t.Errorf("preview is %v, want %dx%d", b, previewW, previewH)
 	}
-	// Below the band, the face is the accent. JPEG is lossy, so this is a
+	// Below the band, the preview is the accent. JPEG is lossy, so this is a
 	// nearness check, not an equality one.
 	r, g, b, _ := img.At(previewW/2, previewH-8).RGBA()
 	want := d.Page.Accent
@@ -123,7 +123,7 @@ func TestTheFaceIsAJPEGInTheAccent(t *testing.T) {
 		return d > -12 && d < 12
 	}
 	if !near(r, want.R) || !near(g, want.G) || !near(b, want.B) {
-		t.Errorf("face pixel = %d,%d,%d, want near %v", r>>8, g>>8, b>>8, want)
+		t.Errorf("preview pixel = %d,%d,%d, want near %v", r>>8, g>>8, b>>8, want)
 	}
 }
 

@@ -53,7 +53,7 @@ func (t *Thread) Stamp() string {
 // Collection is one of the six HEY boxes this plugin projects. Key is the
 // plugin's context key, stable forever. Box is the selector `hey box view`
 // takes — the hey-cli's own named getter, so no listing call is needed to
-// resolve it. Label is the face of the (+) menu row that opens it. Doorway
+// resolve it. Label is the name on the (+) menu row that opens it. Doorway
 // says whether the (+) menu offers it: every box is walked into everything,
 // but a box nobody opens on purpose is clutter in the one menu row.
 type Collection struct {

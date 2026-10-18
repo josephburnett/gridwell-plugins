@@ -300,7 +300,7 @@ func fileFacts(out *pluginv1.Entry, dir, name string) {
 		// A file the browser presents whole is a url entry, and the node
 		// derives its address at the /content/ door, so there is none to
 		// declare. It carries no text body: a url entry has no document
-		// face beside the page.
+		// preview beside the page.
 		out.Kind = "url"
 		out.ServesPage = true
 		return

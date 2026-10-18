@@ -109,7 +109,7 @@ func TestServeFileTellsUnreadableFromAbsent(t *testing.T) {
 }
 
 // Two saves of a picture within one second are two pictures: the stamp is the
-// mtime to the nanosecond, so the second save's face is asked for.
+// mtime to the nanosecond, so the second save's preview is asked for.
 func TestTwoSavesInOneSecondAreTwoStamps(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pic.png")

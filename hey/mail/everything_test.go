@@ -24,7 +24,7 @@ func TestEverythingIsTheUnionOfEveryBox(t *testing.T) {
 	}
 }
 
-// A box lists links to everything: the thread's own key and face, its
+// A box lists links to everything: the thread's own key and preview, its
 // content facts kept for a node that predates links, and its target the same
 // thread in everything.
 func TestBoxEntriesLinkToEverything(t *testing.T) {

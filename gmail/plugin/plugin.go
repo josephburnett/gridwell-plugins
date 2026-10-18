@@ -256,7 +256,7 @@ func (p *Plugin) poll(ctx context.Context, _ string) {
 // inbox and then failed — so the announcement does not wait on its error.
 func (p *Plugin) walkAccount(ctx context.Context, _ string) error {
 	p.landing.Add(1)
-	before := p.faces()
+	before := p.listings()
 	swept, err := p.catchUpOrSweep(ctx)
 	if err == nil && swept {
 		p.mu.Lock()

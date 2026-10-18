@@ -82,7 +82,7 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 			// none to declare.
 			e.Kind = rpc.KindURL
 			e.ServesPage = true
-			// The face is the plugin's thumbnail. The site never changes, so
+			// The preview is the plugin's thumbnail. The site never changes, so
 			// there is one generation of it forever.
 			e.PreviewStamp = site.PreviewStamp
 		} else {
@@ -148,7 +148,7 @@ func notFound(stream pluginv1.Plugin_ServeContentServer) error {
 	})
 }
 
-// GetPreview answers a page tile's face. A doc with no page has no thumbnail,
+// GetPreview answers a page tile's preview. A doc with no page has no thumbnail,
 // and nil is that answer — never an error.
 func (p *Plugin) GetPreview(_ context.Context, req *pluginv1.GetPreviewRequest) (*pluginv1.GetPreviewResponse, error) {
 	d := site.Lookup(req.Key)

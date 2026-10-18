@@ -137,8 +137,8 @@ func IsPlainText(name string) bool {
 // PreviewStamp returns the cheap preview generation for a file: an image's
 // mtime to the nanosecond, so two saves within a second are two pictures, and
 // 0 for everything else. It travels as Entry.preview_stamp, and the
-// node keys the tile's face by it until a screenshot exists (see
-// pluginhost.faceKey).
+// node keys the tile's preview by it until a screenshot exists (see
+// pluginhost.previewKey).
 func PreviewStamp(dirPath, name string) int64 {
 	if dirPath == "" || !strings.HasPrefix(PageMediaType(name), "image/") {
 		return 0
