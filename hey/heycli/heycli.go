@@ -366,8 +366,8 @@ func notRunnable(what string, err error) error {
 //	4 forbidden             5 rate limited     6 network failed
 //	7 server or local       8 ambiguous
 //
-// Transport-shaped codes mean "not right now", and the node serves what it
-// has, stamped stale. The rest are verdicts and surface: a plugin that
+// Transport-shaped codes mean "not right now", and the node serves its
+// cache and reports the source dark. The rest are verdicts and surface: a plugin that
 // answered "not right now" to "you are not signed in" would leave the user
 // staring at an empty grid with nothing said.
 func refusal(what string, out []byte, errText string, code int) error {

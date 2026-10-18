@@ -547,7 +547,7 @@ func TestALiveFeedKeepsReadsFromWalking(t *testing.T) {
 	listed(t, p, mail.ImboxGrid)
 	idle(t, p)
 	if n := f.count("imbox"); n != 2 {
-		t.Fatalf("a stale read with the feed down walked %d times, want 2", n)
+		t.Fatalf("a read past the window with the feed down walked %d times, want 2", n)
 	}
 }
 

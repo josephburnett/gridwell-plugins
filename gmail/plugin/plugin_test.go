@@ -374,7 +374,7 @@ func TestListsEachGridAndRefreshesOnAWindow(t *testing.T) {
 	}
 	landed(t, p)
 	if got := f.count("INBOX"); got != 2 {
-		t.Fatalf("a stale listing walked %d times", got)
+		t.Fatalf("a listing past its window walked %d times", got)
 	}
 }
 

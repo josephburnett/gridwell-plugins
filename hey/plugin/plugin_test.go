@@ -273,7 +273,7 @@ func TestListsEachGridAndRefreshesOnAWindow(t *testing.T) {
 	}
 	idle(t, p)
 	if got := f.count("imbox"); got != 2 {
-		t.Fatalf("a stale listing walked %d times", got)
+		t.Fatalf("a listing past its window walked %d times", got)
 	}
 }
 
@@ -572,12 +572,12 @@ func TestAWarmReadAnswersCacheAndTheLastFailure(t *testing.T) {
 	if r := list(); r.Unreachable != "" {
 		t.Fatalf("a walk that landed answered %q", r.Unreachable)
 	}
-	stale := func() {
+	age := func() {
 		mu.Lock()
 		clock = clock.Add(2 * time.Minute)
 		mu.Unlock()
 	}
-	stale()
+	age()
 	f.mu.Lock()
 	f.err = status.Error(codes.Unavailable, "network")
 	f.mu.Unlock()
@@ -590,7 +590,7 @@ func TestAWarmReadAnswersCacheAndTheLastFailure(t *testing.T) {
 	f.err = nil
 	f.mu.Unlock()
 	idle(t, p)
-	stale()
+	age()
 	list()
 	idle(t, p)
 	if r := list(); len(r.Entries) != 1 || r.Unreachable != "" {
@@ -847,7 +847,7 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	close(f.block)
 	idle(t, p)
 	if got := f.count("imbox"); got != 2 {
-		t.Errorf("the stale read started %d walks in all, want 2", got)
+		t.Errorf("the read past the window started %d walks in all, want 2", got)
 	}
 }
 

@@ -381,7 +381,7 @@ func decodeBody(b *gmail.MessagePartBody) ([]byte, error) {
 }
 
 // wrap maps a Gmail failure onto the node's error vocabulary. Transport-shaped
-// codes mean "not right now", and the node serves what it has, stamped stale.
+// codes mean "not right now", and the node serves its cache and reports the source dark.
 // The rest are verdicts and surface: a plugin that answered "not right now" to
 // "this token has been revoked" would leave the user staring at an empty grid
 // with nothing said.
@@ -391,7 +391,7 @@ func wrap(ctx context.Context, what string, err error) error {
 	}
 	// A refresh that Google refuses is a verdict about the token — revoked,
 	// expired, or for the wrong client — and the fix is running the auth flow
-	// again, so it must reach the user rather than degrade to a stale grid.
+	// again, so it must reach the user rather than degrade to a cached grid.
 	var retrieve *oauth2.RetrieveError
 	if errors.As(err, &retrieve) {
 		return status.Errorf(codes.PermissionDenied,
