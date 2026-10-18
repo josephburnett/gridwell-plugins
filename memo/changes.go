@@ -172,8 +172,8 @@ func (c *Changes) Watching(unit string) bool {
 
 func (c *Changes) attach(s *sub) {
 	seen := map[string]bool{}
-	for _, ctx := range s.scope {
-		for _, u := range c.o.Work(ctx) {
+	for _, grid := range s.scope {
+		for _, u := range c.o.Work(grid) {
 			if !seen[u] {
 				seen[u] = true
 				s.units = append(s.units, u)
@@ -242,8 +242,8 @@ func (c *Changes) stopLocked(name string, u *unit) {
 // announced, which a repaint of the scope alone might miss.
 func (s *sub) add(gridKeys []string, buffer int) {
 	s.mu.Lock()
-	for _, ctx := range gridKeys {
-		if s.queued[ctx] {
+	for _, grid := range gridKeys {
+		if s.queued[grid] {
 			continue
 		}
 		if len(s.pending) >= buffer {
@@ -252,12 +252,12 @@ func (s *sub) add(gridKeys []string, buffer int) {
 			for _, k := range s.scope {
 				s.queued[k] = true
 			}
-			if s.queued[ctx] {
+			if s.queued[grid] {
 				continue
 			}
 		}
-		s.pending = append(s.pending, ctx)
-		s.queued[ctx] = true
+		s.pending = append(s.pending, grid)
+		s.queued[grid] = true
 	}
 	s.mu.Unlock()
 	select {
@@ -287,11 +287,11 @@ func (s *sub) next() *pluginv1.Change {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.pending) > 0 {
-		ctx := s.pending[0]
+		grid := s.pending[0]
 		s.pending = s.pending[1:]
-		delete(s.queued, ctx)
+		delete(s.queued, grid)
 		return &pluginv1.Change{Payload: &pluginv1.Change_GridChanged{
-			GridChanged: &pluginv1.GridChanged{Grid: ctx},
+			GridChanged: &pluginv1.GridChanged{Grid: grid},
 		}}
 	}
 	if len(s.owed) > 0 {

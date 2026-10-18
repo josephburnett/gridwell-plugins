@@ -282,10 +282,10 @@ func TestListOfAGridThatIsAFileIsAuthoritativeAndEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := New(root, nil)
-	for _, ctxKey := range []string{"was-a-dir", "was-a-dir/sub"} {
-		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctxKey})
+	for _, grid := range []string{"was-a-dir", "was-a-dir/sub"} {
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: grid})
 		if err != nil || !resp.Authoritative || len(resp.Entries) != 0 {
-			t.Errorf("List(%q) = %v, %v; want an authoritative empty listing", ctxKey, resp, err)
+			t.Errorf("List(%q) = %v, %v; want an authoritative empty listing", grid, resp, err)
 		}
 	}
 	pr, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: "was-a-dir/f.md"})

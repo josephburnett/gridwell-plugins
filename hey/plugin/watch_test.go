@@ -208,9 +208,9 @@ func live(t *testing.T, o Options) (*Plugin, *fakeHEY, *watcher, []mail.Event) {
 	return p, f, w, evs
 }
 
-func listed(t *testing.T, p *Plugin, ctx string) []string {
+func listed(t *testing.T, p *Plugin, grid string) []string {
 	t.Helper()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctx})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: grid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,9 +660,9 @@ func TestTheEdgesOfAFailedWalkRepaint(t *testing.T) {
 // re-read since. Everything never is: a thread in no box is Probe's to
 // settle against HEY.
 func TestAuthoritativeOnlyWhenDefinitive(t *testing.T) {
-	authoritative := func(p *Plugin, ctx string) bool {
+	authoritative := func(p *Plugin, grid string) bool {
 		t.Helper()
-		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctx})
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: grid})
 		if err != nil {
 			t.Fatal(err)
 		}

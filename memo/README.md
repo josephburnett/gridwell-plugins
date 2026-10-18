@@ -9,7 +9,7 @@ four things.
 | `File[T]` | the cache file in `state_dir` | `cache.db`'s contract, 14 |
 | `Flights` | one shared walk per key, and how a read answers | 7, 13, 14 |
 | `Changes` | the `Watch` fan-out, and when background work runs | 8, 9, 18 |
-| `Life` | the grid walks and work run under | 13 |
+| `Life` | the context walks and work run under | 13 |
 
 ## File
 

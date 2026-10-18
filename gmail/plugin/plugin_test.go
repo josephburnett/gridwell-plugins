@@ -1041,9 +1041,9 @@ func refreshed(t *testing.T, p *Plugin, clock *time.Time, by time.Duration) {
 	landed(t, p)
 }
 
-func keys(t *testing.T, p *Plugin, ctxKey string) string {
+func keys(t *testing.T, p *Plugin, grid string) string {
 	t.Helper()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctxKey})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: grid})
 	if err != nil {
 		t.Fatal(err)
 	}

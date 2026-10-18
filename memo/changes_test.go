@@ -215,8 +215,8 @@ func (w *worklog) starts() []string {
 // grid in scope, and lingers across the node swapping one stream for
 // another.
 func TestChangesWork(t *testing.T) {
-	todosOnly := func(ctx string) []string {
-		if ctx == "todos" || strings.HasPrefix(ctx, "week:") {
+	todosOnly := func(grid string) []string {
+		if grid == "todos" || strings.HasPrefix(grid, "week:") {
 			return []string{"todos"}
 		}
 		return nil
@@ -231,7 +231,7 @@ func TestChangesWork(t *testing.T) {
 				t.Errorf("work ran with no stream: %v", w.starts())
 			}
 		}},
-		{"a scope's gridKeys start their units once", ChangeOptions{Work: todosOnly}, func(t *testing.T, c *Changes, w *worklog, _ *fakeClock) {
+		{"a scope's grids start their units once", ChangeOptions{Work: todosOnly}, func(t *testing.T, c *Changes, w *worklog, _ *fakeClock) {
 			s := serve(t, c, []string{"todos", "week:1", "week:2", "elsewhere"}, newFakeStream())
 			eventually(t, "the poll", func() bool { return w.is("todos") })
 			if got := w.starts(); !reflect.DeepEqual(got, []string{"todos"}) {

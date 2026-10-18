@@ -42,11 +42,11 @@ func symlinkTree(t *testing.T) (root, outside string) {
 	return root, outside
 }
 
-func listed(t *testing.T, p *Plugin, ctxKey string) (*pluginv1.ListResponse, map[string]*pluginv1.Entry) {
+func listed(t *testing.T, p *Plugin, grid string) (*pluginv1.ListResponse, map[string]*pluginv1.Entry) {
 	t.Helper()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctxKey})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: grid})
 	if err != nil {
-		t.Fatalf("List(%q): %v", ctxKey, err)
+		t.Fatalf("List(%q): %v", grid, err)
 	}
 	byKey := map[string]*pluginv1.Entry{}
 	for _, e := range resp.Entries {
@@ -99,10 +99,10 @@ func TestSymlinksListAsLinksToTheOneKey(t *testing.T) {
 	}
 
 	// The targets the dead links name are never listed and probe gone.
-	for _, ctxKey := range []string{"../outside", "..", "dirlink", "cycle", "file"} {
-		resp, byKey := listed(t, p, ctxKey)
+	for _, grid := range []string{"../outside", "..", "dirlink", "cycle", "file"} {
+		resp, byKey := listed(t, p, grid)
 		if !resp.Authoritative || len(byKey) != 0 {
-			t.Errorf("List(%q) = %v, want an authoritative empty listing", ctxKey, resp)
+			t.Errorf("List(%q) = %v, want an authoritative empty listing", grid, resp)
 		}
 	}
 	for _, k := range [][2]string{{".", "missing.md"}, {"../outside", "../outside/secret.txt"}, {"dirlink", "dirlink/inner.txt"}} {

@@ -239,10 +239,10 @@ func TestProbeAnswersForTheGridAsked(t *testing.T) {
 		{"20", "info:10", gone},
 		{"nope", "1", gone},
 	}
-	probe := func(key, ctxKey string) pluginv1.ProbeResponse_Presence {
-		resp, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: key, Grid: ctxKey})
+	probe := func(key, grid string) pluginv1.ProbeResponse_Presence {
+		resp, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: key, Grid: grid})
 		if err != nil {
-			t.Fatalf("Probe(%q in %q): %v", key, ctxKey, err)
+			t.Fatalf("Probe(%q in %q): %v", key, grid, err)
 		}
 		return resp.Presence
 	}
