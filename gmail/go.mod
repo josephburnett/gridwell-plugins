@@ -45,4 +45,4 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-replace github.com/josephburnett/gridwell/api => /home/joe/gridwell/.claude/worktrees/rename/api
+replace github.com/josephburnett/gridwell/api => /home/joe/gridwell/.claude/worktrees/rn-prose/api

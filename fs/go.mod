@@ -26,4 +26,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 )
 
-replace github.com/josephburnett/gridwell/api => /home/joe/gridwell/.claude/worktrees/rename/api
+replace github.com/josephburnett/gridwell/api => /home/joe/gridwell/.claude/worktrees/rn-prose/api
