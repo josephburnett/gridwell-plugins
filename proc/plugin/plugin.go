@@ -185,7 +185,7 @@ func parsePID(s string) (int64, bool) {
 
 // List enumerates one process's children plus its @info tile, @info first, so
 // the ids the node mints stay stable. A process table it cannot read is
-// Unavailable: a partial listing would look like the truth.
+// Unavailable: a partial listing would look like the whole table.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	pid, err := gridPID(req.Grid)
 	if err != nil {

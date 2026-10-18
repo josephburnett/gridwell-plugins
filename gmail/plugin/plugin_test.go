@@ -1165,7 +1165,7 @@ func TestTheHistoryIDSurvivesARestart(t *testing.T) {
 	}
 }
 
-// History is the whole truth only for what a catch-up can see, so once
+// History is complete only for what a catch-up can see, so once
 // SweepEvery has passed a refresh walks every grid again.
 func TestTheConsistencyPassWalksAgain(t *testing.T) {
 	f := newFake()
