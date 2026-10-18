@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// SnippetRunes bounds the preview a search result carries.
+// SnippetRunes bounds the preview a find result carries.
 const SnippetRunes = 240
 
 // Snippet is HEY's preview on one line, bounded.

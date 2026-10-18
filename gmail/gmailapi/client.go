@@ -325,7 +325,7 @@ func (c *Client) HTML(ctx context.Context, id string) (body []byte, mediaType st
 }
 
 // findPart walks the MIME tree depth-first for the first part of this type. A
-// multipart/alternative puts the richest form last, but the tree is searched
+// multipart/alternative puts the richest form last, but the tree is walked
 // in order and the caller asks for text/html first, so the answer is the same
 // either way and a nested multipart/related (the shape a mail with inline
 // images has) is reached.

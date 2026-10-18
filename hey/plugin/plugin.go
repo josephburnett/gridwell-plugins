@@ -591,20 +591,20 @@ func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
 	return &pluginv1.ProbeResponse{Presence: p}
 }
 
-// Search matches the query against the subject, preview and sender of every
+// Find matches the query against the subject, preview and sender of every
 // thread a collection still holds; each result is the thread's one tile, in
 // everything. It reads memory only — no CLI run — so it answers what the
 // grids show and nothing the user cannot navigate to.
-func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
+func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.FindResponse, error) {
 	q := strings.ToLower(strings.TrimSpace(req.Query))
 	if q == "" {
-		return &pluginv1.SearchResponse{}, nil
+		return &pluginv1.FindResponse{}, nil
 	}
 	limit := int(req.Limit)
 	if limit <= 0 {
 		limit = 50
 	}
-	resp := &pluginv1.SearchResponse{}
+	resp := &pluginv1.FindResponse{}
 	all := p.mem.All()
 	for i := len(all) - 1; i >= 0 && len(resp.Results) < limit; i-- { // newest first
 		t := all[i]
@@ -619,7 +619,7 @@ func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*plugin
 		if len(entries) == 0 {
 			continue
 		}
-		resp.Results = append(resp.Results, &pluginv1.SearchResult{
+		resp.Results = append(resp.Results, &pluginv1.FindResult{
 			Entry:       entries[0],
 			ContextPath: []string{mail.EverythingContext},
 			Snippet:     t.Snippet(),

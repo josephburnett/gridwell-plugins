@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// SnippetRunes bounds a search hit's preview.
+// SnippetRunes bounds a find hit's preview.
 const SnippetRunes = 240
 
 // Preview is Gmail's snippet on one line, bounded.

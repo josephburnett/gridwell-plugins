@@ -604,21 +604,21 @@ func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
 	return &pluginv1.ProbeResponse{Presence: p}
 }
 
-// Search matches the query against the subject, snippet and sender of every
+// Find matches the query against the subject, snippet and sender of every
 // message a label still holds; each result is the message's one tile, in all
 // mail. It reads memory only — no Gmail call — so it answers what the grids
-// show and nothing the user cannot navigate to. Gmail's own search is a
+// show and nothing the user cannot navigate to. Gmail's own query is a
 // bigger thing and would answer mail that has no tile.
-func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
+func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.FindResponse, error) {
 	q := strings.ToLower(strings.TrimSpace(req.Query))
 	if q == "" {
-		return &pluginv1.SearchResponse{}, nil
+		return &pluginv1.FindResponse{}, nil
 	}
 	limit := int(req.Limit)
 	if limit <= 0 {
 		limit = 50
 	}
-	resp := &pluginv1.SearchResponse{}
+	resp := &pluginv1.FindResponse{}
 	all := p.mem.AllMail()
 	for i := len(all) - 1; i >= 0 && len(resp.Results) < limit; i-- { // newest first
 		v := all[i]
@@ -630,7 +630,7 @@ func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*plugin
 		if len(entries) == 0 {
 			continue
 		}
-		resp.Results = append(resp.Results, &pluginv1.SearchResult{
+		resp.Results = append(resp.Results, &pluginv1.FindResult{
 			Entry:       entries[0],
 			ContextPath: []string{mailbox.AllMailContext},
 			Snippet:     v.Preview(),

@@ -91,9 +91,9 @@ Delete moves the file or directory to the user's trash, never unlinks it:
 
 Deleting something already gone succeeds.
 
-## Search
+## Find
 
-The plugin answers no search, so a search finds nothing in the tree. It
+The plugin finds nothing: a find comes back empty in the tree. It
 keeps no memory of the tree to look in, and walking the disk for a query is
 work nobody on screen asked for.
 

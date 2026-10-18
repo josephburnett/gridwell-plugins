@@ -709,7 +709,7 @@ func TestAnUnreadableCacheStartsColdAndSaysSo(t *testing.T) {
 	}
 }
 
-func TestSearchReadsMemoryOnly(t *testing.T) {
+func TestFindReadsMemoryOnly(t *testing.T) {
 	f := newFake()
 	f.boxes["laterbox"] = []mail.Thread{th(2, "invoice", "2026-01-04T09:00:00Z")}
 	p := stable(t, f, Options{})
@@ -718,7 +718,7 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := f.count("laterbox")
-	res, err := p.Search(ctx, &pluginv1.SearchRequest{Query: "invoice"})
+	res, err := p.Find(ctx, &pluginv1.FindRequest{Query: "invoice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,9 +729,9 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 		t.Errorf("context path = %v", got)
 	}
 	if f.count("laterbox") != before {
-		t.Error("search walked HEY")
+		t.Error("find walked HEY")
 	}
-	empty, _ := p.Search(ctx, &pluginv1.SearchRequest{Query: "  "})
+	empty, _ := p.Find(ctx, &pluginv1.FindRequest{Query: "  "})
 	if len(empty.Results) != 0 {
 		t.Error("an empty query matched")
 	}
