@@ -88,7 +88,7 @@ var Collections = []Collection{
 
 // EverythingContext is the union of every box: each thread once, its one
 // home. A box lists links to it (BoxEntries), so a thread that moves between
-// boxes keeps its tile and every reference to it. It is no box of HEY's, so
+// boxes keeps its tile and every link to it. It is no box of HEY's, so
 // nothing walks it; it is derived from the boxes' memory.
 const (
 	EverythingContext = "everything"
