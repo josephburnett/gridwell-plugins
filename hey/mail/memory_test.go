@@ -20,14 +20,14 @@ func keys(ts []Thread) []int64 {
 
 func TestWholeWalkReplacesMembership(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
-	if got, want := keys(m.Collection(ImboxContext)), []int64{1, 2}; !reflect.DeepEqual(got, want) {
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{1, 2}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("imbox = %v, want %v", got, want)
 	}
 	// Thread 1 archived at HEY: a whole walk no longer sees it, so it leaves
 	// the grid. The record survives, so its tile can still read as the email.
-	m.Absorb(ImboxContext, []Thread{thread(2, "b", "2026-01-03")}, true)
-	if got, want := keys(m.Collection(ImboxContext)), []int64{2}; !reflect.DeepEqual(got, want) {
+	m.Absorb(ImboxGrid, []Thread{thread(2, "b", "2026-01-03")}, true)
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{2}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("after archive imbox = %v, want %v", got, want)
 	}
 	if _, ok := m.Get(1); !ok {
@@ -44,24 +44,24 @@ func TestWholeWalkReplacesMembership(t *testing.T) {
 func TestARepliedThreadIsMovedInPlace(t *testing.T) {
 	m := NewMemory()
 	one := thread(1, "a", "2026-01-02")
-	m.Absorb(ImboxContext, []Thread{one}, true)
+	m.Absorb(ImboxGrid, []Thread{one}, true)
 	one.ActiveAt = at("2026-01-02T10:00:00Z")
-	if eff := m.Apply(ImboxContext, Event{Change: ChangeUpdated, Thread: one}); len(eff.Moved) != 0 {
+	if eff := m.Apply(ImboxGrid, Event{Change: ChangeUpdated, Thread: one}); len(eff.Moved) != 0 {
 		t.Errorf("a stamp first known moved %v", eff.Moved)
 	}
 	one.Seen = true
-	if eff := m.Apply(ImboxContext, Event{Change: ChangeUpdated, Thread: one}); len(eff.Moved) != 0 || !eff.Changed {
+	if eff := m.Apply(ImboxGrid, Event{Change: ChangeUpdated, Thread: one}); len(eff.Moved) != 0 || !eff.Changed {
 		t.Errorf("a seen line: %+v, want the listing changed and nothing moved", eff)
 	}
 	one.ActiveAt = at("2026-01-03T10:00:00Z")
-	if eff := m.Apply(ImboxContext, Event{Change: ChangeUpdated, Thread: one}); !reflect.DeepEqual(eff.Moved, []int64{1}) {
+	if eff := m.Apply(ImboxGrid, Event{Change: ChangeUpdated, Thread: one}); !reflect.DeepEqual(eff.Moved, []int64{1}) {
 		t.Errorf("a reply moved %v, want [1]", eff.Moved)
 	}
 	one.ActiveAt = at("2026-01-04T10:00:00Z")
-	if eff := m.Absorb(ImboxContext, []Thread{one}, true); !reflect.DeepEqual(eff.Moved, []int64{1}) {
+	if eff := m.Absorb(ImboxGrid, []Thread{one}, true); !reflect.DeepEqual(eff.Moved, []int64{1}) {
 		t.Errorf("a walk that read a reply moved %v, want [1]", eff.Moved)
 	}
-	if eff := m.Absorb(ImboxContext, []Thread{one}, true); len(eff.Moved) != 0 {
+	if eff := m.Absorb(ImboxGrid, []Thread{one}, true); len(eff.Moved) != 0 {
 		t.Errorf("an unchanged walk moved %v", eff.Moved)
 	}
 }
@@ -70,68 +70,68 @@ func TestARepliedThreadIsMovedInPlace(t *testing.T) {
 // only safe fold, or a capped listing would empty the user's grid.
 func TestPartialWalkOnlyAdds(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
-	m.Absorb(ImboxContext, []Thread{thread(3, "c", "2026-01-04")}, false)
-	if got, want := keys(m.Collection(ImboxContext)), []int64{1, 2, 3}; !reflect.DeepEqual(got, want) {
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ImboxGrid, []Thread{thread(3, "c", "2026-01-04")}, false)
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{1, 2, 3}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("imbox = %v, want %v", got, want)
 	}
 }
 
-// Nothing is ever GONE until every collection has been read to its end: a
+// Nothing is ever GONE until every grid has been read to its end: a
 // thread missing from a half-swept memory may simply be in the half not read.
-func TestSweptNeedsEveryCollection(t *testing.T) {
+func TestSweptNeedsEveryGrid(t *testing.T) {
 	m := NewMemory()
 	if m.Swept() {
 		t.Fatal("a cold memory reports itself swept")
 	}
-	for _, c := range Collections[:len(Collections)-1] {
+	for _, c := range Grids[:len(Grids)-1] {
 		m.Absorb(c.Key, nil, true)
 	}
 	if m.Swept() {
-		t.Fatal("all but one collection reported a full sweep")
+		t.Fatal("all but one grid reported a full sweep")
 	}
-	m.Absorb(Collections[len(Collections)-1].Key, nil, true)
+	m.Absorb(Grids[len(Grids)-1].Key, nil, true)
 	if !m.Swept() {
-		t.Fatal("every collection walked whole did not make a sweep")
+		t.Fatal("every grid walked whole did not make a sweep")
 	}
-	// A partial walk of one collection does not un-sweep the memory: the box
+	// A partial walk of one grid does not un-sweep the memory: the box
 	// HAS been read to its end once, and that is what the flag records.
-	m.Absorb(SetAsideContext, nil, false)
+	m.Absorb(SetAsideGrid, nil, false)
 	if !m.Swept() {
 		t.Fatal("a later partial walk forgot the completed one")
 	}
 }
 
-// A thread that moves between collections keeps its key and its record, and
-// belongs to exactly the collection that last listed it.
-func TestAThreadMovesBetweenCollections(t *testing.T) {
+// A thread that moves between grids keeps its key and its record, and
+// belongs to exactly the grid that last listed it.
+func TestAThreadMovesBetweenGrids(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
-	m.Absorb(ReplyLaterContext, []Thread{thread(1, "a", "2026-01-02")}, true)
-	m.Absorb(ImboxContext, nil, true)
-	if got := m.Collection(ImboxContext); len(got) != 0 {
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
+	m.Absorb(ReplyLaterGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
+	m.Absorb(ImboxGrid, nil, true)
+	if got := m.Grid(ImboxGrid); len(got) != 0 {
 		t.Fatalf("imbox still holds %v", keys(got))
 	}
-	if got, want := keys(m.Collection(ReplyLaterContext)), []int64{1}; !reflect.DeepEqual(got, want) {
+	if got, want := keys(m.Grid(ReplyLaterGrid)), []int64{1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("reply later = %v, want %v", got, want)
 	}
 	th, ok := m.Get(1)
-	if !ok || th.Collection != ReplyLaterContext {
-		t.Fatalf("thread 1 records collection %q", th.Collection)
+	if !ok || th.Grid != ReplyLaterGrid {
+		t.Fatalf("thread 1 records grid %q", th.Grid)
 	}
 	if !m.Member(1) {
 		t.Error("a thread in reply later is not a member")
 	}
 }
 
-func TestCollectionIsOldestFirstAndTotal(t *testing.T) {
+func TestGridIsOldestFirstAndTotal(t *testing.T) {
 	m := NewMemory()
 	// Same instant, listed newest first, as HEY answers.
 	a := Thread{TopicID: 9, CreatedAt: at("2026-01-05T09:00:00Z")}
 	b := Thread{TopicID: 4, CreatedAt: at("2026-01-05T09:00:00Z")}
 	c := Thread{TopicID: 2, CreatedAt: at("2026-01-01T09:00:00Z")}
-	m.Absorb(ImboxContext, []Thread{a, b, c}, true)
-	if got, want := keys(m.Collection(ImboxContext)), []int64{2, 4, 9}; !reflect.DeepEqual(got, want) {
+	m.Absorb(ImboxGrid, []Thread{a, b, c}, true)
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{2, 4, 9}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}
 }
@@ -140,9 +140,9 @@ func TestCollectionIsOldestFirstAndTotal(t *testing.T) {
 // listed again, across a restart too; one still in another box is none.
 func TestAThreadInNoBoxIsAStray(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
-	m.Absorb(ReplyLaterContext, []Thread{thread(2, "b", "2026-01-03")}, true)
-	m.Absorb(ImboxContext, nil, true)
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ReplyLaterGrid, []Thread{thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ImboxGrid, nil, true)
 	back := NewMemory()
 	back.Restore(m.Snapshot())
 	if got := back.TakeStrays(10); !reflect.DeepEqual(got, []int64{1}) {
@@ -151,7 +151,7 @@ func TestAThreadInNoBoxIsAStray(t *testing.T) {
 	if got := back.TakeStrays(10); len(got) != 0 {
 		t.Fatalf("a stray handed out twice: %v", got)
 	}
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
 	if got := m.TakeStrays(10); len(got) != 0 {
 		t.Fatalf("a thread listed again is still a stray: %v", got)
 	}
@@ -165,8 +165,8 @@ func TestAThreadInNoBoxIsAStray(t *testing.T) {
 // and the queue keeps its order across a restart.
 func TestStraysAreAskedAboutInTurn(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(3, "c", "2026-01-01"), thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
-	m.Absorb(ImboxContext, nil, true)
+	m.Absorb(ImboxGrid, []Thread{thread(3, "c", "2026-01-01"), thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ImboxGrid, nil, true)
 	var asked []int64
 	for range 4 {
 		got := m.TakeStrays(2)
@@ -187,8 +187,8 @@ func TestStraysAreAskedAboutInTurn(t *testing.T) {
 // asked about once) queues it again on restore, behind the strays it names.
 func TestRestoreQueuesARecordInNoBox(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
-	m.Absorb(ImboxContext, nil, true)
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ImboxGrid, nil, true)
 	snap := m.Snapshot()
 	snap.Strays = []int64{2}
 	back := NewMemory()
@@ -200,8 +200,8 @@ func TestRestoreQueuesARecordInNoBox(t *testing.T) {
 
 func TestSnapshotRoundTrips(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
-	m.Absorb(ReplyLaterContext, []Thread{thread(2, "b", "2026-01-03")}, false)
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
+	m.Absorb(ReplyLaterGrid, []Thread{thread(2, "b", "2026-01-03")}, false)
 
 	raw, err := json.Marshal(m.Snapshot())
 	if err != nil {
@@ -214,10 +214,10 @@ func TestSnapshotRoundTrips(t *testing.T) {
 	back := NewMemory()
 	back.Restore(snap)
 
-	if got, want := keys(back.Collection(ImboxContext)), []int64{1}; !reflect.DeepEqual(got, want) {
+	if got, want := keys(back.Grid(ImboxGrid)), []int64{1}; !reflect.DeepEqual(got, want) {
 		t.Errorf("imbox = %v, want %v", got, want)
 	}
-	if got, want := keys(back.Collection(ReplyLaterContext)), []int64{2}; !reflect.DeepEqual(got, want) {
+	if got, want := keys(back.Grid(ReplyLaterGrid)), []int64{2}; !reflect.DeepEqual(got, want) {
 		t.Errorf("reply later = %v, want %v", got, want)
 	}
 	// Completeness rides the snapshot: a restart must not be able to say GONE
@@ -225,7 +225,7 @@ func TestSnapshotRoundTrips(t *testing.T) {
 	if back.Swept() {
 		t.Error("a restored half sweep reports itself swept")
 	}
-	for _, c := range Collections[1:] {
+	for _, c := range Grids[1:] {
 		back.Absorb(c.Key, nil, true)
 	}
 	if !back.Swept() {

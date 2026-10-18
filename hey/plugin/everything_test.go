@@ -23,7 +23,7 @@ func TestEverythingIsEveryThreadOnceAndBoxesLinkToIt(t *testing.T) {
 	p := stable(t, f, Options{})
 	ctx := context.Background()
 
-	all, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext})
+	all, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.EverythingGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,12 +41,12 @@ func TestEverythingIsEveryThreadOnceAndBoxesLinkToIt(t *testing.T) {
 		t.Error("everything listed authoritatively; absence is Probe's answer")
 	}
 
-	later, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ReplyLaterContext})
+	later, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ReplyLaterGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range later.Entries {
-		if lt := e.GetLinkTarget(); lt == nil || lt.Context != mail.EverythingContext || lt.Key != e.Key {
+		if lt := e.GetLinkTarget(); lt == nil || lt.Grid != mail.EverythingGrid || lt.Key != e.Key {
 			t.Errorf("reply later's %s links to %+v, want the thread in everything", e.Key, lt)
 		}
 	}
@@ -64,7 +64,7 @@ func TestOneFailingBoxLeavesEverythingServing(t *testing.T) {
 	p := stable(t, f, Options{})
 	ctx := context.Background()
 
-	all, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext})
+	all, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.EverythingGrid})
 	if err != nil {
 		t.Fatalf("one failing box refused everything: %v", err)
 	}
@@ -78,11 +78,11 @@ func TestOneFailingBoxLeavesEverythingServing(t *testing.T) {
 	if !strings.Contains(all.Unreachable, "no box of kind feedbox") {
 		t.Errorf("everything's unreachable = %q, want the feed's failure", all.Unreachable)
 	}
-	feed, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.FeedContext})
+	feed, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.FeedGrid})
 	if err != nil || !strings.Contains(feed.Unreachable, "no box of kind feedbox") {
 		t.Errorf("the failing box = %+v, %v; want memory and its reason", feed, err)
 	}
-	imbox, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+	imbox, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	if err != nil || imbox.Unreachable != "" {
 		t.Errorf("a box that reads = %+v, %v; want no reason", imbox, err)
 	}
@@ -90,16 +90,16 @@ func TestOneFailingBoxLeavesEverythingServing(t *testing.T) {
 	f.mu.Lock()
 	delete(f.boxErr, "feedbox")
 	f.mu.Unlock()
-	p.flights.Rewalk(mail.FeedContext)
+	p.flights.Rewalk(mail.FeedGrid)
 	idle(t, p)
-	if all, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext}); err != nil || all.Unreachable != "" {
+	if all, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.EverythingGrid}); err != nil || all.Unreachable != "" {
 		t.Errorf("everything after the box reads again = %q, %v", all.GetUnreachable(), err)
 	}
 }
 
-// Probe answers for the context the node asks about: a box for its own
+// Probe answers for the grid the node asks about: a box for its own
 // membership, everything for whether HEY still has the thread at all.
-func TestProbeAnswersForTheContextAsked(t *testing.T) {
+func TestProbeAnswersForTheGridAsked(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	f.whole["laterbox"] = false
@@ -108,36 +108,36 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 	f.html[8] = "<!doctype html>"
 	p := stable(t, f, Options{})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.EverythingContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.EverythingGrid}); err != nil {
 		t.Fatal(err)
 	}
-	probe := func(context, key string) pluginv1.ProbeResponse_Presence {
+	probe := func(gridKey, key string) pluginv1.ProbeResponse_Presence {
 		t.Helper()
-		got, err := p.Probe(ctx, &pluginv1.ProbeRequest{Context: context, Key: key})
+		got, err := p.Probe(ctx, &pluginv1.ProbeRequest{Grid: gridKey, Key: key})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return got.Presence
 	}
 	for _, c := range []struct {
-		context, key string
+		gridKey, key string
 		want         pluginv1.ProbeResponse_Presence
 	}{
-		{mail.ImboxContext, "thread:1", pluginv1.ProbeResponse_PRESENCE_PRESENT},
-		{mail.ImboxContext, "thread:2", pluginv1.ProbeResponse_PRESENCE_GONE},             // the imbox was read whole
-		{mail.ReplyLaterContext, "thread:2", pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, // a capped read says nothing
-		{mail.EverythingContext, "thread:1", pluginv1.ProbeResponse_PRESENCE_PRESENT},
-		{mail.EverythingContext, "thread:8", pluginv1.ProbeResponse_PRESENCE_PRESENT},     // in no box, but HEY has it
-		{mail.EverythingContext, "thread:9", pluginv1.ProbeResponse_PRESENCE_GONE},        // HEY says it does not exist
-		{mail.EverythingContext, "thread:7", pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, // HEY cannot say right now
-		{"box:spambox", "thread:1", pluginv1.ProbeResponse_PRESENCE_GONE},                 // a context never listed
+		{mail.ImboxGrid, "thread:1", pluginv1.ProbeResponse_PRESENCE_PRESENT},
+		{mail.ImboxGrid, "thread:2", pluginv1.ProbeResponse_PRESENCE_GONE},             // the imbox was read whole
+		{mail.ReplyLaterGrid, "thread:2", pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, // a capped read says nothing
+		{mail.EverythingGrid, "thread:1", pluginv1.ProbeResponse_PRESENCE_PRESENT},
+		{mail.EverythingGrid, "thread:8", pluginv1.ProbeResponse_PRESENCE_PRESENT},     // in no box, but HEY has it
+		{mail.EverythingGrid, "thread:9", pluginv1.ProbeResponse_PRESENCE_GONE},        // HEY says it does not exist
+		{mail.EverythingGrid, "thread:7", pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, // HEY cannot say right now
+		{"box:spambox", "thread:1", pluginv1.ProbeResponse_PRESENCE_GONE},              // a gridKey never listed
 	} {
-		if got := probe(c.context, c.key); got != c.want {
-			t.Errorf("Probe(%s, %s) = %v, want %v", c.context, c.key, got, c.want)
+		if got := probe(c.gridKey, c.key); got != c.want {
+			t.Errorf("Probe(%s, %s) = %v, want %v", c.gridKey, c.key, got, c.want)
 		}
 	}
 	before := f.count("thread")
-	probe(mail.EverythingContext, "thread:1")
+	probe(mail.EverythingGrid, "thread:1")
 	if f.count("thread") != before {
 		t.Error("a thread a box holds cost a CLI run to probe")
 	}

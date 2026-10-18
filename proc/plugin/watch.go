@@ -18,15 +18,15 @@ const PollEvery = 2 * time.Second
 // Watch announces a shown pid when its listing changes, and tells its @info
 // entry when that body changes; see memo.Changes.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
-	return p.changes.Serve(req.GetContexts(), stream)
+	return p.changes.Serve(req.GetGrids(), stream)
 }
 
-// follow is one shown context's work. It reads the context's child set and
-// its @info stamp at once and every PollEvery after, announces the context
+// follow is one shown grid's work. It reads the grid's child set and
+// its @info stamp at once and every PollEvery after, announces the grid
 // when the child set differs from the last read that succeeded, and tells
 // the @info entry when its stamp does: a read that fails is not a change.
 func (p *Plugin) follow(ctx context.Context, key string) {
-	pid, err := contextPID(key)
+	pid, err := gridPID(key)
 	if err != nil {
 		return
 	}

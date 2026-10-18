@@ -9,7 +9,7 @@ four things.
 | `File[T]` | the cache file in `state_dir` | `cache.db`'s contract, 14 |
 | `Flights` | one shared walk per key, and how a read answers | 7, 13, 14 |
 | `Changes` | the `Watch` fan-out, and when background work runs | 8, 9, 18 |
-| `Life` | the context walks and work run under | 13 |
+| `Life` | the grid walks and work run under | 13 |
 
 ## File
 
@@ -47,17 +47,17 @@ the File is nil and both are no-ops.
 
 `NewChanges(life, ChangeOptions{Work, Do, Unscoped, ...})`.
 
-- `Serve(req.Contexts, stream)` is the plugin's whole `Watch`. It starts the
-  scope's work, sends the header, and sends one `ContextChanged` per queued
-  context, then one `EntryChanged` per queued entry.
-- `Publish(contexts...)` reaches every stream without waiting on any. A
-  context queued twice is sent once. A stream owed more than `Buffer`
-  contexts is sent its whole scope instead.
-- `PublishEntry(context, entry)` says one entry changed in place (rule 18):
+- `Serve(req.Grids, stream)` is the plugin's whole `Watch`. It starts the
+  scope's work, sends the header, and sends one `GridChanged` per queued
+  grid, then one `EntryChanged` per queued entry.
+- `Publish(grids...)` reaches every stream without waiting on any. A
+  grid queued twice is sent once. A stream owed more than `Buffer`
+  grids is sent its whole scope instead.
+- `PublishEntry(grid, entry)` says one entry changed in place (rule 18):
   the entry as `List` answers it now, its `content_stamp` moved with its
   bytes. An entry queued twice is sent once, as published last, and no
   overflow drops one.
-- `Work` maps a context in scope to units of background work, and `Do` runs
+- `Work` maps a grid in scope to units of background work, and `Do` runs
   each unit while some stream needs it, ending `Linger` after the last
   leaves. This is the only place background work starts. `Poll` is the loop
   for a source that cannot tell. `Watching(unit)` reports whether a unit runs.
@@ -97,5 +97,5 @@ touched keeps its place whatever the zone.
 4. Replace the plugin's watch file with `Changes`. `Watch` becomes
    `return p.changes.Serve(req.GetContexts(), stream)`.
 5. Delete `Run` and the `go p.Run(...)` in `FromConfig`. The refresher, glance
-   or feed becomes a `Do`, and `Work` names which contexts need it.
+   or feed becomes a `Do`, and `Work` names which grids need it.
 6. Keep one test that the plugin's memory survives a restart through `File`.

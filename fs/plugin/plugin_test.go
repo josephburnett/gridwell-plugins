@@ -18,7 +18,7 @@ import (
 )
 
 // FromConfig is the one config→plugin derivation: a configured root is the
-// plugin's one collection, and no root means it declares none — listed,
+// plugin's one grid, and no root means it declares none — listed,
 // contributing nothing to the (+) menu, which is not a refusal and not a
 // failure.
 func TestFromConfigOwnsTheRootDerivation(t *testing.T) {
@@ -35,18 +35,18 @@ func TestFromConfigOwnsTheRootDerivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != "." || info.DisplayName != "docs" {
+	if len(info.Grids) != 1 || info.Grids[0].Grid != "." || info.DisplayName != "docs" {
 		t.Errorf("rooted → %v", info)
 	}
-	if info.RootContext != "" {
-		t.Errorf("root_context is retired; got %q", info.RootContext)
+	if info.RootGrid != "" {
+		t.Errorf("root_grid is retired; got %q", info.RootGrid)
 	}
 	impl, err = FromConfig(map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := impl.(*Plugin).Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 0 {
-		t.Errorf("unconfigured → %v, %v; want listed with no collection", info, err)
+	if info, err := impl.(*Plugin).Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.Grids) != 0 {
+		t.Errorf("unconfigured → %v, %v; want listed with no grid", info, err)
 	}
 }
 
@@ -134,8 +134,8 @@ func TestInfoRefusesARootItCannotServe(t *testing.T) {
 	if err := os.Mkdir(missing, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
-		t.Fatalf("root created after launch → Info %v, %v; want its one collection", info, err)
+	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.Grids) != 1 {
+		t.Fatalf("root created after launch → Info %v, %v; want its one grid", info, err)
 	}
 	// Once served, a root that goes away is a dark source, not a refusal.
 	if err := os.Remove(missing); err != nil {
@@ -148,8 +148,8 @@ func TestInfoRefusesARootItCannotServe(t *testing.T) {
 	if err := os.Mkdir(empty, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if info, err := New(empty, nil).Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
-		t.Errorf("empty root → Info %v, %v; want healthy with its one collection", info, err)
+	if info, err := New(empty, nil).Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.Grids) != 1 {
+		t.Errorf("empty root → Info %v, %v; want healthy with its one grid", info, err)
 	}
 }
 
@@ -273,17 +273,17 @@ func TestReadContentOfAnUnreadableFileIsUnavailable(t *testing.T) {
 	}
 }
 
-// A context that is now a file, or lies under one, has no entries, and that is
+// A grid that is now a file, or lies under one, has no entries, and that is
 // definitive: an authoritative empty listing, not a dark source, and a key
 // under a file probes gone.
-func TestListOfAContextThatIsAFileIsAuthoritativeAndEmpty(t *testing.T) {
+func TestListOfAGridThatIsAFileIsAuthoritativeAndEmpty(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "was-a-dir"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	p := New(root, nil)
 	for _, ctxKey := range []string{"was-a-dir", "was-a-dir/sub"} {
-		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctxKey})
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctxKey})
 		if err != nil || !resp.Authoritative || len(resp.Entries) != 0 {
 			t.Errorf("List(%q) = %v, %v; want an authoritative empty listing", ctxKey, resp, err)
 		}

@@ -354,7 +354,7 @@ func TestWeeksAndEntries(t *testing.T) {
 		t.Fatalf("weeks = %+v", weeks)
 	}
 	root := RootEntries(weeks)
-	if root[0].Key != "week:2026-08-24" || root[0].ChildContext != root[0].Key || root[0].PlacementHint.X != 3 || root[0].PlacementHint.Y != 0 || root[1].PlacementHint.X != 2 || root[1].PlacementHint.Y != 0 {
+	if root[0].Key != "week:2026-08-24" || root[0].ChildGrid != root[0].Key || root[0].PlacementHint.X != 3 || root[0].PlacementHint.Y != 0 || root[1].PlacementHint.X != 2 || root[1].PlacementHint.Y != 0 {
 		t.Errorf("root entries = %v", root)
 	}
 	if root[1].Label != "2026-08-17" {
@@ -769,7 +769,7 @@ func (g *growing) Page(ctx context.Context, state string, page int) (Reply, erro
 	return r, err
 }
 
-// A memory answers what a walk changed, context by context, and nothing for a
+// A memory answers what a walk changed, grid by grid, and nothing for a
 // walk that changed nothing: that diff is what the plugin announces to the
 // node, so a change it misses never repaints and a change it invents
 // repaints for nothing.
@@ -781,9 +781,9 @@ func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
 		if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 			t.Fatal(err)
 		}
-		return m.TakeChanges().Contexts()
+		return m.TakeChanges().Grids()
 	}
-	if got := sync(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-17", "week:2026-08-10"}) {
+	if got := sync(); !reflect.DeepEqual(got, []string{RootGrid, "week:2026-08-17", "week:2026-08-10"}) {
 		t.Errorf("first walk changed %v", got)
 	}
 	if got := sync(); got != nil {
@@ -791,7 +791,7 @@ func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
 	}
 	// Todo 1 leaves pending: its week and the root's counts move.
 	src.pending = src.pending[1:]
-	if got := sync(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-10"}) {
+	if got := sync(); !reflect.DeepEqual(got, []string{RootGrid, "week:2026-08-10"}) {
 		t.Errorf("a derived done changed %v", got)
 	}
 	// A retitled todo moves its week's listing and not the root's counts.
@@ -801,17 +801,17 @@ func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
 	}
 	// Mark-done is a change like any other; a second one is none.
 	m.MarkDone(2)
-	if got := m.TakeChanges().Contexts(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-17"}) {
+	if got := m.TakeChanges().Grids(); !reflect.DeepEqual(got, []string{RootGrid, "week:2026-08-17"}) {
 		t.Errorf("mark-done changed %v", got)
 	}
 	m.MarkDone(2)
-	if got := m.TakeChanges().Contexts(); got != nil {
+	if got := m.TakeChanges().Grids(); got != nil {
 		t.Errorf("a repeated mark-done changed %v", got)
 	}
 	// A restore is what was already answered: nothing to announce.
 	fresh := NewMemory()
 	fresh.Restore(m.Snapshot())
-	if got := fresh.TakeChanges().Contexts(); got != nil {
+	if got := fresh.TakeChanges().Grids(); got != nil {
 		t.Errorf("a restore changed %v", got)
 	}
 }
@@ -836,8 +836,8 @@ func TestABodyChangedInPlaceIsItsTodoNotItsWeek(t *testing.T) {
 	before, _ := m.Get(2)
 	src.pending[1].Body = "a new note"
 	got := sync()
-	if got.Contexts() != nil {
-		t.Errorf("a body change moved listings %v", got.Contexts())
+	if got.Grids() != nil {
+		t.Errorf("a body change moved listings %v", got.Grids())
 	}
 	if len(got.Todos) != 1 || got.Todos[0].ID != 2 || got.Todos[0].Body != "a new note" {
 		t.Fatalf("a body change named %v, want todo 2 as it is now", got.Todos)
@@ -845,13 +845,13 @@ func TestABodyChangedInPlaceIsItsTodoNotItsWeek(t *testing.T) {
 	if Stamp(Markdown(&before)) == Stamp(Markdown(&got.Todos[0])) {
 		t.Error("the body moved and its stamp did not")
 	}
-	if got := sync(); got.Contexts() != nil || len(got.Todos) != 0 {
-		t.Errorf("an unchanged walk changed %v and %d todos", got.Contexts(), len(got.Todos))
+	if got := sync(); got.Grids() != nil || len(got.Todos) != 0 {
+		t.Errorf("an unchanged walk changed %v and %d todos", got.Grids(), len(got.Todos))
 	}
 	// Done shows in the body and in the listing: both move.
 	m.MarkDone(1)
-	if got := m.TakeChanges(); len(got.Todos) != 1 || got.Todos[0].ID != 1 || got.Contexts() == nil {
-		t.Errorf("mark-done changed %v and %v; want todo 1 and its listings", got.Contexts(), got.Todos)
+	if got := m.TakeChanges(); len(got.Todos) != 1 || got.Todos[0].ID != 1 || got.Grids() == nil {
+		t.Errorf("mark-done changed %v and %v; want todo 1 and its listings", got.Grids(), got.Todos)
 	}
 }
 
@@ -887,7 +887,7 @@ func TestAGlancePagesOnlyToTheFirstKnownTodo(t *testing.T) {
 	if one, _ := m.Get(1); one.Done() {
 		t.Error("a glance judged absence")
 	}
-	if got := m.TakeChanges().Contexts(); !reflect.DeepEqual(got, []string{RootContext, "week:2026-08-24"}) {
+	if got := m.TakeChanges().Grids(); !reflect.DeepEqual(got, []string{RootGrid, "week:2026-08-24"}) {
 		t.Errorf("the glance changed %v", got)
 	}
 }
@@ -945,7 +945,7 @@ func TestAMarkOutlivesAPageFetchedBeforeIt(t *testing.T) {
 	if got, _ := m.Get(1); got.State != StateDone {
 		t.Errorf("a page fetched before the mark flipped the todo back to %q", got.State)
 	}
-	if got := m.TakeChanges().Contexts(); got != nil {
+	if got := m.TakeChanges().Grids(); got != nil {
 		t.Errorf("the stale page announced %v", got)
 	}
 	close(done.release)

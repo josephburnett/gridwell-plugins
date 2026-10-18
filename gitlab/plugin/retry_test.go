@@ -94,7 +94,7 @@ func TestACancelledContextStopsRetrying(t *testing.T) {
 func TestTheWalkSurvivesAFlakyPage(t *testing.T) {
 	src := &flaky{err: status.Error(codes.Unavailable, "reset"), failures: 1}
 	p := New(src, Options{})
-	root, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext})
+	root, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid})
 	if err != nil {
 		t.Fatalf("List = %v; one flaky page must not fail the walk", err)
 	}

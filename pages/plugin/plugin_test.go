@@ -54,7 +54,7 @@ func serve(t *testing.T, p *Plugin, key, subpath string) *pluginv1.ServeContentC
 // serves_page beside an empty url_string says.
 func TestAPageDocIsAURLRowAndANoteATextRow(t *testing.T) {
 	p := New()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: site.RootContext})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: site.RootGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,11 +101,11 @@ func TestAPageDocIsAURLRowAndANoteATextRow(t *testing.T) {
 	}
 }
 
-// The site has one context. Any other answers an empty AUTHORITATIVE listing,
+// The site has one grid. Any other answers an empty AUTHORITATIVE listing,
 // which is the honest answer for a fixed site: there is nothing there, not
 // "nothing seen this pass".
-func TestAnyOtherContextIsEmptyAndAuthoritative(t *testing.T) {
-	resp, err := New().List(context.Background(), &pluginv1.ListRequest{Context: "elsewhere"})
+func TestAnyOtherGridIsEmptyAndAuthoritative(t *testing.T) {
+	resp, err := New().List(context.Background(), &pluginv1.ListRequest{Grid: "elsewhere"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,39 +195,39 @@ func TestReadContentAnswersMarkdown(t *testing.T) {
 func TestProbeIsDefinitiveBothWays(t *testing.T) {
 	p := New()
 	ctx := context.Background()
-	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "hello", Context: site.RootContext})
+	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "hello", Grid: site.RootGrid})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_PRESENT {
 		t.Errorf("Probe(hello) = %v", got.Presence)
 	}
-	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "gone", Context: site.RootContext})
+	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "gone", Grid: site.RootGrid})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_GONE {
 		t.Errorf("Probe(gone) = %v", got.Presence)
 	}
 }
 
-// Probe answers for the context the request names (standard rule 6): a key
-// the site holds is GONE from a context the site does not list it in, and an
-// empty context asks after the plugin as a whole.
-func TestProbeAnswersForTheContextAsked(t *testing.T) {
+// Probe answers for the grid the request names (standard rule 6): a key
+// the site holds is GONE from a grid the site does not list it in, and an
+// empty grid asks after the plugin as a whole.
+func TestProbeAnswersForTheGridAsked(t *testing.T) {
 	p := New()
 	for _, c := range []struct {
-		context string
+		gridKey string
 		want    pluginv1.ProbeResponse_Presence
 	}{
-		{site.RootContext, pluginv1.ProbeResponse_PRESENCE_PRESENT},
+		{site.RootGrid, pluginv1.ProbeResponse_PRESENCE_PRESENT},
 		{"elsewhere", pluginv1.ProbeResponse_PRESENCE_GONE},
 		{"", pluginv1.ProbeResponse_PRESENCE_PRESENT},
 	} {
-		got, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: "hello", Context: c.context})
+		got, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: "hello", Grid: c.gridKey})
 		if err != nil || got.Presence != c.want {
-			t.Errorf("Probe(hello in %q) = %v, %v; want %v", c.context, got.GetPresence(), err, c.want)
+			t.Errorf("Probe(hello in %q) = %v, %v; want %v", c.gridKey, got.GetPresence(), err, c.want)
 		}
 	}
 }
 
-// Info declares the one collection and, unlike fs and proc, NOT host content:
+// Info declares the one grid and, unlike fs and proc, NOT host content:
 // these pages are the plugin's own, not a window onto state outside Gridwell.
-func TestInfoDeclaresTheCollectionAndNotHostContent(t *testing.T) {
+func TestInfoDeclaresTheGridAndNotHostContent(t *testing.T) {
 	impl, err := FromConfig(map[string]string{"uuid": "p1", "kind": Kind, "state_dir": "/tmp/x"})
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +236,7 @@ func TestInfoDeclaresTheCollectionAndNotHostContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Kind != Kind || len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != site.RootContext {
+	if info.Kind != Kind || len(info.Grids) != 1 || info.Grids[0].Grid != site.RootGrid {
 		t.Errorf("info = %v", info)
 	}
 	if info.HostContent {
@@ -255,7 +255,7 @@ func TestInfoDeclaresTheCollectionAndNotHostContent(t *testing.T) {
 // 11): the site never changes, so there is nothing worth noticing. Every hint
 // is the doc's own cell (rule 10), so it cannot move with the listing order.
 func TestEntriesAreQuietAndHintedByTheirDoc(t *testing.T) {
-	resp, err := New().List(context.Background(), &pluginv1.ListRequest{Context: site.RootContext})
+	resp, err := New().List(context.Background(), &pluginv1.ListRequest{Grid: site.RootGrid})
 	if err != nil {
 		t.Fatal(err)
 	}

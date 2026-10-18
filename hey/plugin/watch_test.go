@@ -51,7 +51,7 @@ func fixture(t *testing.T) []mail.Event {
 	return out
 }
 
-// watcher is one Watch subscriber: every context it is told changed lands on
+// watcher is one Watch subscriber: every grid it is told changed lands on
 // got. A non-nil block holds each Send until closed.
 type watcher struct {
 	pluginv1.Plugin_WatchServer
@@ -70,10 +70,10 @@ func (w *watcher) Send(c *pluginv1.Change) error {
 		<-w.block
 	}
 	if e := c.GetEntryChanged(); e != nil {
-		w.got <- "entry " + e.GetContext() + "/" + e.GetEntry().GetKey() + "@" + e.GetEntry().GetContentStamp()
+		w.got <- "entry " + e.GetGrid() + "/" + e.GetEntry().GetKey() + "@" + e.GetEntry().GetContentStamp()
 		return nil
 	}
-	w.got <- c.GetContextChanged().GetContext()
+	w.got <- c.GetGridChanged().GetGrid()
 	return nil
 }
 
@@ -132,7 +132,7 @@ func isLive(p *Plugin) bool {
 func idle(t *testing.T, p *Plugin) {
 	t.Helper()
 	eventually(t, "the walks land", func() bool {
-		for _, c := range mail.Collections {
+		for _, c := range mail.Grids {
 			if p.flights.Busy(c.Key) {
 				return false
 			}
@@ -196,8 +196,8 @@ func live(t *testing.T, o Options) (*Plugin, *fakeHEY, *watcher, []mail.Event) {
 	<-f.feed.starts
 	evs := fixture(t)
 	send(t, f.feed, evs[lineReady])
-	expect(t, w, mail.ImboxContext)
-	expect(t, w, mail.EverythingContext)
+	expect(t, w, mail.ImboxGrid)
+	expect(t, w, mail.EverythingGrid)
 	eventually(t, "every box is walked", func() bool {
 		return f.count("imbox") == 1 && f.count("laterbox") == 1 && f.count("asidebox") == 1
 	})
@@ -210,7 +210,7 @@ func live(t *testing.T, o Options) (*Plugin, *fakeHEY, *watcher, []mail.Event) {
 
 func listed(t *testing.T, p *Plugin, ctx string) []string {
 	t.Helper()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctx})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctx})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,33 +221,33 @@ func listed(t *testing.T, p *Plugin, ctx string) []string {
 	return keys
 }
 
-// Every thread line moves memory and tells the watcher which collections
+// Every thread line moves memory and tells the watcher which grids
 // changed, with no walk: a thread arrives, is read, and leaves, each line
 // moving its box and everything, and a line about another box moves that box.
 func TestTheFeedMovesTheListingAndTellsTheWatcher(t *testing.T) {
 	p, f, w, evs := live(t, Options{})
 
 	send(t, f.feed, evs[lineAdded])
-	expect(t, w, mail.ImboxContext)
-	expect(t, w, mail.EverythingContext)
-	if got := listed(t, p, mail.ImboxContext); !slices.Contains(got, "thread:103") {
+	expect(t, w, mail.ImboxGrid)
+	expect(t, w, mail.EverythingGrid)
+	if got := listed(t, p, mail.ImboxGrid); !slices.Contains(got, "thread:103") {
 		t.Fatalf("imbox = %v, want the added thread", got)
 	}
 
 	send(t, f.feed, evs[lineUpdated])
-	expect(t, w, mail.ImboxContext)
-	expect(t, w, mail.EverythingContext)
+	expect(t, w, mail.ImboxGrid)
+	expect(t, w, mail.EverythingGrid)
 	if got, _ := p.mem.Get(103); !got.Seen {
 		t.Error("the update did not land")
 	}
 
 	send(t, f.feed, evs[lineFeedbox])
-	expect(t, w, mail.FeedContext)
-	expect(t, w, mail.EverythingContext)
+	expect(t, w, mail.FeedGrid)
+	expect(t, w, mail.EverythingGrid)
 	send(t, f.feed, evs[lineDeleted])
-	expect(t, w, mail.ImboxContext)
-	expect(t, w, mail.EverythingContext)
-	if got := listed(t, p, mail.ImboxContext); slices.Contains(got, "thread:103") {
+	expect(t, w, mail.ImboxGrid)
+	expect(t, w, mail.EverythingGrid)
+	if got := listed(t, p, mail.ImboxGrid); slices.Contains(got, "thread:103") {
 		t.Fatalf("imbox = %v, the deleted posting's thread stayed", got)
 	}
 	if n := f.count("imbox"); n != 1 {
@@ -265,16 +265,16 @@ func TestTheFeedMovesTheListingAndTellsTheWatcher(t *testing.T) {
 func TestAReplyIsToldAsTheThreadsEntry(t *testing.T) {
 	p, f, w, evs := live(t, Options{})
 	send(t, f.feed, evs[lineAdded])
-	expect(t, w, mail.ImboxContext)
-	expect(t, w, mail.EverythingContext)
+	expect(t, w, mail.ImboxGrid)
+	expect(t, w, mail.EverythingGrid)
 	before := everythingEntry(t, p, "thread:103")
 
 	reply := evs[lineAdded]
 	reply.Change = mail.ChangeUpdated
 	reply.Thread.ActiveAt = reply.Thread.ActiveAt.Add(time.Hour)
 	send(t, f.feed, reply)
-	expect(t, w, mail.ImboxContext)
-	expect(t, w, mail.EverythingContext)
+	expect(t, w, mail.ImboxGrid)
+	expect(t, w, mail.EverythingGrid)
 	now := everythingEntry(t, p, "thread:103")
 	if now.GetContentStamp() == before.GetContentStamp() {
 		t.Fatalf("the stamp stayed %q across a reply", now.GetContentStamp())
@@ -284,8 +284,8 @@ func TestAReplyIsToldAsTheThreadsEntry(t *testing.T) {
 	seen := reply
 	seen.Thread.Seen = true
 	send(t, f.feed, seen)
-	expect(t, w, mail.ImboxContext)
-	expect(t, w, mail.EverythingContext)
+	expect(t, w, mail.ImboxGrid)
+	expect(t, w, mail.EverythingGrid)
 	if got := quiet(w); len(got) != 0 {
 		t.Errorf("a seen line told %v", got)
 	}
@@ -294,7 +294,7 @@ func TestAReplyIsToldAsTheThreadsEntry(t *testing.T) {
 // everythingEntry is key's entry as everything's List answers it.
 func everythingEntry(t *testing.T, p *Plugin, key string) *pluginv1.Entry {
 	t.Helper()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.EverythingContext})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.EverythingGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,8 +312,8 @@ func TestResyncRereadsTheBox(t *testing.T) {
 	p, f, w, evs := live(t, Options{})
 	f.setBox("laterbox", th(2, "invoice", "2026-01-04T09:00:00Z"))
 	send(t, f.feed, evs[lineResync])
-	expect(t, w, mail.ReplyLaterContext)
-	expect(t, w, mail.EverythingContext)
+	expect(t, w, mail.ReplyLaterGrid)
+	expect(t, w, mail.EverythingGrid)
 	idle(t, p)
 	if n := f.count("laterbox"); n != 2 {
 		t.Errorf("laterbox walked %d times, want 2", n)
@@ -327,8 +327,8 @@ func TestAReconnectCatchesUpEveryBox(t *testing.T) {
 	f.setBox("asidebox", th(3, "recipe", "2026-01-03T09:00:00Z"))
 	send(t, f.feed, evs[lineDisconnected])
 	send(t, f.feed, evs[lineReadyAgain])
-	expect(t, w, mail.SetAsideContext)
-	expect(t, w, mail.EverythingContext)
+	expect(t, w, mail.SetAsideGrid)
+	expect(t, w, mail.EverythingGrid)
 	idle(t, p)
 	for _, box := range []string{"imbox", "laterbox", "asidebox", "feedbox", "trailbox", "bubblebox"} {
 		if n := f.count(box); n != 2 {
@@ -497,7 +497,7 @@ func TestTheEndOfLifeStopsTheFeed(t *testing.T) {
 }
 
 // A watcher that stops reading never holds the feed or another watcher up,
-// and a burst it missed is owed once per context: one repaint each, not one
+// and a burst it missed is owed once per grid: one repaint each, not one
 // per change.
 func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 	p, f, fast, _ := live(t, Options{})
@@ -508,8 +508,8 @@ func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 		id := int64(1000 + i)
 		send(t, f.feed, mail.Event{Change: mail.ChangeAdded, Box: "imbox", PostingID: id,
 			Thread: th(id, "news", "2026-01-06T09:00:00Z")})
-		expect(t, fast, mail.ImboxContext)
-		expect(t, fast, mail.EverythingContext)
+		expect(t, fast, mail.ImboxGrid)
+		expect(t, fast, mail.EverythingGrid)
 	}
 	close(block)
 	got := quiet(slow)
@@ -519,7 +519,7 @@ func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 	}
 	// One change was in flight when the watcher stalled, and the burst
 	// collapsed behind it; the last change may land after the release.
-	if n[mail.ImboxContext] < 1 || n[mail.EverythingContext] < 1 || len(n) != 2 || len(got) > 6 {
+	if n[mail.ImboxGrid] < 1 || n[mail.EverythingGrid] < 1 || len(n) != 2 || len(got) > 6 {
 		t.Fatalf("a slow watcher missing %d changes was owed %v, want a few repaints of the imbox and everything", 3*memo.DefaultBuffer, got)
 	}
 }
@@ -534,7 +534,7 @@ func TestALiveFeedKeepsReadsFromWalking(t *testing.T) {
 	mu.Lock()
 	clock = clock.Add(time.Hour)
 	mu.Unlock()
-	for _, c := range mail.Collections {
+	for _, c := range mail.Grids {
 		listed(t, p, c.Key)
 	}
 	idle(t, p)
@@ -544,7 +544,7 @@ func TestALiveFeedKeepsReadsFromWalking(t *testing.T) {
 
 	send(t, f.feed, evs[lineDisconnected])
 	eventually(t, "the feed is down", func() bool { return !isLive(p) })
-	listed(t, p, mail.ImboxContext)
+	listed(t, p, mail.ImboxGrid)
 	idle(t, p)
 	if n := f.count("imbox"); n != 2 {
 		t.Fatalf("a stale read with the feed down walked %d times, want 2", n)
@@ -564,12 +564,12 @@ func TestAFailedCatchUpIsWalkedByTheNextRead(t *testing.T) {
 	f.mu.Lock()
 	f.err = nil
 	f.mu.Unlock()
-	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	idle(t, p)
 	if n := f.count("imbox"); n != 3 {
 		t.Fatalf("imbox walked %d times, want the first, the failed catch-up and the read's", n)
 	}
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatalf("a landed walk left the failure standing: %v", err)
 	}
 }
@@ -588,7 +588,7 @@ func TestAFeedVerdictIsEveryReadsReason(t *testing.T) {
 	}})
 	list := func() *pluginv1.ListResponse {
 		t.Helper()
-		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 		if err != nil {
 			t.Fatalf("the verdict refused a read: %v", err)
 		}
@@ -598,13 +598,13 @@ func TestAFeedVerdictIsEveryReadsReason(t *testing.T) {
 	repainted := func() {
 		t.Helper()
 		got := map[string]bool{}
-		eventually(t, "every context is repainted", func() bool {
+		eventually(t, "every gridKey is repainted", func() bool {
 			select {
 			case k := <-w.got:
 				got[k] = true
 			default:
 			}
-			for _, c := range contexts() {
+			for _, c := range gridKeys() {
 				if !got[c] {
 					return false
 				}
@@ -638,10 +638,10 @@ func TestTheEdgesOfAFailedWalkRepaint(t *testing.T) {
 	f.mu.Lock()
 	f.boxErr["laterbox"] = status.Error(codes.Unavailable, "network")
 	f.mu.Unlock()
-	p.flights.Rewalk(mail.ReplyLaterContext)
-	expect(t, w, mail.ReplyLaterContext)
-	expect(t, w, mail.EverythingContext)
-	p.flights.Rewalk(mail.ReplyLaterContext)
+	p.flights.Rewalk(mail.ReplyLaterGrid)
+	expect(t, w, mail.ReplyLaterGrid)
+	expect(t, w, mail.EverythingGrid)
+	p.flights.Rewalk(mail.ReplyLaterGrid)
 	idle(t, p)
 	if got := quiet(w); len(got) != 0 {
 		t.Fatalf("a second failure repainted %v", got)
@@ -649,9 +649,9 @@ func TestTheEdgesOfAFailedWalkRepaint(t *testing.T) {
 	f.mu.Lock()
 	delete(f.boxErr, "laterbox")
 	f.mu.Unlock()
-	p.flights.Rewalk(mail.ReplyLaterContext)
-	expect(t, w, mail.ReplyLaterContext)
-	expect(t, w, mail.EverythingContext)
+	p.flights.Rewalk(mail.ReplyLaterGrid)
+	expect(t, w, mail.ReplyLaterGrid)
+	expect(t, w, mail.EverythingGrid)
 }
 
 // A box's listing is authoritative only when it is definitive (rule 4): its
@@ -662,7 +662,7 @@ func TestTheEdgesOfAFailedWalkRepaint(t *testing.T) {
 func TestAuthoritativeOnlyWhenDefinitive(t *testing.T) {
 	authoritative := func(p *Plugin, ctx string) bool {
 		t.Helper()
-		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctx})
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctx})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -670,32 +670,32 @@ func TestAuthoritativeOnlyWhenDefinitive(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name    string
-		context string
+		gridKey string
 		then    func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event)
 		want    bool
 	}{
-		{"a whole walk under a live feed", mail.ImboxContext, nil, true},
-		{"everything", mail.EverythingContext, nil, false},
-		{"a capped walk", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, _ []mail.Event) {
+		{"a whole walk under a live feed", mail.ImboxGrid, nil, true},
+		{"everything", mail.EverythingGrid, nil, false},
+		{"a capped walk", mail.ImboxGrid, func(t *testing.T, p *Plugin, f *fakeHEY, _ []mail.Event) {
 			f.mu.Lock()
 			f.whole["imbox"] = false
 			f.mu.Unlock()
-			p.flights.Rewalk(mail.ImboxContext)
+			p.flights.Rewalk(mail.ImboxGrid)
 			idle(t, p)
 		}, false},
-		{"the feed down", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+		{"the feed down", mail.ImboxGrid, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
 			send(t, f.feed, evs[lineDisconnected])
 			eventually(t, "the feed is down", func() bool { return !isLive(p) })
 		}, false},
-		{"a resync in flight", mail.ReplyLaterContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+		{"a resync in flight", mail.ReplyLaterGrid, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
 			f.mu.Lock()
 			f.block = make(chan struct{})
 			f.mu.Unlock()
 			t.Cleanup(func() { close(f.block) })
 			send(t, f.feed, evs[lineResync])
-			eventually(t, "the resync walks", func() bool { return p.flights.Busy(mail.ReplyLaterContext) })
+			eventually(t, "the resync walks", func() bool { return p.flights.Busy(mail.ReplyLaterGrid) })
 		}, false},
-		{"a resync whose walk failed", mail.ReplyLaterContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+		{"a resync whose walk failed", mail.ReplyLaterGrid, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
 			f.mu.Lock()
 			f.boxErr["laterbox"] = status.Error(codes.Unavailable, "network")
 			f.mu.Unlock()
@@ -703,7 +703,7 @@ func TestAuthoritativeOnlyWhenDefinitive(t *testing.T) {
 			eventually(t, "the resync walks", func() bool { return f.count("laterbox") == 2 })
 			idle(t, p)
 		}, false},
-		{"a catch-up that failed", mail.ImboxContext, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
+		{"a catch-up that failed", mail.ImboxGrid, func(t *testing.T, p *Plugin, f *fakeHEY, evs []mail.Event) {
 			f.mu.Lock()
 			f.boxErr["imbox"] = status.Error(codes.Unavailable, "network")
 			f.mu.Unlock()
@@ -717,7 +717,7 @@ func TestAuthoritativeOnlyWhenDefinitive(t *testing.T) {
 			if c.then != nil {
 				c.then(t, p, f, evs)
 			}
-			if got := authoritative(p, c.context); got != c.want {
+			if got := authoritative(p, c.gridKey); got != c.want {
 				t.Errorf("authoritative = %v, want %v", got, c.want)
 			}
 		})

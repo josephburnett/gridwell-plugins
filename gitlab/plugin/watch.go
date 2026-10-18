@@ -5,14 +5,14 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// Watch streams a ContextChanged for every listing a change to memory moved,
+// Watch streams a GridChanged for every listing a change to memory moved,
 // and an EntryChanged for every todo whose body did: a walk landing, or
 // failing having absorbed pages, a glance, and a mark-done. A todo that
-// leaves pending is a ContextChanged for its week, where it stays listed
+// leaves pending is a GridChanged for its week, where it stays listed
 // done-marked (see the package comment), and its EntryChanged, since its
 // body says done.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
-	return p.changes.Serve(req.GetContexts(), stream)
+	return p.changes.Serve(req.GetGrids(), stream)
 }
 
 // announce hands every stream what memory's latest changes moved, and
@@ -20,7 +20,7 @@ func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchS
 // it once its change has landed.
 func (p *Plugin) announce() bool {
 	c := p.mem.TakeChanges()
-	cs := c.Contexts()
+	cs := c.Grids()
 	p.changes.Publish(cs...)
 	for i := range c.Todos {
 		week := todos.WeekStart(c.Todos[i].CreatedAt)

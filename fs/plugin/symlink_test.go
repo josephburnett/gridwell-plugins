@@ -44,7 +44,7 @@ func symlinkTree(t *testing.T) (root, outside string) {
 
 func listed(t *testing.T, p *Plugin, ctxKey string) (*pluginv1.ListResponse, map[string]*pluginv1.Entry) {
 	t.Helper()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctxKey})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctxKey})
 	if err != nil {
 		t.Fatalf("List(%q): %v", ctxKey, err)
 	}
@@ -58,7 +58,7 @@ func listed(t *testing.T, p *Plugin, ctxKey string) (*pluginv1.ListResponse, map
 // A symlink is a link to the thing it lands on, so every real file and
 // directory has one key: a linked file is an entry whose link_target is the
 // file's own key, and a linked directory a door onto the directory's own
-// context, so a link back up the tree is one grid, not an endless descent.
+// grid, so a link back up the tree is one grid, not an endless descent.
 // A link out of the root, or to nothing, targets a key this plugin never
 // lists, which the node reads as dead.
 func TestSymlinksListAsLinksToTheOneKey(t *testing.T) {
@@ -73,13 +73,13 @@ func TestSymlinksListAsLinksToTheOneKey(t *testing.T) {
 		return nil
 	}
 	for key, want := range map[string]*pluginv1.EntryRef{
-		"file":   {Context: ".", Key: "real.md"},
-		"broken": {Context: ".", Key: "missing.md"},
-		"out":    {Context: "../outside", Key: "../outside/secret.txt"},
-		"outdir": {Context: "..", Key: "../outside"},
+		"file":   {Grid: ".", Key: "real.md"},
+		"broken": {Grid: ".", Key: "missing.md"},
+		"out":    {Grid: "../outside", Key: "../outside/secret.txt"},
+		"outdir": {Grid: "..", Key: "../outside"},
 	} {
 		got := ref(key)
-		if got.GetContext() != want.Context || got.GetKey() != want.Key {
+		if got.GetGrid() != want.Grid || got.GetKey() != want.Key {
 			t.Errorf("%s links to %v, want %v", key, got, want)
 		}
 		if top[key].GetKind() == "door" {
@@ -90,7 +90,7 @@ func TestSymlinksListAsLinksToTheOneKey(t *testing.T) {
 		t.Errorf("file = %v, want a text link labelled with its own name", top["file"])
 	}
 	for key, child := range map[string]string{"dirlink": "dir", "cycle": "."} {
-		if e := top[key]; e.GetKind() != "door" || e.GetChildContext() != child || e.GetLinkTarget() != nil {
+		if e := top[key]; e.GetKind() != "door" || e.GetChildGrid() != child || e.GetLinkTarget() != nil {
 			t.Errorf("%s = %v, want a door onto %q", key, e, child)
 		}
 	}
@@ -106,7 +106,7 @@ func TestSymlinksListAsLinksToTheOneKey(t *testing.T) {
 		}
 	}
 	for _, k := range [][2]string{{".", "missing.md"}, {"../outside", "../outside/secret.txt"}, {"dirlink", "dirlink/inner.txt"}} {
-		pr, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Context: k[0], Key: k[1]})
+		pr, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Grid: k[0], Key: k[1]})
 		if err != nil || pr.Presence != pluginv1.ProbeResponse_PRESENCE_GONE {
 			t.Errorf("Probe(%s) = %v, %v; want GONE", k[1], pr, err)
 		}
@@ -189,10 +189,10 @@ func TestDeleteTrashesTheLinkItself(t *testing.T) {
 	}
 }
 
-// The node watches the contexts a shown grid links into; a dead link's
+// The node watches the grids a shown grid links into; a dead link's
 // target, or a link's own path, is no directory of the tree and is not
 // watched, and asking is no error.
-func TestWatchSkipsContextsNotInTheTree(t *testing.T) {
+func TestWatchSkipsGridsNotInTheTree(t *testing.T) {
 	root, _ := symlinkTree(t)
 	p := New(root, nil)
 	openWatch(t, p, ".", "..", "../outside", "dirlink", "cycle")

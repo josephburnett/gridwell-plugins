@@ -150,7 +150,7 @@ func (s *watchStream) Send(c *pluginv1.Change) error {
 		s.entries = append(s.entries, e)
 		return nil
 	}
-	s.sent = append(s.sent, c.GetContextChanged().GetContext())
+	s.sent = append(s.sent, c.GetGridChanged().GetGrid())
 	return nil
 }
 
@@ -172,13 +172,13 @@ func (s *watchStream) hasHeader() bool {
 	return s.header
 }
 
-// open holds a Watch on contexts until the test ends.
-func open(t *testing.T, p *Plugin, contexts ...string) *watchStream {
+// open holds a Watch on grids until the test ends.
+func open(t *testing.T, p *Plugin, gridKeys ...string) *watchStream {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &watchStream{ctx: ctx}
 	done := make(chan error, 1)
-	go func() { done <- p.Watch(&pluginv1.WatchRequest{Contexts: contexts}, s) }()
+	go func() { done <- p.Watch(&pluginv1.WatchRequest{Grids: gridKeys}, s) }()
 	t.Cleanup(func() {
 		cancel()
 		<-done
@@ -273,8 +273,8 @@ func TestAPollTellsAChangedInfoBodyOnce(t *testing.T) {
 		t.Fatalf("told %d entry changes, want 1", len(told))
 	}
 	now := listedInfo(t, w.Plugin, "1")
-	if told[0].GetContext() != "1" || !proto.Equal(told[0].GetEntry(), now) {
-		t.Errorf("told %v, want context 1 and List's entry %v", told[0], now)
+	if told[0].GetGrid() != "1" || !proto.Equal(told[0].GetEntry(), now) {
+		t.Errorf("told %v, want gridKey 1 and List's entry %v", told[0], now)
 	}
 	if now.GetContentStamp() == before.GetContentStamp() {
 		t.Errorf("the stamp stayed %q across a changed body", now.GetContentStamp())
@@ -284,15 +284,15 @@ func TestAPollTellsAChangedInfoBodyOnce(t *testing.T) {
 	}
 }
 
-// listedInfo is context's @info entry as List answers it.
-func listedInfo(t *testing.T, p *Plugin, context string) *pluginv1.Entry {
+// listedInfo is grid's @info entry as List answers it.
+func listedInfo(t *testing.T, p *Plugin, gridKey string) *pluginv1.Entry {
 	t.Helper()
-	resp, err := p.List(t.Context(), &pluginv1.ListRequest{Context: context})
+	resp, err := p.List(t.Context(), &pluginv1.ListRequest{Grid: gridKey})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range resp.GetEntries() {
-		if e.GetKey() == infoKeyPrefix+context {
+		if e.GetKey() == infoKeyPrefix+gridKey {
 			return e
 		}
 	}

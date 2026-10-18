@@ -67,7 +67,7 @@ func TestOverTheRealGmailContract(t *testing.T) {
 	p := stable(src, Options{StateDir: t.TempDir()})
 	ctx := context.Background()
 
-	resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -107,8 +107,8 @@ func TestOverTheRealGmailContract(t *testing.T) {
 		t.Errorf("media type = %q", got)
 	}
 
-	// Both collections read, so absence is now an answer.
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.StarredContext}); err != nil {
+	// Both grids read, so absence is now an answer.
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.StarredGrid}); err != nil {
 		t.Fatalf("starred: %v", err)
 	}
 	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:ffffffffffffffff"})
@@ -204,7 +204,7 @@ func TestACatchUpOverTheRealGmailContract(t *testing.T) {
 	clock := at("2026-01-06T12:00:00Z")
 	p := stable(src, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	listAll(t, p)
-	if got := keys(t, p, mailbox.InboxContext); len(strings.Split(got, ",")) != 3 {
+	if got := keys(t, p, mailbox.InboxGrid); len(strings.Split(got, ",")) != 3 {
 		t.Fatalf("inbox after the walk = %s", got)
 	}
 
@@ -212,7 +212,7 @@ func TestACatchUpOverTheRealGmailContract(t *testing.T) {
 	if historyAsked != "9912345" {
 		t.Errorf("history asked from %q, want the profile's id", historyAsked)
 	}
-	got := strings.Split(keys(t, p, mailbox.InboxContext), ",")
+	got := strings.Split(keys(t, p, mailbox.InboxGrid), ",")
 	slices.Sort(got)
 	if want := []string{"msg:18c2a1b3f4d5e6f8", "msg:18c2a1b3f4d5e7a1"}; !slices.Equal(got, want) {
 		t.Errorf("inbox after the catch-up = %v, want %v", got, want)

@@ -1,6 +1,6 @@
 // Package plugin is the hey plugin: the wire half over
 // gridwell-plugins/hey/mail. It projects HEY's six boxes as six grids, one
-// context each, walked through the official HEY CLI and kept current by its
+// grid each, walked through the official HEY CLI and kept current by its
 // live feed while a Watch stream is open (watch.go), and everything, their
 // union, as a seventh. A thread is one url tile in everything that serves a
 // page, the email itself as HEY's own HTML through the node's content API;
@@ -54,10 +54,10 @@ const DefaultRefresh = time.Minute
 const DefaultFirstAnswer = 2 * time.Second
 
 // cacheVersion is the shape of cache; memo.File refuses any other.
-const cacheVersion = 2
+const cacheVersion = 3
 
 // cache is what the file in state_dir holds: memory, and when each
-// collection's walk landed, so a restart inside the refresh window answers
+// grid's walk landed, so a restart inside the refresh window answers
 // without running the CLI.
 type cache struct {
 	Memory   mail.Snapshot        `json:"memory"`
@@ -65,7 +65,7 @@ type cache struct {
 }
 
 // feedUnit is the plugin's one unit of background work: the account-wide
-// live feed, which every context needs.
+// live feed, which every grid needs.
 const feedUnit = "feed"
 
 // Source is HEY, as much of it as this plugin reads: one box's threads, one
@@ -94,9 +94,9 @@ type Plugin struct {
 
 	mu sync.Mutex
 	// live is true from the feed's ready until it disconnects or ends.
-	// liveGen counts readies, and caughtUp holds, per collection, the ready
+	// liveGen counts readies, and caughtUp holds, per grid, the ready
 	// whose catch-up walk landed: memory is current while both agree. asked
-	// counts the re-reads the feed asked of each collection (a resync, a
+	// counts the re-reads the feed asked of each grid (a resync, a
 	// delete memory could not map), so a walk begun before the latest ask
 	// catches nothing up.
 	live     bool
@@ -110,7 +110,7 @@ type Plugin struct {
 	// effects are what each landed walk changed, held for flights' Landed to
 	// announce once the landing is recorded.
 	effects map[string]mail.Effect
-	// failing holds the collections whose last walk failed. Only the edges
+	// failing holds the grids whose last walk failed. Only the edges
 	// repaint: the first failure, so an open grid shows the reason, and the
 	// landing after it, so the reason leaves.
 	failing map[string]bool
@@ -124,7 +124,7 @@ type Plugin struct {
 	readied atomic.Bool
 }
 
-// catchUp is the walk that last caught one collection up with the feed: the
+// catchUp is the walk that last caught one grid up with the feed: the
 // ready it followed, and whether it read the whole box.
 type catchUp struct {
 	gen   int
@@ -215,7 +215,7 @@ func New(src Source, o Options) *Plugin {
 		Logf:        p.logf,
 	})
 	p.changes = memo.NewChanges(p.life, memo.ChangeOptions{
-		Unscoped: contexts(),
+		Unscoped: gridKeys(),
 		Work:     func(string) []string { return []string{feedUnit} },
 		Do:       func(ctx context.Context, _ string) { p.watch(ctx) },
 		Linger:   o.Linger,
@@ -229,13 +229,13 @@ func New(src Source, o Options) *Plugin {
 	return p
 }
 
-// contexts is every context the plugin lists: the boxes, then everything.
-func contexts() []string {
-	out := make([]string, 0, len(mail.Collections)+1)
-	for _, c := range mail.Collections {
+// grids is every grid the plugin lists: the boxes, then everything.
+func gridKeys() []string {
+	out := make([]string, 0, len(mail.Grids)+1)
+	for _, c := range mail.Grids {
 		out = append(out, c.Key)
 	}
-	return append(out, mail.EverythingContext)
+	return append(out, mail.EverythingGrid)
 }
 
 // save writes memory back. A failure is memo.File's to log; the answer is
@@ -256,9 +256,9 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
-		MenuEntries: mail.MenuEntries(),
+		Grids:       mail.Declared(),
 		// These grids PROJECT a mail account that lives outside Gridwell, so
-		// their rows are summaries the node cannot re-arrange across contexts
+		// their rows are summaries the node cannot re-arrange across grids
 		// and the client draws them with the host treatment. It is a
 		// declaration, never inferred: the node has no list of which kinds
 		// are host-backed.
@@ -267,10 +267,10 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	}, nil
 }
 
-// fresh says whether memory is current for a collection, as memo.Flights
-// asks it. While the feed is live, that is whether the collection's catch-up
+// fresh says whether memory is current for a grid, as memo.Flights
+// asks it. While the feed is live, that is whether the grid's catch-up
 // walk landed: the feed keeps it from there, and no clock re-walks it.
-// Otherwise it is whether the collection was walked within the refresh
+// Otherwise it is whether the grid was walked within the refresh
 // window.
 func (p *Plugin) fresh(key string, walkedAt time.Time) bool {
 	p.mu.Lock()
@@ -281,7 +281,7 @@ func (p *Plugin) fresh(key string, walkedAt time.Time) bool {
 	return memo.Within(p.clock.Now(), walkedAt, p.refresh)
 }
 
-// caughtUpLocked says the collection's last landed walk followed the feed's
+// caughtUpLocked says the grid's last landed walk followed the feed's
 // latest ready and every re-read the feed asked of it since. The caller
 // holds p.mu.
 func (p *Plugin) caughtUpLocked(key string) bool {
@@ -299,8 +299,8 @@ func (p *Plugin) authoritative(key string) bool {
 	return p.live && p.caughtUpLocked(key) && p.caughtUp[key].whole
 }
 
-// ask marks a collection as needing a re-read the feed cannot give, and
-// starts it: until a walk begun after now lands, the collection is neither
+// ask marks a grid as needing a re-read the feed cannot give, and
+// starts it: until a walk begun after now lands, the grid is neither
 // current nor definitive.
 func (p *Plugin) ask(key string) {
 	p.mu.Lock()
@@ -310,14 +310,14 @@ func (p *Plugin) ask(key string) {
 	p.flights.Rewalk(key)
 }
 
-// walk is one detached walk of one collection, run by memo.Flights under the
+// walk is one detached walk of one grid, run by memo.Flights under the
 // plugin's lifetime: no reader's hangup ends it, and the CLI run's own
 // timeout bounds it. A walk that began after a ready is that ready's
 // catch-up.
 func (p *Plugin) walk(ctx context.Context, key string) error {
-	c, ok := mail.LookupCollection(key)
+	c, ok := mail.LookupGrid(key)
 	if !ok {
-		return status.Errorf(codes.InvalidArgument, "hey plugin: unknown context %q", key)
+		return status.Errorf(codes.InvalidArgument, "hey plugin: unknown gridKey %q", key)
 	}
 	p.mu.Lock()
 	gen, ask := p.liveGen, p.asked[key]
@@ -397,7 +397,7 @@ func (p *Plugin) publish(box string, eff mail.Effect) {
 		keys = append(keys, box)
 	}
 	if eff.Everything {
-		keys = append(keys, mail.EverythingContext)
+		keys = append(keys, mail.EverythingGrid)
 	}
 	p.changes.Publish(keys...)
 	for _, id := range eff.Moved {
@@ -405,11 +405,11 @@ func (p *Plugin) publish(box string, eff mail.Effect) {
 		if !ok || !p.mem.Member(id) {
 			continue // everything lists only what some box holds
 		}
-		p.changes.PublishEntry(mail.EverythingContext, mail.CollectionEntries([]mail.Thread{t})[0])
+		p.changes.PublishEntry(mail.EverythingGrid, mail.GridEntries([]mail.Thread{t})[0])
 	}
 }
 
-// read makes one collection answerable (memo.Flights.Read): a read memory
+// read makes one grid answerable (memo.Flights.Read): a read memory
 // has a listing for never waits. A refresh that failed is not the read's
 // failure: memory answers, and unreachable says why (rule 7), the walk's
 // failure first and then the feed's verdict. err is only the caller hanging
@@ -430,7 +430,7 @@ func (p *Plugin) read(ctx context.Context, key string) (unreachable string, err 
 	return reason, nil
 }
 
-// List answers one collection from memory, refreshed first when it is not
+// List answers one grid from memory, refreshed first when it is not
 // current. A failed refresh is the listing's unreachable reason, which the
 // node reports as the source's health while it keeps serving the rows.
 //
@@ -442,24 +442,24 @@ func (p *Plugin) read(ctx context.Context, key string) (unreachable string, err 
 // A box lists links into everything (mail.BoxEntries); everything lists each
 // thread once, and is as current as every box is.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	if req.Context == mail.EverythingContext {
+	if req.Grid == mail.EverythingGrid {
 		reason, err := p.readAll(ctx)
 		if err != nil {
 			return nil, err
 		}
 		threads := p.mem.Everything()
-		return listing(mail.EverythingLabel, threads, mail.CollectionEntries(threads), reason, false), nil
+		return listing(mail.EverythingLabel, threads, mail.GridEntries(threads), reason, false), nil
 	}
-	c, ok := mail.LookupCollection(req.Context)
+	c, ok := mail.LookupGrid(req.Grid)
 	if !ok {
-		return nil, status.Errorf(codes.InvalidArgument, "hey plugin: unknown context %q", req.Context)
+		return nil, status.Errorf(codes.InvalidArgument, "hey plugin: unknown gridKey %q", req.Grid)
 	}
 	reason, err := p.read(ctx, c.Key)
 	if err != nil {
 		return nil, err
 	}
 	definitive := reason == "" && p.authoritative(c.Key)
-	threads := p.mem.Collection(c.Key)
+	threads := p.mem.Grid(c.Key)
 	return listing(c.Label, threads, mail.BoxEntries(threads), reason, definitive), nil
 }
 
@@ -483,10 +483,10 @@ func listing(label string, threads []mail.Thread, entries []*pluginv1.Entry, unr
 // news, never the listing: its reason is everything's, the first in box
 // order.
 func (p *Plugin) readAll(ctx context.Context) (unreachable string, err error) {
-	reasons := make([]string, len(mail.Collections))
-	errs := make([]error, len(mail.Collections))
+	reasons := make([]string, len(mail.Grids))
+	errs := make([]error, len(mail.Grids))
 	var wg sync.WaitGroup
-	for i, c := range mail.Collections {
+	for i, c := range mail.Grids {
 		wg.Go(func() { reasons[i], errs[i] = p.read(ctx, c.Key) })
 	}
 	wg.Wait()
@@ -539,13 +539,13 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 	})
 }
 
-// Probe settles a thread a listing did not show, for the context asked. A
+// Probe settles a thread a listing did not show, for the grid asked. A
 // box: PRESENT while it holds the thread, GONE once a
 // whole walk did not list it or the feed moved it out (mail.InBox). The
 // thread is usually in another box, and its tile in everything stays.
 // Everything: PRESENT while some box holds it, else HEY's own word on the
-// thread — GONE only when `thread read` says it does not exist. No context
-// (a node from before contexts): PRESENT while some box holds it, GONE once
+// thread — GONE only when `thread read` says it does not exist. No grid
+// (a node from before grids): PRESENT while some box holds it, GONE once
 // every box has been read to its end and none does. UNSPECIFIED, meaning
 // "cannot say", otherwise: a half-swept memory must never cost the user a
 // tile.
@@ -554,7 +554,7 @@ func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*plugin
 	if !ok {
 		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 	}
-	switch req.Context {
+	switch req.Grid {
 	case "":
 		switch {
 		case p.mem.Member(id):
@@ -562,7 +562,7 @@ func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*plugin
 		case p.mem.Swept():
 			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 		}
-	case mail.EverythingContext:
+	case mail.EverythingGrid:
 		if p.mem.Member(id) {
 			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
 		}
@@ -574,10 +574,10 @@ func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*plugin
 			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 		}
 	default:
-		if _, ok := mail.LookupCollection(req.Context); !ok {
-			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a context this plugin never lists
+		if _, ok := mail.LookupGrid(req.Grid); !ok {
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a grid this plugin never lists
 		}
-		switch p.mem.InBox(req.Context, id) {
+		switch p.mem.InBox(req.Grid, id) {
 		case mail.Present:
 			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
 		case mail.Gone:
@@ -592,7 +592,7 @@ func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
 }
 
 // Find matches the query against the subject, preview and sender of every
-// thread a collection still holds; each result is the thread's one tile, in
+// thread a grid still holds; each result is the thread's one tile, in
 // everything. It reads memory only — no CLI run — so it answers what the
 // grids show and nothing the user cannot navigate to.
 func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.FindResponse, error) {
@@ -615,15 +615,15 @@ func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.F
 		if !strings.Contains(hay, q) {
 			continue
 		}
-		entries := mail.CollectionEntries([]mail.Thread{t})
+		entries := mail.GridEntries([]mail.Thread{t})
 		if len(entries) == 0 {
 			continue
 		}
 		resp.Results = append(resp.Results, &pluginv1.FindResult{
-			Entry:       entries[0],
-			ContextPath: []string{mail.EverythingContext},
-			Snippet:     t.Snippet(),
-			Score:       1,
+			Entry:    entries[0],
+			GridPath: []string{mail.EverythingGrid},
+			Snippet:  t.Snippet(),
+			Score:    1,
 		})
 	}
 	return resp, nil

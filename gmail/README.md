@@ -135,7 +135,7 @@ will not answer for costs that message's tile, never the walk.
 
 ## Keys and the grid
 
-Three grids, one (+) menu entry each: **inbox**, **starred**, and **all
+Three grids, one (+) declared grid each: **inbox**, **starred**, and **all
 mail**, their union. All mail holds each message once, as a url tile whose
 page is the email. The inbox and the starred grid hold links to those tiles,
 so a message that is in both is one tile, and a message starred out of the
@@ -202,7 +202,7 @@ grid keeps what it showed and the plugin says why, which the node shows as
 the plugin's health, until a refresh lands again.
 
 The node hears about a change without asking: after each refresh the plugin
-sends a `ContextChanged` on its `Watch` stream for every grid whose listing
+sends a `GridChanged` on its `Watch` stream for every grid whose listing
 changed, and nothing when none did. It never sends an `EntryChanged`: Gmail
 does not change a message's content once it has it, so a message's page
 never changes in place; read, starred and which label holds it are the

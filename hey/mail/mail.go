@@ -25,15 +25,15 @@ type Thread struct {
 	// thread moves between boxes, so it is remembered for diagnosis and never
 	// keyed on.
 	PostingID int64 `json:"postingId"`
-	// Collection is the context key of the collection the thread was last
+	// Grid is the grid key of the grid the thread was last
 	// seen in.
-	Collection string    `json:"collection"`
-	Subject    string    `json:"subject"`
-	Summary    string    `json:"summary"`
-	FromName   string    `json:"fromName"`
-	FromEmail  string    `json:"fromEmail"`
-	CreatedAt  time.Time `json:"createdAt"`
-	Seen       bool      `json:"seen"`
+	Grid      string    `json:"grid"`
+	Subject   string    `json:"subject"`
+	Summary   string    `json:"summary"`
+	FromName  string    `json:"fromName"`
+	FromEmail string    `json:"fromEmail"`
+	CreatedAt time.Time `json:"createdAt"`
+	Seen      bool      `json:"seen"`
 	// ActiveAt is HEY's active_at, when the thread last had an entry: a reply
 	// landing moves it, so it names the page (Stamp). Zero when HEY did not
 	// say, or the record is from a cache that predates it.
@@ -50,75 +50,75 @@ func (t *Thread) Stamp() string {
 	return t.ActiveAt.UTC().Format(time.RFC3339Nano)
 }
 
-// Collection is one of the six HEY boxes this plugin projects. Key is the
-// plugin's context key, stable forever. Box is the selector `hey box view`
+// Grid is one of the six HEY boxes this plugin projects. Key is the
+// plugin's grid key, stable forever. Box is the selector `hey box view`
 // takes — the hey-cli's own named getter, so no listing call is needed to
 // resolve it. Label is the name on the (+) menu row that opens it. Door
 // says whether the (+) menu offers it: every box is walked into everything,
 // but a box nobody opens on purpose is clutter in the one menu row.
-type Collection struct {
+type Grid struct {
 	Key   string
 	Box   string
 	Label string
 	Door  bool
 }
 
-// The box context keys. They embed the CLI's box selector rather than a
+// The box grid keys. They embed the CLI's box selector rather than a
 // display name, because a display name is HEY's to change and a key is
 // forever.
 const (
-	ImboxContext      = "box:imbox"
-	ReplyLaterContext = "box:laterbox"
-	SetAsideContext   = "box:asidebox"
-	FeedContext       = "box:feedbox"
-	PaperTrailContext = "box:trailbox"
-	BubbleUpContext   = "box:bubblebox"
+	ImboxGrid      = "box:imbox"
+	ReplyLaterGrid = "box:laterbox"
+	SetAsideGrid   = "box:asidebox"
+	FeedGrid       = "box:feedbox"
+	PaperTrailGrid = "box:trailbox"
+	BubbleUpGrid   = "box:bubblebox"
 )
 
-// Collections is the projection, in the order the (+) menu offers its
-// doors. ImboxContext is first because it is the collection to read first.
-var Collections = []Collection{
-	{Key: ImboxContext, Box: "imbox", Label: "imbox", Door: true},
-	{Key: ReplyLaterContext, Box: "laterbox", Label: "reply later", Door: true},
-	{Key: SetAsideContext, Box: "asidebox", Label: "set aside", Door: true},
-	{Key: FeedContext, Box: "feedbox", Label: "the feed"},
-	{Key: PaperTrailContext, Box: "trailbox", Label: "paper trail"},
-	{Key: BubbleUpContext, Box: "bubblebox", Label: "bubble up"},
+// Grids is the projection, in the order the (+) menu offers its
+// doors. ImboxGrid is first because it is the grid to read first.
+var Grids = []Grid{
+	{Key: ImboxGrid, Box: "imbox", Label: "imbox", Door: true},
+	{Key: ReplyLaterGrid, Box: "laterbox", Label: "reply later", Door: true},
+	{Key: SetAsideGrid, Box: "asidebox", Label: "set aside", Door: true},
+	{Key: FeedGrid, Box: "feedbox", Label: "the feed"},
+	{Key: PaperTrailGrid, Box: "trailbox", Label: "paper trail"},
+	{Key: BubbleUpGrid, Box: "bubblebox", Label: "bubble up"},
 }
 
-// EverythingContext is the union of every box: each thread once, its one
+// EverythingGrid is the union of every box: each thread once, its one
 // home. A box lists links to it (BoxEntries), so a thread that moves between
 // boxes keeps its tile and every link to it. It is no box of HEY's, so
 // nothing walks it; it is derived from the boxes' memory.
 const (
-	EverythingContext = "everything"
-	EverythingLabel   = "everything"
+	EverythingGrid  = "everything"
+	EverythingLabel = "everything"
 )
 
-// LookupCollection resolves a context key to its collection.
-func LookupCollection(key string) (Collection, bool) {
-	for _, c := range Collections {
+// LookupGrid resolves a grid key to its grid.
+func LookupGrid(key string) (Grid, bool) {
+	for _, c := range Grids {
 		if c.Key == key {
 			return c, true
 		}
 	}
-	return Collection{}, false
+	return Grid{}, false
 }
 
 // LookupBox resolves a box kind, as the CLI's live feed names a box, to the
-// collection that projects it. The selectors `box view` takes are HEY's box
+// grid that projects it. The selectors `box view` takes are HEY's box
 // kinds, so one table answers both.
-func LookupBox(kind string) (Collection, bool) {
-	for _, c := range Collections {
+func LookupBox(kind string) (Grid, bool) {
+	for _, c := range Grids {
 		if c.Box == kind {
 			return c, true
 		}
 	}
-	return Collection{}, false
+	return Grid{}, false
 }
 
 // KeyPrefix namespaces thread keys. A key names the same email thread for the
-// life of the plugin, whichever collection holds it: a thread moved from the
+// life of the plugin, whichever grid holds it: a thread moved from the
 // Imbox to Reply Later keeps its key, so the node keeps its id and every link
 // to it still resolves.
 const KeyPrefix = "thread:"

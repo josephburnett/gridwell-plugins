@@ -33,8 +33,8 @@ func TestFromConfigOwnsThePidDerivation(t *testing.T) {
 			t.Fatalf("pid %q: %v", raw, err)
 		}
 		info, err := impl.(*Plugin).Info(context.Background(), &pluginv1.InfoRequest{})
-		if err != nil || len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != want {
-			t.Errorf("pid %q → collections %v, %v; want the one context %q", raw, info.GetMenuEntries(), err, want)
+		if err != nil || len(info.Grids) != 1 || info.Grids[0].Grid != want {
+			t.Errorf("pid %q → grids %v, %v; want the one gridKey %q", raw, info.GetGrids(), err, want)
 		}
 	}
 }
@@ -78,8 +78,8 @@ func TestInfoRefusesAProcessItCannotServe(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "4242"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
-		t.Errorf("a childless process that started after launch → Info %v, %v; want its one collection", info, err)
+	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.Grids) != 1 {
+		t.Errorf("a childless process that started after launch → Info %v, %v; want its one grid", info, err)
 	}
 	if err := os.Remove(filepath.Join(root, "4242")); err != nil {
 		t.Fatal(err)
@@ -153,11 +153,11 @@ func read(p *Plugin, key string) ([]*pluginv1.ContentChunk, error) {
 func TestListOfAnUnreadableTableIsUnavailable(t *testing.T) {
 	root := stubProc(t, map[int64]int64{1: 0, 10: 1})
 	p := served(t, root, 1)
-	if resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "1"}); err != nil || len(resp.Entries) != 2 {
+	if resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "1"}); err != nil || len(resp.Entries) != 2 {
 		t.Fatalf("readable table → %v, %v; want @info and pid 10", resp, err)
 	}
 	deny(t, root)
-	if resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "1"}); status.Code(err) != codes.Unavailable {
+	if resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "1"}); status.Code(err) != codes.Unavailable {
 		t.Errorf("unreadable table → List %v, %v; want Unavailable", resp, err)
 	}
 }
@@ -208,12 +208,12 @@ func TestInfoNamesItsBytesByOneStamp(t *testing.T) {
 	}
 }
 
-// Probe answers for the context it names. A process is under the context of
+// Probe answers for the grid it names. A process is under the grid of
 // its parent now, so a child reparented after its parent died (30, once
 // under 10) is gone from the old grid and present in its new parent's; an
 // @info tile lives only in its own process's grid, and only while that
-// process runs. No context asks about the plugin as a whole.
-func TestProbeAnswersForTheContextAsked(t *testing.T) {
+// process runs. No grid asks about the plugin as a whole.
+func TestProbeAnswersForTheGridAsked(t *testing.T) {
 	root := stubProc(t, map[int64]int64{1: 0, 10: 1, 20: 10, 30: 1})
 	p := served(t, root, 1)
 	const (
@@ -222,7 +222,7 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 		unknown = pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED
 	)
 	cases := []struct {
-		key, context string
+		key, gridKey string
 		want         pluginv1.ProbeResponse_Presence
 	}{
 		{"20", "10", present},
@@ -240,15 +240,15 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 		{"nope", "1", gone},
 	}
 	probe := func(key, ctxKey string) pluginv1.ProbeResponse_Presence {
-		resp, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: key, Context: ctxKey})
+		resp, err := p.Probe(context.Background(), &pluginv1.ProbeRequest{Key: key, Grid: ctxKey})
 		if err != nil {
 			t.Fatalf("Probe(%q in %q): %v", key, ctxKey, err)
 		}
 		return resp.Presence
 	}
 	for _, c := range cases {
-		if got := probe(c.key, c.context); got != c.want {
-			t.Errorf("Probe(%q in %q) = %v, want %v", c.key, c.context, got, c.want)
+		if got := probe(c.key, c.gridKey); got != c.want {
+			t.Errorf("Probe(%q in %q) = %v, want %v", c.key, c.gridKey, got, c.want)
 		}
 	}
 	deny(t, filepath.Join(root, "20"))
@@ -261,7 +261,7 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 // toggle to its source; every text entry the plugin lists declares one.
 func TestEveryTextEntryDeclaresItsPresentation(t *testing.T) {
 	p := served(t, stubProc(t, map[int64]int64{1: 0, 10: 1}), 1)
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "1"})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestStateIsQuietAndNeverInTheLabel(t *testing.T) {
 	setState(t, root, 13, 1, 'T')
 	setState(t, root, 14, 1, 't')
 	p := served(t, root, 1)
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "1"})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}

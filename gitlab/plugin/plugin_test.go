@@ -70,10 +70,10 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	ctx := context.Background()
 
 	info, _ := p.Info(ctx, &pluginv1.InfoRequest{})
-	if info.Kind != Kind || len(info.MenuEntries) != 1 || info.MenuEntries[0].Context != todos.RootContext {
+	if info.Kind != Kind || len(info.Grids) != 1 || info.Grids[0].Grid != todos.RootGrid {
 		t.Fatalf("info = %v", info)
 	}
-	root, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	root, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	}
 	// The root walk covered every week: a descent inside the window is
 	// answered from memory, no GitLab round trip.
-	wk, err := p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
+	wk, err := p.List(ctx, &pluginv1.ListRequest{Grid: "week:2026-08-17"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,14 +102,14 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	// past it, a read starts the descent's targeted walk, and the status flips
 	// when that walk lands.
 	src.pending = src.pending[1:]
-	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
+	wk, _ = p.List(ctx, &pluginv1.ListRequest{Grid: "week:2026-08-17"})
 	if wk.Entries[0].StatusDetail != "" {
 		t.Error("state changed inside the refresh window")
 	}
 	clock = clock.Add(DefaultFullRefresh + time.Second)
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Grid: "week:2026-08-17"})
 	landed(t, p)
-	wk, _ = p.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
+	wk, _ = p.List(ctx, &pluginv1.ListRequest{Grid: "week:2026-08-17"})
 	if src.calls.Load() != 4 || !strings.HasPrefix(wk.Entries[0].Label, "!1 ") || wk.Entries[0].StatusDetail != todos.DoneMark {
 		t.Errorf("after the window: calls=%d entry=%v", src.calls.Load(), wk.Entries[0])
 	}
@@ -117,7 +117,7 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 	if len(wk.Entries) != 2 {
 		t.Errorf("a done todo left the listing: %v", wk.Entries)
 	}
-	root, _ = p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	root, _ = p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 	if root.Entries[1].Label != "2026-08-17" {
 		t.Errorf("root after flip = %q", root.Entries[1].Label)
 	}
@@ -137,7 +137,7 @@ func TestReadContentBeforeFirstWalkIsUnavailable(t *testing.T) {
 	}
 	// After a completed walk the same guard stands aside: a known todo
 	// answers, and an unknown one is honestly gone.
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	r = &reader{}
@@ -154,7 +154,7 @@ func TestReadContentAndProbe(t *testing.T) {
 	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
 	p := New(src, Options{})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	r := &reader{}
@@ -184,7 +184,7 @@ func TestReadContentAndProbe(t *testing.T) {
 		t.Error("probe verdicts: known PRESENT, unknown UNSPECIFIED (never GONE), malformed GONE")
 	}
 	res, _ := p.Find(ctx, &pluginv1.FindRequest{Query: "REVIEW"})
-	if len(res.Results) != 1 || res.Results[0].Entry.Key != "todo:1" || strings.Join(res.Results[0].ContextPath, "/") != "todos/week:2026-08-17" {
+	if len(res.Results) != 1 || res.Results[0].Entry.Key != "todo:1" || strings.Join(res.Results[0].GridPath, "/") != "todos/week:2026-08-17" {
 		t.Errorf("find = %v", res.Results)
 	}
 }
@@ -201,7 +201,7 @@ func TestRestartAnswersFromTheCacheFileWithoutWalking(t *testing.T) {
 	}
 	first := New(src, Options{StateDir: dir})
 	ctx := context.Background()
-	if _, err := first.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := first.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, todos.CacheFile)); err != nil {
@@ -212,7 +212,7 @@ func TestRestartAnswersFromTheCacheFileWithoutWalking(t *testing.T) {
 	// answers nothing, so every entry below can only come from the file.
 	cold := &oneShot{}
 	second := New(cold, Options{StateDir: dir})
-	root, err := second.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	root, err := second.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestRestartAnswersFromTheCacheFileWithoutWalking(t *testing.T) {
 	if len(root.Entries) != 2 || root.Entries[1].Label != "2026-08-17" {
 		t.Fatalf("root after restart = %v", root.Entries)
 	}
-	wk, err := second.List(ctx, &pluginv1.ListRequest{Context: "week:2026-08-17"})
+	wk, err := second.List(ctx, &pluginv1.ListRequest{Grid: "week:2026-08-17"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestNoStateDirWritesNothingAndStaysCold(t *testing.T) {
 	if p.file.Path() != "" {
 		t.Errorf("cache path = %q with no state_dir", p.file.Path())
 	}
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	cold := New(&oneShot{}, Options{StateDir: " "})
@@ -321,7 +321,7 @@ func TestTheRefresherNeverRunsHotterThanItsFloor(t *testing.T) {
 	// window still walks.
 	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{FullRefresh: time.Nanosecond})
 	for i := 0; i < 2; i++ {
-		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 			t.Fatal(err)
 		}
 		landed(t, p)
@@ -331,10 +331,10 @@ func TestTheRefresherNeverRunsHotterThanItsFloor(t *testing.T) {
 	}
 }
 
-func TestUnknownContextIsAnArgumentError(t *testing.T) {
+func TestUnknownGridIsAnArgumentError(t *testing.T) {
 	p := New(&oneShot{}, Options{})
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "bogus"}); status.Code(err) != codes.InvalidArgument {
-		t.Errorf("unknown context → %v", err)
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "bogus"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("unknown gridKey → %v", err)
 	}
 }
 
@@ -392,7 +392,7 @@ func TestListStreamsWhileTheWalkRuns(t *testing.T) {
 
 	// The walk is parked on pending page 2; the first answer is page 1's
 	// newest todo, already a visible week.
-	first, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	first, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestListStreamsWhileTheWalkRuns(t *testing.T) {
 	close(src.gate)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		root, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+		root, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -430,7 +430,7 @@ func landed(t *testing.T, p *Plugin, weeks ...string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		keys := append([]string{todos.RootContext}, weeks...)
+		keys := append([]string{todos.RootGrid}, weeks...)
 		for _, w := range p.mem.Weeks() {
 			keys = append(keys, todos.WeekKey(w.Start))
 		}
@@ -457,7 +457,7 @@ func warmOver(t *testing.T, src todos.Source, firstAnswer time.Duration) *Plugin
 	clock := at("2026-08-25T12:00:00Z")
 	seed := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending"), mk(2, "2026-08-25T10:00:00Z", "pending")}}
 	first := New(seed, Options{StateDir: dir, Now: func() time.Time { return clock }})
-	if _, err := first.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := first.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	later := clock.Add(DefaultFullRefresh + time.Second)
@@ -472,10 +472,10 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	src := &gated{gate: make(chan struct{})}
 	p := warmOver(t, src, time.Hour)
 	ctx := context.Background()
-	for _, key := range []string{todos.RootContext, "week:2026-08-17"} {
+	for _, key := range []string{todos.RootGrid, "week:2026-08-17"} {
 		answered := make(chan *pluginv1.ListResponse, 1)
 		go func() {
-			resp, err := p.List(ctx, &pluginv1.ListRequest{Context: key})
+			resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: key})
 			if err != nil {
 				t.Error(err)
 			}
@@ -500,7 +500,7 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	// gated serves only todo 1, so a landed walk judges todo 2 done.
 	close(src.gate)
 	landed(t, p)
-	root, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	root, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +517,7 @@ func TestAColdReadStillWaitsForTheFirstAnswer(t *testing.T) {
 	ps := []*Plugin{New(src, Options{FirstAnswer: bound}), warmOver(t, src, bound)}
 	for _, p := range ps {
 		start := time.Now()
-		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "week:2026-01-05"}); err != nil {
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "week:2026-01-05"}); err != nil {
 			t.Fatal(err)
 		}
 		if took := time.Since(start); took < bound {
@@ -553,12 +553,12 @@ func TestAWarmReadAnswersMemoryWithTheLastWalksFailure(t *testing.T) {
 	src := &failing{err: status.Error(codes.PermissionDenied, "gitlab: 401 Unauthorized")}
 	p := warmOver(t, src, time.Hour)
 	ctx := context.Background()
-	if resp, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil || resp.Unreachable != "" {
+	if resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil || resp.Unreachable != "" {
 		t.Fatalf("the first warm read = (%q, %v); it answers before its walk fails", resp.GetUnreachable(), err)
 	}
 	landed(t, p)
-	for _, key := range []string{todos.RootContext, "week:2026-08-17"} {
-		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: key})
+	for _, key := range []string{todos.RootGrid, "week:2026-08-17"} {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: key})
 		if err != nil {
 			t.Fatalf("%s: the read after a refused walk = %v, want memory", key, err)
 		}
@@ -570,9 +570,9 @@ func TestAWarmReadAnswersMemoryWithTheLastWalksFailure(t *testing.T) {
 	src.err = nil
 	src.mu.Unlock()
 	landed(t, p)
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 	landed(t, p)
-	if resp, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil || resp.Unreachable != "" {
+	if resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil || resp.Unreachable != "" {
 		t.Errorf("the read after a landed walk = (%q, %v)", resp.GetUnreachable(), err)
 	}
 }

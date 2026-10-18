@@ -5,7 +5,7 @@ thread, in **everything**, and HEY's six boxes — the Imbox, Reply Later, Set
 Aside, the Feed, the Paper Trail and Bubble Up — as grids of links to those
 tiles. The (+) menu offers four of them: imbox, reply later, set aside and
 everything. The Feed, the Paper Trail and Bubble Up are walked into
-everything but are not menu entries. A tile is named for the thread's sender
+everything but are not declared grids. A tile is named for the thread's sender
 and subject; descending into it opens the email itself, as HEY's own HTML,
 through the node's content API.
 
@@ -46,7 +46,7 @@ the CLI is back.
 Built against **hey 1.4.1**. Three commands, and nothing else:
 
 ```
-hey box view <box> --json --all                   one collection's threads
+hey box view <box> --json --all                   one grid's threads
 hey thread read <topic-id> --html                 one thread as an HTML5 document
 hey watch --events added,updated,deleted,resync   the live feed of mail changes
 ```
@@ -82,7 +82,7 @@ fields and ignores the rest:
   placement when it moves.
 - `name` is the subject, `summary` the preview.
 - `next_page` present means the read was capped. The plugin then treats what
-  came back as "what was seen", never as the collection's whole membership,
+  came back as "what was seen", never as the grid's whole membership,
   and nothing is ever reported gone on the strength of it.
 
 `thread read --html` answers no envelope: a bare HTML5 document, one
@@ -126,7 +126,7 @@ The plugin reads exactly these fields:
   while the thread is unseen.
 - `deleted` names only the posting and its box. The plugin remembers which
   posting holds each thread in each box, so it knows which thread left.
-- Every thread line names its box, so a change maps to its collection without
+- Every thread line names its box, so a change maps to its grid without
   a read. `box.kind` is the selector `box view` takes; a box that is none of
   the six is ignored.
 - `resync` means the box changed more than the feed could list: re-read it.
@@ -169,7 +169,7 @@ node reopens with a new scope does not cost a restart. With no stream open,
 no feed runs and nothing walks on a clock.
 
 Every line of the feed lands in memory at once, and a line that changes a
-collection's listing tells the node through the `Watch` stream, so new mail
+grid's listing tells the node through the `Watch` stream, so new mail
 reaches the grid in seconds. `resync` re-reads its box. `ready` re-reads
 every box: the feed says nothing about the time before it was live, so the
 first `ready` and every one after a reconnect is a catch-up.
@@ -180,24 +180,24 @@ by itself — but one that has not said `ready` within 2m is restarted. A CLI
 that refuses `watch` as usage (exit 1 or 8: it has no such command) is not
 restarted; the log says so and reads walk on the `refresh` window instead.
 
-While the feed is live, and a collection's catch-up walk has landed, a read
+While the feed is live, and a grid's catch-up walk has landed, a read
 of it walks nothing: the feed keeps it. While the feed is not live — not
 started, disconnected, restarting, or refused — `refresh` rules: a read of a
-collection whose last walk is older than that walks it.
+grid whose last walk is older than that walks it.
 
 A read answers from memory at once whenever memory has a listing of the
-collection, even while a walk it started runs behind it. Only a read with no
+grid, even while a walk it started runs behind it. Only a read with no
 listing to answer — the first ever — waits for the walk, at most 2s. A read
 never fails because HEY did not answer: the last failed walk's reason, or the
 verdict the feed ended on (not signed in), is the listing's `unreachable`
 until a walk lands or the feed is live again. Each edge of a failure tells the
 node, so the reason reaches an open grid and leaves it without a gesture.
 
-`Watch` sends a `ContextChanged` per collection whose listing changed,
+`Watch` sends a `GridChanged` per grid whose listing changed,
 whether the feed or a walk changed it, and an `EntryChanged` for a thread
 whose page changed in place: a reply landed, which HEY says by moving the
 thread's `active_at`, the entry's `content_stamp`. The entry is the thread's
-one tile, in everything. A burst is one change per collection and one per
+one tile, in everything. A burst is one change per grid and one per
 thread: a stream that falls behind is owed each once, never once per line,
 and the feed never waits on it.
 
@@ -220,7 +220,7 @@ everything untouched, and a tile dragged out of a box into your own grid is a
 link to that tile, which keeps working through every move. It reads dead only
 once HEY no longer has the thread.
 
-`Probe` answers for the context the node asks about. In a box: present while
+`Probe` answers for the grid the node asks about. In a box: present while
 the box holds the thread, gone once a whole read of the box did not list it
 or the feed moved its posting out, otherwise "cannot say". In everything:
 present while some box holds it, otherwise `hey thread read` decides — gone
@@ -237,7 +237,7 @@ changes, and the node passes that on to every box that links into it.
 ## State
 
 `state_dir` holds one file, `mail.json`: the threads the plugin has seen,
-each collection's membership and when each was last walked, so a restart
+each grid's membership and when each was last walked, so a restart
 answers instantly, and inside the `refresh` window without running the CLI.
 The feed's first `ready` then walks every box behind that answer, because
 nothing says what changed while no plugin was running. It is disposable —

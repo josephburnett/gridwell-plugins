@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Life is the plugin's lifetime: the context every detached walk and every
+// Life is the plugin's lifetime: the grid every detached walk and every
 // piece of watched work runs under, so none outlives the plugin and none runs
 // under context.Background (rule 13). A plugin process ends by being killed,
 // so in production nothing calls End; a test calls it to stop what it started.
@@ -28,7 +28,7 @@ func NewLife() *Life {
 func (l *Life) Context() context.Context { return l.ctx }
 
 // Go runs fn in its own goroutine under the lifetime's context. After End, fn
-// still runs, with a context already done, so a caller waiting on its result
+// still runs, with a grid already done, so a caller waiting on its result
 // is released rather than stranded.
 func (l *Life) Go(fn func(ctx context.Context)) {
 	l.mu.Lock()

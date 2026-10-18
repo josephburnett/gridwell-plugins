@@ -45,7 +45,7 @@ type View struct {
 	Starred bool
 }
 
-// SameViews reports whether two answers for one collection show the same
+// SameViews reports whether two answers for one grid show the same
 // thing: the same messages in the same order, each with the same record and
 // state. Dates compare as instants, so a record read back from the cache
 // equals the one Gmail answered.
@@ -66,63 +66,63 @@ func SameViews(a, b []View) bool {
 	return true
 }
 
-// Collection is one of the two Gmail labels this plugin walks. Key is the
-// plugin's context key, stable forever. LabelIDs are the label ids Gmail's
+// Grid is one of the two Gmail labels this plugin walks. Key is the
+// plugin's grid key, stable forever. LabelIDs are the label ids Gmail's
 // messages.list takes. Label is the name on the (+) menu row that opens it.
-type Collection struct {
+type Grid struct {
 	Key      string
 	LabelIDs []string
 	Label    string
 }
 
-// The context keys. They embed Gmail's own label id rather than a display
+// The grid keys. They embed Gmail's own label id rather than a display
 // name, because a display name is Gmail's to translate and a key is forever.
 const (
-	InboxContext   = "label:INBOX"
-	StarredContext = "label:STARRED"
+	InboxGrid   = "label:INBOX"
+	StarredGrid = "label:STARRED"
 )
 
 // UnreadLabel is Gmail's label id for an unread message. It is not a
-// collection — nobody wants an "unread" grid — but every walk asks for its
-// intersection with the collection it is walking, which is how the unread
+// grid — nobody wants an "unread" grid — but every walk asks for its
+// intersection with the grid it is walking, which is how the unread
 // mark stays true for a message whose metadata was fetched long ago.
 const UnreadLabel = "UNREAD"
 
 // StarredLabel is Gmail's label id for a starred message.
 const StarredLabel = "STARRED"
 
-// Collections are the labels walked, in the order the (+) menu offers them.
-// InboxContext is first because it is the collection to read first.
-var Collections = []Collection{
-	{Key: InboxContext, LabelIDs: []string{"INBOX"}, Label: "inbox"},
-	{Key: StarredContext, LabelIDs: []string{StarredLabel}, Label: "starred"},
+// Grids are the labels walked, in the order the (+) menu offers them.
+// InboxGrid is first because it is the grid to read first.
+var Grids = []Grid{
+	{Key: InboxGrid, LabelIDs: []string{"INBOX"}, Label: "inbox"},
+	{Key: StarredGrid, LabelIDs: []string{StarredLabel}, Label: "starred"},
 }
 
-// AllMailContext is the union of the labels walked: each message once, its
+// AllMailGrid is the union of the labels walked: each message once, its
 // one tile, which every label lists a link to. It is not Gmail's All Mail
 // label, which this plugin never walks.
 const (
-	AllMailContext = "all"
-	AllMailLabel   = "all mail"
+	AllMailGrid  = "all"
+	AllMailLabel = "all mail"
 )
 
-// Contexts are every context this plugin lists: the labels, then all mail.
-func Contexts() []string {
-	out := make([]string, 0, len(Collections)+1)
-	for _, c := range Collections {
+// Grids are every grid this plugin lists: the labels, then all mail.
+func GridKeys() []string {
+	out := make([]string, 0, len(Grids)+1)
+	for _, c := range Grids {
 		out = append(out, c.Key)
 	}
-	return append(out, AllMailContext)
+	return append(out, AllMailGrid)
 }
 
-// LookupCollection resolves a label's context key to its collection.
-func LookupCollection(key string) (Collection, bool) {
-	for _, c := range Collections {
+// LookupGrid resolves a label's grid key to its grid.
+func LookupGrid(key string) (Grid, bool) {
+	for _, c := range Grids {
 		if c.Key == key {
 			return c, true
 		}
 	}
-	return Collection{}, false
+	return Grid{}, false
 }
 
 // KeyPrefix namespaces message keys. A key names the same email for the life
@@ -179,14 +179,14 @@ const (
 	StarMark   = "★"
 )
 
-// StatusDetail is what the message's tile in context has to notice: unread,
+// StatusDetail is what the message's tile in grid has to notice: unread,
 // else starred outside the starred grid, where the grid already says so, else
 // nothing.
-func (v View) StatusDetail(context string) string {
+func (v View) StatusDetail(gridKey string) string {
 	switch {
 	case v.Unread:
 		return UnreadMark
-	case v.Starred && context != StarredContext:
+	case v.Starred && gridKey != StarredGrid:
 		return StarMark
 	}
 	return ""

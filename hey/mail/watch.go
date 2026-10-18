@@ -27,9 +27,9 @@ type Event struct {
 	Thread Thread
 }
 
-// Effect is what applying one event or walk did to one collection.
+// Effect is what applying one event or walk did to one grid.
 type Effect struct {
-	// Changed says the collection's listing differs from before.
+	// Changed says the grid's listing differs from before.
 	Changed bool
 	// Everything says everything's listing differs from before: the union
 	// gained or lost a thread, or a thread's record changed.

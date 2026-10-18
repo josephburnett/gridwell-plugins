@@ -84,11 +84,11 @@ func TestATickAbsorbsNewTodosWithoutAWalk(t *testing.T) {
 	if got := changed(t, w, 2); !reflect.DeepEqual(got, []string{"todos", "week:2026-08-31"}) {
 		t.Errorf("the new todo announced %v", got)
 	}
-	wk, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "week:2026-08-31"})
+	wk, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "week:2026-08-31"})
 	if err != nil || len(wk.Entries) != 1 || wk.Entries[0].Key != "todo:3" {
 		t.Fatalf("the new todo's week = (%v, %v)", wk.GetEntries(), err)
 	}
-	walked := p.flights.WalkedAt()[todos.RootContext]
+	walked := p.flights.WalkedAt()[todos.RootGrid]
 	if !walked.Equal(at("2026-08-25T12:00:00Z")) {
 		t.Errorf("a glance moved the walk stamp to %v", walked)
 	}
@@ -173,7 +173,7 @@ func TestAGlanceCutShortIsNotAFailure(t *testing.T) {
 	clock := at("2026-08-25T12:00:00Z")
 	p := New(src, Options{Refresh: MinRefresherInterval, Now: func() time.Time { return clock }})
 	t.Cleanup(p.Close)
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	landed(t, p)
@@ -191,7 +191,7 @@ func TestAGlanceCutShortIsNotAFailure(t *testing.T) {
 	// on the walk it starts: there must be none.
 	src.hang.Store(false)
 	clock = clock.Add(DefaultFullRefresh)
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatalf("the read after the stream ended answered %v", err)
 	}
 }

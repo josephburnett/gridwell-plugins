@@ -1,6 +1,6 @@
 // Package plugin is the gmail plugin: the wire half over
 // gridwell-plugins/gmail/mailbox. It projects two of Gmail's labels — the
-// inbox and the starred mail — as two grids, one context each, read through
+// inbox and the starred mail — as two grids, one grid each, read through
 // the Gmail API, and all mail, their union, as a third. A message is one url
 // tile in all mail that serves a page, the email itself as the HTML the
 // sender wrote, through the node's content API; a label lists links to it,
@@ -45,12 +45,12 @@ const Kind = "gmail"
 const displayName = "gmail"
 
 // DefaultRefresh bounds how often memory catches up with Gmail. The node
-// lists a context on every GetGrid and GetTile, and a descent must feel
+// lists a grid on every GetGrid and GetTile, and a descent must feel
 // instant rather than cost a round trip to Google each time.
 const DefaultRefresh = time.Minute
 
 // SweepEvery is how old the last full walk may grow before a refresh walks
-// every collection again instead of reading history. History carries every
+// every grid again instead of reading history. History carries every
 // change, but a catch-up only sees labels it watches and messages it could
 // read, so once a day the cold path runs as a consistency pass.
 const SweepEvery = 24 * time.Hour
@@ -76,15 +76,15 @@ const DefaultMaxMessages = 500
 const MinPollInterval = time.Second
 
 // account is the one key every refresh runs under. Gmail's history is
-// account-wide, and one history id is current to every context at once, so a
-// refresh is of the whole account, never of one context.
+// account-wide, and one history id is current to every grid at once, so a
+// refresh is of the whole account, never of one grid.
 const account = "account"
 
 // cacheFile is the memory's file in the state directory.
 const cacheFile = "gmail.json"
 
 // cacheVersion is bumped whenever cache changes shape.
-const cacheVersion = 1
+const cacheVersion = 2
 
 // cache is what the cache file holds: the memory, and the plugin's own
 // stamps — when each refresh and the last full walk landed — so a restart
@@ -209,7 +209,7 @@ func New(src Source, o Options) *Plugin {
 		Logf:        p.logf,
 	})
 	p.changes = memo.NewChanges(p.life, memo.ChangeOptions{
-		Unscoped: mailbox.Contexts(),
+		Unscoped: mailbox.GridKeys(),
 		Work:     work,
 		Do:       p.poll,
 		Linger:   o.Linger,
@@ -229,12 +229,12 @@ type clock struct{ now func() time.Time }
 func (c clock) Now() time.Time                         { return c.now() }
 func (c clock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
-// work names the background work a context in scope needs: every context
+// work names the background work a grid in scope needs: every grid
 // this plugin lists is read from the one account-wide history, so they share
-// one poll; any other context needs none.
-func work(context string) []string {
-	for _, c := range mailbox.Contexts() {
-		if c == context {
+// one poll; any other grid needs none.
+func work(gridKey string) []string {
+	for _, c := range mailbox.GridKeys() {
+		if c == gridKey {
 			return []string{account}
 		}
 	}
@@ -297,9 +297,9 @@ func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.I
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
-		MenuEntries: mailbox.MenuEntries(),
+		Grids:       mailbox.Declared(),
 		// These grids PROJECT a mail account that lives outside Gridwell, so
-		// their rows are summaries the node cannot re-arrange across contexts
+		// their rows are summaries the node cannot re-arrange across grids
 		// and the client draws them with the host treatment. It is a
 		// declaration, never inferred: the node has no list of which kinds
 		// are host-backed.
@@ -309,8 +309,8 @@ func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.I
 }
 
 // catchUpOrSweep is the one rule for how memory catches up. A full walk of
-// every collection when memory has no history id, has not seen every
-// collection, or last walked SweepEvery ago; else Gmail's history since the
+// every grid when memory has no history id, has not seen every
+// grid, or last walked SweepEvery ago; else Gmail's history since the
 // id memory is current to, and a full walk after all when Gmail says that id
 // is too old. swept reports that the full walk ran.
 func (p *Plugin) catchUpOrSweep(ctx context.Context) (swept bool, err error) {
@@ -322,12 +322,12 @@ func (p *Plugin) catchUpOrSweep(ctx context.Context) (swept bool, err error) {
 		if !errors.Is(err, mailbox.ErrHistoryExpired) {
 			return false, err
 		}
-		p.logf("gmail plugin: %v; walking every collection", err)
+		p.logf("gmail plugin: %v; walking every grid", err)
 	}
 	return true, p.sweep(ctx)
 }
 
-// sweep is the full walk: every collection, from the history id Gmail stood
+// sweep is the full walk: every grid, from the history id Gmail stood
 // at before the first listing. A change that lands during the walk is read
 // again by the next catch-up, and reading a change twice is harmless. A
 // history id Gmail would not give costs the next refresh a walk, not this one
@@ -335,7 +335,7 @@ func (p *Plugin) catchUpOrSweep(ctx context.Context) (swept bool, err error) {
 func (p *Plugin) sweep(ctx context.Context) error {
 	id, err := p.src.HistoryID(ctx)
 	p.episodes.note("history id", err, "gmail plugin: history id: %v (each refresh walks until Gmail gives one)", err)
-	for _, c := range mailbox.Collections {
+	for _, c := range mailbox.Grids {
 		if _, err := p.walk(ctx, c); err != nil {
 			return err
 		}
@@ -384,13 +384,13 @@ func (p *Plugin) catchUp(ctx context.Context) error {
 	return nil
 }
 
-// walk is one pass over one collection, and it is a DELTA: two cheap id
+// walk is one pass over one grid, and it is a DELTA: two cheap id
 // listings — the label, and the label intersected with UNREAD — and then a
 // metadata read for only the ids the memory has never seen. A message's
 // subject, sender and date do not change once Gmail has it, so re-reading a
 // known message would buy nothing; its read/unread state does change, and
 // that is what the second listing is for.
-func (p *Plugin) walk(ctx context.Context, c mailbox.Collection) (int, error) {
+func (p *Plugin) walk(ctx context.Context, c mailbox.Grid) (int, error) {
 	ids, whole, err := p.src.Label(ctx, c.LabelIDs, p.max)
 	if err != nil {
 		return 0, err
@@ -442,13 +442,13 @@ func sourceDown(down, err error) error {
 	return nil
 }
 
-// shows reports whether memory has an answer for a context: all mail has one
+// shows reports whether memory has an answer for a grid: all mail has one
 // once any label does.
 func (p *Plugin) shows(key string) bool {
-	if key != mailbox.AllMailContext {
+	if key != mailbox.AllMailGrid {
 		return p.mem.Shows(key)
 	}
-	for _, c := range mailbox.Collections {
+	for _, c := range mailbox.Grids {
 		if p.mem.Shows(c.Key) {
 			return true
 		}
@@ -456,7 +456,7 @@ func (p *Plugin) shows(key string) bool {
 	return false
 }
 
-// read makes a context answerable: fresh memory as it is, else a refresh,
+// read makes a grid answerable: fresh memory as it is, else a refresh,
 // joined if one is in flight (memo.Flights.Read). A read memory can answer
 // never waits and never fails on Gmail: unreachable is why the last refresh
 // failed, "" while it lands, and memory answers either way — a token revoked
@@ -474,7 +474,7 @@ func (p *Plugin) read(ctx context.Context, key string) (unreachable string, curr
 	return unreachable, unreachable == "" && p.flights.Fresh(account) && p.mem.HistoryID() != 0, nil
 }
 
-// List answers one context.
+// List answers one grid.
 //
 // A label lists links into all mail (mailbox.LabelEntries), and is
 // authoritative only when it is definitive: its last walk read the whole
@@ -483,23 +483,23 @@ func (p *Plugin) read(ctx context.Context, key string) (unreachable string, curr
 // about what left since. All mail is never authoritative: a message that
 // left every label is usually archived, not gone, and Probe asks Gmail.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	if req.Context == mailbox.AllMailContext {
-		unreachable, _, err := p.read(ctx, req.Context)
+	if req.Grid == mailbox.AllMailGrid {
+		unreachable, _, err := p.read(ctx, req.Grid)
 		if err != nil {
 			return nil, err
 		}
 		views := p.mem.AllMail()
-		return listing(mailbox.AllMailLabel, views, mailbox.CollectionEntries(views), false, unreachable), nil
+		return listing(mailbox.AllMailLabel, views, mailbox.GridEntries(views), false, unreachable), nil
 	}
-	c, ok := mailbox.LookupCollection(req.Context)
+	c, ok := mailbox.LookupGrid(req.Grid)
 	if !ok {
-		return nil, status.Errorf(codes.InvalidArgument, "gmail plugin: unknown context %q", req.Context)
+		return nil, status.Errorf(codes.InvalidArgument, "gmail plugin: unknown gridKey %q", req.Grid)
 	}
 	unreachable, current, err := p.read(ctx, c.Key)
 	if err != nil {
 		return nil, err
 	}
-	views := p.mem.Collection(c.Key)
+	views := p.mem.Grid(c.Key)
 	return listing(c.Label, views, mailbox.LabelEntries(c.Key, views), p.mem.Definitive(c.Key) && current, unreachable), nil
 }
 
@@ -552,12 +552,12 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 }
 
 // Probe is the one place that decides a message has left, and it answers for
-// the context asked. A label: PRESENT while it holds the message, GONE once a
+// the grid asked. A label: PRESENT while it holds the message, GONE once a
 // whole read of it did not (mailbox.InLabel); the message is usually in
 // another label or archived, and its tile in all mail stays. All mail:
 // PRESENT while some label holds it, else Gmail's own word on the message —
 // GONE only when Gmail says it does not have it, and then memory forgets it
-// too. No context (a node from before contexts): PRESENT while some label
+// too. No grid (a node from before grids): PRESENT while some label
 // holds it, GONE once every label has been read and none does. UNSPECIFIED,
 // meaning "cannot say", otherwise: a half-walked memory must never cost the
 // user a tile.
@@ -566,7 +566,7 @@ func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*plugin
 	if !ok {
 		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 	}
-	switch req.Context {
+	switch req.Grid {
 	case "":
 		switch {
 		case p.mem.Member(id):
@@ -574,7 +574,7 @@ func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*plugin
 		case p.mem.Swept():
 			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 		}
-	case mailbox.AllMailContext:
+	case mailbox.AllMailGrid:
 		if p.mem.Member(id) {
 			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
 		}
@@ -587,10 +587,10 @@ func (p *Plugin) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*plugin
 			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 		}
 	default:
-		if _, ok := mailbox.LookupCollection(req.Context); !ok {
-			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a context this plugin never lists
+		if _, ok := mailbox.LookupGrid(req.Grid); !ok {
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a grid this plugin never lists
 		}
-		switch p.mem.InLabel(req.Context, id) {
+		switch p.mem.InLabel(req.Grid, id) {
 		case mailbox.Present:
 			return presence(pluginv1.ProbeResponse_PRESENCE_PRESENT), nil
 		case mailbox.Gone:
@@ -626,15 +626,15 @@ func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.F
 		if !strings.Contains(hay, q) {
 			continue
 		}
-		entries := mailbox.CollectionEntries([]mailbox.View{v})
+		entries := mailbox.GridEntries([]mailbox.View{v})
 		if len(entries) == 0 {
 			continue
 		}
 		resp.Results = append(resp.Results, &pluginv1.FindResult{
-			Entry:       entries[0],
-			ContextPath: []string{mailbox.AllMailContext},
-			Snippet:     v.Preview(),
-			Score:       1,
+			Entry:    entries[0],
+			GridPath: []string{mailbox.AllMailGrid},
+			Snippet:  v.Preview(),
+			Score:    1,
 		})
 	}
 	return resp, nil

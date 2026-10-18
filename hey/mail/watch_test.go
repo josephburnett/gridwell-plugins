@@ -14,7 +14,7 @@ func deleted(box string, posting int64) Event {
 }
 
 func TestLookupBoxIsTheSelectorTable(t *testing.T) {
-	for _, c := range Collections {
+	for _, c := range Grids {
 		got, ok := LookupBox(c.Box)
 		if !ok || got.Key != c.Key {
 			t.Errorf("LookupBox(%q) = %+v, %v", c.Box, got, ok)
@@ -30,32 +30,32 @@ func TestLookupBoxIsTheSelectorTable(t *testing.T) {
 // — takes it out, and each says whether the listing changed.
 func TestApplyMovesTheListingOnePostingAtATime(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
 
-	eff := m.Apply(ImboxContext, added("imbox", thread(2, "b", "2026-01-03")))
+	eff := m.Apply(ImboxGrid, added("imbox", thread(2, "b", "2026-01-03")))
 	if !eff.Changed || eff.Rewalk {
 		t.Fatalf("added = %+v", eff)
 	}
-	if got, want := keys(m.Collection(ImboxContext)), []int64{1, 2}; !reflect.DeepEqual(got, want) {
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{1, 2}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("imbox = %v, want %v", got, want)
 	}
 
 	seen := thread(2, "b", "2026-01-03")
 	seen.Seen = true
-	if eff := m.Apply(ImboxContext, Event{Change: ChangeUpdated, Box: "imbox", PostingID: 20, Thread: seen}); !eff.Changed {
+	if eff := m.Apply(ImboxGrid, Event{Change: ChangeUpdated, Box: "imbox", PostingID: 20, Thread: seen}); !eff.Changed {
 		t.Fatal("an update the listing shows reported no change")
 	}
 	if got, _ := m.Get(2); !got.Seen {
 		t.Error("the update did not land")
 	}
-	if eff := m.Apply(ImboxContext, Event{Change: ChangeUpdated, Box: "imbox", PostingID: 20, Thread: seen}); eff.Changed {
+	if eff := m.Apply(ImboxGrid, Event{Change: ChangeUpdated, Box: "imbox", PostingID: 20, Thread: seen}); eff.Changed {
 		t.Error("a repeated update reported a change")
 	}
 
-	if eff := m.Apply(ImboxContext, deleted("imbox", 10)); !eff.Changed || eff.Rewalk {
+	if eff := m.Apply(ImboxGrid, deleted("imbox", 10)); !eff.Changed || eff.Rewalk {
 		t.Fatalf("deleted = %+v", eff)
 	}
-	if got, want := keys(m.Collection(ImboxContext)), []int64{2}; !reflect.DeepEqual(got, want) {
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{2}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("after delete imbox = %v, want %v", got, want)
 	}
 	if _, ok := m.Get(1); !ok {
@@ -68,29 +68,29 @@ func TestApplyMovesTheListingOnePostingAtATime(t *testing.T) {
 // The first changes nothing; the second only a read of the box can settle.
 func TestAnUnmappedDeleteRewalksOnlyWhenItCouldBeAMember(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
-	if eff := m.Apply(ImboxContext, deleted("imbox", 999)); eff.Changed || eff.Rewalk {
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
+	if eff := m.Apply(ImboxGrid, deleted("imbox", 999)); eff.Changed || eff.Rewalk {
 		t.Fatalf("a bundle's delete over a mapped listing = %+v", eff)
 	}
 
 	restored := NewMemory()
 	restored.Restore(m.Snapshot())
-	if eff := restored.Apply(ImboxContext, deleted("imbox", 10)); !eff.Rewalk {
+	if eff := restored.Apply(ImboxGrid, deleted("imbox", 10)); !eff.Rewalk {
 		t.Fatalf("a delete a restored memory cannot map = %+v", eff)
 	}
-	restored.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true)
-	if eff := restored.Apply(ImboxContext, deleted("imbox", 10)); !eff.Changed || eff.Rewalk {
+	restored.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
+	if eff := restored.Apply(ImboxGrid, deleted("imbox", 10)); !eff.Changed || eff.Rewalk {
 		t.Fatalf("after a walk the delete maps: %+v", eff)
 	}
 }
 
-// Before any walk has listed a collection there is no listing for an event to
+// Before any walk has listed a grid there is no listing for an event to
 // join: a lone thread would read as the whole box.
 func TestAnEventBeforeTheFirstWalkListsNothing(t *testing.T) {
 	m := NewMemory()
-	eff := m.Apply(ImboxContext, added("imbox", thread(1, "a", "2026-01-02")))
-	if eff.Changed || m.Shows(ImboxContext) {
-		t.Fatalf("an event made a listing: %+v, shows=%v", eff, m.Shows(ImboxContext))
+	eff := m.Apply(ImboxGrid, added("imbox", thread(1, "a", "2026-01-02")))
+	if eff.Changed || m.Shows(ImboxGrid) {
+		t.Fatalf("an event made a listing: %+v, shows=%v", eff, m.Shows(ImboxGrid))
 	}
 	if _, ok := m.Get(1); !ok {
 		t.Error("the event's thread was not remembered")
@@ -102,14 +102,14 @@ func TestAnEventBeforeTheFirstWalkListsNothing(t *testing.T) {
 // read are where the feed put them, not where the read saw them.
 func TestEventsDuringAWalkStandOverItsAnswer(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
+	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
 
-	m.BeginWalk(ImboxContext)
-	m.Apply(ImboxContext, added("imbox", thread(3, "c", "2026-01-04")))
-	m.Apply(ImboxContext, deleted("imbox", 10))
+	m.BeginWalk(ImboxGrid)
+	m.Apply(ImboxGrid, added("imbox", thread(3, "c", "2026-01-04")))
+	m.Apply(ImboxGrid, deleted("imbox", 10))
 	// The read started before both: it still holds 1 and lacks 3.
-	changed := m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true).Changed
-	if got, want := keys(m.Collection(ImboxContext)), []int64{2, 3}; !reflect.DeepEqual(got, want) {
+	changed := m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true).Changed
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{2, 3}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("imbox = %v, want %v", got, want)
 	}
 	if changed {
@@ -117,34 +117,34 @@ func TestEventsDuringAWalkStandOverItsAnswer(t *testing.T) {
 	}
 
 	// A closed walk journals nothing further.
-	m.Apply(ImboxContext, deleted("imbox", 20))
-	m.Absorb(ImboxContext, []Thread{thread(2, "b", "2026-01-03"), thread(3, "c", "2026-01-04")}, true)
-	if got, want := keys(m.Collection(ImboxContext)), []int64{2, 3}; !reflect.DeepEqual(got, want) {
+	m.Apply(ImboxGrid, deleted("imbox", 20))
+	m.Absorb(ImboxGrid, []Thread{thread(2, "b", "2026-01-03"), thread(3, "c", "2026-01-04")}, true)
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{2, 3}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("a closed walk replayed: imbox = %v, want %v", got, want)
 	}
 
 	// A walk that failed drops its journal.
-	m.BeginWalk(ImboxContext)
-	m.Apply(ImboxContext, deleted("imbox", 20))
-	m.EndWalk(ImboxContext)
-	m.Absorb(ImboxContext, []Thread{thread(2, "b", "2026-01-03")}, true)
-	if got, want := keys(m.Collection(ImboxContext)), []int64{2}; !reflect.DeepEqual(got, want) {
+	m.BeginWalk(ImboxGrid)
+	m.Apply(ImboxGrid, deleted("imbox", 20))
+	m.EndWalk(ImboxGrid)
+	m.Absorb(ImboxGrid, []Thread{thread(2, "b", "2026-01-03")}, true)
+	if got, want := keys(m.Grid(ImboxGrid)), []int64{2}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("a failed walk's journal replayed: imbox = %v, want %v", got, want)
 	}
 }
 
 func TestAbsorbReportsWhetherTheListingChanged(t *testing.T) {
 	m := NewMemory()
-	if !m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true).Changed {
+	if !m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true).Changed {
 		t.Fatal("a first listing reported no change")
 	}
-	if m.Absorb(ImboxContext, []Thread{thread(1, "a", "2026-01-02")}, true).Changed {
+	if m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true).Changed {
 		t.Fatal("the same listing reported a change")
 	}
-	if !m.Absorb(ImboxContext, nil, true).Changed {
+	if !m.Absorb(ImboxGrid, nil, true).Changed {
 		t.Fatal("an emptied box reported no change")
 	}
-	if !m.Shows(ImboxContext) {
+	if !m.Shows(ImboxGrid) {
 		t.Error("a walked empty box is not a listing to answer with")
 	}
 }

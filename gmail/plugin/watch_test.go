@@ -10,10 +10,10 @@ import (
 )
 
 // Gmail cannot tell, so the plugin asks its history on a clock, and only
-// while a Watch stream has one of its contexts in scope: the stream is the
+// while a Watch stream has one of its grids in scope: the stream is the
 // node saying someone is looking. With none, or one scoped to nothing this
 // plugin lists, Gmail is asked nothing.
-func TestHistoryPollsOnlyWhileAContextIsInScope(t *testing.T) {
+func TestHistoryPollsOnlyWhileAGridIsInScope(t *testing.T) {
 	f := newFake()
 	f.history = true
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
@@ -34,7 +34,7 @@ func TestHistoryPollsOnlyWhileAContextIsInScope(t *testing.T) {
 	quiet("a stream scoped to nothing this plugin lists")
 	closeOther()
 
-	closeInbox := openWatch(t, p, mailbox.InboxContext)
+	closeInbox := openWatch(t, p, mailbox.InboxGrid)
 	deadline := time.Now().Add(3 * MinPollInterval)
 	for f.count("history") == 0 {
 		if time.Now().After(deadline) {
@@ -47,16 +47,16 @@ func TestHistoryPollsOnlyWhileAContextIsInScope(t *testing.T) {
 	quiet("after the last stream left")
 }
 
-// openWatch opens a Watch scoped to contexts and waits for its header; the
+// openWatch opens a Watch scoped to grids and waits for its header; the
 // returned func hangs up and waits for Watch to return.
-func openWatch(t *testing.T, p *Plugin, contexts ...string) func() {
+func openWatch(t *testing.T, p *Plugin, gridKeys ...string) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &watchStream{ctx: ctx, sent: make(chan string, 64)}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := p.Watch(&pluginv1.WatchRequest{Contexts: contexts}, w); err != nil {
+		if err := p.Watch(&pluginv1.WatchRequest{Grids: gridKeys}, w); err != nil {
 			t.Error(err)
 		}
 	}()

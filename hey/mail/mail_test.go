@@ -63,26 +63,26 @@ func TestLabelIsTheSenderAndSubjectWhateverTheSeenState(t *testing.T) {
 	}
 }
 
-func TestCollectionsAreTheSixBoxes(t *testing.T) {
-	if len(Collections) != 6 {
-		t.Fatalf("got %d collections", len(Collections))
+func TestGridsAreTheSixBoxes(t *testing.T) {
+	if len(Grids) != 6 {
+		t.Fatalf("got %d grids", len(Grids))
 	}
 	boxes := map[string]bool{}
-	for _, c := range Collections {
-		if _, ok := LookupCollection(c.Key); !ok {
-			t.Errorf("LookupCollection(%q) missed", c.Key)
+	for _, c := range Grids {
+		if _, ok := LookupGrid(c.Key); !ok {
+			t.Errorf("LookupGrid(%q) missed", c.Key)
 		}
 		boxes[c.Box] = true
 	}
 	for _, want := range []string{"imbox", "laterbox", "asidebox", "feedbox", "trailbox", "bubblebox"} {
 		if !boxes[want] {
-			t.Errorf("no collection reads box %q", want)
+			t.Errorf("no grid reads box %q", want)
 		}
 	}
-	if _, ok := LookupCollection("box:spambox"); ok {
-		t.Error("LookupCollection accepted a box this plugin does not project")
+	if _, ok := LookupGrid("box:spambox"); ok {
+		t.Error("LookupGrid accepted a box this plugin does not project")
 	}
-	if _, ok := LookupCollection(EverythingContext); ok {
+	if _, ok := LookupGrid(EverythingGrid); ok {
 		t.Error("everything is no box: nothing walks it")
 	}
 }

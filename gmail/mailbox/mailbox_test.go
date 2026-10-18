@@ -41,18 +41,18 @@ func TestKeysRoundTripAndRejectWhatIsNotOne(t *testing.T) {
 	}
 }
 
-// The two collections are the projection, and the inbox leads because it is
-// also the root context.
-func TestCollectionsAreInboxThenStarred(t *testing.T) {
-	if len(Collections) != 2 || Collections[0].Key != InboxContext || Collections[1].Key != StarredContext {
-		t.Fatalf("collections = %+v", Collections)
+// The two grids are the projection, and the inbox leads because it is
+// also the root grid.
+func TestGridsAreInboxThenStarred(t *testing.T) {
+	if len(Grids) != 2 || Grids[0].Key != InboxGrid || Grids[1].Key != StarredGrid {
+		t.Fatalf("grids = %+v", Grids)
 	}
-	c, ok := LookupCollection(StarredContext)
+	c, ok := LookupGrid(StarredGrid)
 	if !ok || len(c.LabelIDs) != 1 || c.LabelIDs[0] != "STARRED" {
 		t.Fatalf("starred = %+v %v", c, ok)
 	}
-	if _, ok := LookupCollection("label:SPAM"); ok {
-		t.Error("an undeclared label resolved to a collection")
+	if _, ok := LookupGrid("label:SPAM"); ok {
+		t.Error("an undeclared label resolved to a grid")
 	}
 }
 
@@ -73,11 +73,11 @@ func TestTheLabelIsTheSubjectAndStateIsQuiet(t *testing.T) {
 	}
 	for _, c := range cases {
 		entries := map[string]*Entry{
-			AllMailContext: CollectionEntries([]View{c.v})[0],
-			InboxContext:   LabelEntries(InboxContext, []View{c.v})[0],
-			StarredContext: LabelEntries(StarredContext, []View{c.v})[0],
+			AllMailGrid: GridEntries([]View{c.v})[0],
+			InboxGrid:   LabelEntries(InboxGrid, []View{c.v})[0],
+			StarredGrid: LabelEntries(StarredGrid, []View{c.v})[0],
 		}
-		for ctx, want := range map[string]string{AllMailContext: c.all, InboxContext: c.inbox, StarredContext: c.starred} {
+		for ctx, want := range map[string]string{AllMailGrid: c.all, InboxGrid: c.inbox, StarredGrid: c.starred} {
 			e := entries[ctx]
 			if e.Label != "lunch" {
 				t.Errorf("%+v in %s: label = %q, want the subject", c.v, ctx, e.Label)
@@ -130,10 +130,10 @@ func TestHintsAreTheCalendarCellOfTheDate(t *testing.T) {
 	}
 	more := append([]View{{Message: msg("a", "one", "2026-01-03T09:00:00Z")}}, one...)
 	before := map[string]*Entry{}
-	for _, e := range CollectionEntries(one) {
+	for _, e := range GridEntries(one) {
 		before[e.Key] = e
 	}
-	for _, e := range CollectionEntries(more) {
+	for _, e := range GridEntries(more) {
 		m, _ := ParseKey(e.Key)
 		var date time.Time
 		for _, v := range more {
@@ -171,7 +171,7 @@ func TestWrapPlainEscapes(t *testing.T) {
 	}
 }
 
-// Every entry is a url tile that serves a page, and every context is a menu
+// Every entry is a url tile that serves a page, and every grid is a menu
 // entry.
 func TestEntriesAndMenu(t *testing.T) {
 	views := []View{
@@ -179,7 +179,7 @@ func TestEntriesAndMenu(t *testing.T) {
 		{Message: msg("b", "two", "2026-01-03T10:00:00Z"), Unread: true},
 		{Message: msg("c", "three", "2026-01-04T10:00:00Z")},
 	}
-	es := CollectionEntries(views)
+	es := GridEntries(views)
 	if len(es) != 3 {
 		t.Fatalf("entries = %d", len(es))
 	}
@@ -189,9 +189,9 @@ func TestEntriesAndMenu(t *testing.T) {
 		}
 	}
 
-	menu := MenuEntries()
-	if len(menu) != len(Collections)+1 || menu[0].Context != InboxContext ||
-		menu[1].Context != StarredContext || menu[1].Label != "starred" || menu[2].Context != AllMailContext {
+	menu := Declared()
+	if len(menu) != len(Grids)+1 || menu[0].Grid != InboxGrid ||
+		menu[1].Grid != StarredGrid || menu[1].Label != "starred" || menu[2].Grid != AllMailGrid {
 		t.Fatalf("menu = %+v, want one entry per label, then all mail", menu)
 	}
 }

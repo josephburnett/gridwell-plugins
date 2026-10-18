@@ -27,7 +27,7 @@ import (
 // patience bounds every wait on the OS, which delivers in milliseconds.
 const patience = 10 * time.Second
 
-// watchStream hears each ContextChanged's context on changes and each
+// watchStream hears each GridChanged's grid on changes and each
 // EntryChanged on entries.
 type watchStream struct {
 	grpc.ServerStream
@@ -49,7 +49,7 @@ func (s *watchStream) Send(c *pluginv1.Change) error {
 		s.entries <- e
 		return nil
 	}
-	s.changes <- c.GetContextChanged().GetContext()
+	s.changes <- c.GetGridChanged().GetGrid()
 	return nil
 }
 
@@ -61,20 +61,20 @@ type opened struct {
 	ended sync.Once
 }
 
-func openWatch(t *testing.T, p *Plugin, contexts ...string) *opened {
+func openWatch(t *testing.T, p *Plugin, gridKeys ...string) *opened {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &watchStream{ctx: ctx, header: make(chan struct{}), changes: make(chan string, 100),
 		entries: make(chan *pluginv1.EntryChanged, 100)}
 	o := &opened{watchStream: s, done: make(chan error, 1), stop: cancel}
-	go func() { o.done <- p.Watch(&pluginv1.WatchRequest{Contexts: contexts}, s) }()
+	go func() { o.done <- p.Watch(&pluginv1.WatchRequest{Grids: gridKeys}, s) }()
 	t.Cleanup(func() { o.close(t) })
 	select {
 	case <-s.header:
 	case err := <-o.done:
-		t.Fatalf("Watch(%v) ended before its header: %v", contexts, err)
+		t.Fatalf("Watch(%v) ended before its header: %v", gridKeys, err)
 	case <-time.After(patience):
-		t.Fatalf("Watch(%v) sent no header", contexts)
+		t.Fatalf("Watch(%v) sent no header", gridKeys)
 	}
 	return o
 }
@@ -105,7 +105,7 @@ func (o *opened) until(t *testing.T, want string) []string {
 			}
 			got = append(got, key)
 		case <-deadline:
-			t.Fatalf("no ContextChanged{%q}; got %v", want, got)
+			t.Fatalf("no GridChanged{%q}; got %v", want, got)
 		}
 	}
 }
@@ -212,7 +212,7 @@ func TestWatchAnnouncesABurstOnceForItsDirectory(t *testing.T) {
 	write(t, filepath.Join(root, "b", "z"), "")
 	poke(t, root)
 	if got := o.until(t, sentinel); len(got) != 0 {
-		t.Fatalf("one burst in a and a write in b said %v beyond the one ContextChanged{a}", got)
+		t.Fatalf("one burst in a and a write in b said %v beyond the one GridChanged{a}", got)
 	}
 }
 
@@ -314,7 +314,7 @@ func TestWatchLimitIsTheStreamError(t *testing.T) {
 
 	for range 2 {
 		s := &watchStream{ctx: context.Background(), header: make(chan struct{}), changes: make(chan string, 1)}
-		err := p.Watch(&pluginv1.WatchRequest{Contexts: []string{"a", "b"}}, s)
+		err := p.Watch(&pluginv1.WatchRequest{Grids: []string{"a", "b"}}, s)
 		if status.Code(err) != codes.ResourceExhausted {
 			t.Fatalf("Watch = %v; want ResourceExhausted", err)
 		}
@@ -388,8 +388,8 @@ func TestWatchTellsAWrittenFileItsEntry(t *testing.T) {
 	_, now := listed(t, p, "a")
 	for _, key := range []string{"a/notes.md", "a/pic.png"} {
 		got := o.entry(t, key)
-		if got.Context != "a" || !proto.Equal(got.Entry, now[key]) {
-			t.Errorf("EntryChanged = %v in %q, want %v in %q", got.Entry, got.Context, now[key], "a")
+		if got.Grid != "a" || !proto.Equal(got.Entry, now[key]) {
+			t.Errorf("EntryChanged = %v in %q, want %v in %q", got.Entry, got.Grid, now[key], "a")
 		}
 	}
 	if now["a/pic.png"].PreviewStamp == was["a/pic.png"].PreviewStamp {
@@ -443,7 +443,7 @@ func TestWatchLimitLogsOncePerEpisode(t *testing.T) {
 	refuse := func() {
 		t.Helper()
 		s := &watchStream{ctx: context.Background(), header: make(chan struct{}), changes: make(chan string, 1)}
-		if err := p.Watch(&pluginv1.WatchRequest{Contexts: []string{"a", "b"}}, s); status.Code(err) != codes.ResourceExhausted {
+		if err := p.Watch(&pluginv1.WatchRequest{Grids: []string{"a", "b"}}, s); status.Code(err) != codes.ResourceExhausted {
 			t.Fatalf("Watch = %v; want ResourceExhausted", err)
 		}
 	}

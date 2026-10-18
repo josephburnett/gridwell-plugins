@@ -45,7 +45,7 @@ func (m *fakeMarker) MarkDone(_ context.Context, id int64) error {
 // unlisted.
 func weekState(t *testing.T, p *Plugin, week string, key string) string {
 	t.Helper()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: week})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: week})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestDeleteMarksTheTodoDone(t *testing.T) {
 	p := New(src, Options{StateDir: dir, Marker: m})
 	ctx := context.Background()
 
-	root, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	root, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestDeleteMarksTheTodoDone(t *testing.T) {
 	if got := weekState(t, p, week, key); got != todos.StateDone {
 		t.Fatalf("after delete the listing says %q, want done", got)
 	}
-	root, err = p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext})
+	root, err = p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestDeleteFailureLeavesTheMemoryAlone(t *testing.T) {
 	m := &fakeMarker{src: src, err: status.Error(codes.PermissionDenied, "gitlab: 403 (marking done needs the token's api scope)")}
 	p := New(src, Options{StateDir: dir, Marker: m})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.Delete(ctx, &pluginv1.DeleteRequest{Key: "todo:1"}); status.Code(err) != codes.PermissionDenied {
@@ -195,7 +195,7 @@ func TestDeleteRefusals(t *testing.T) {
 	m := &fakeMarker{src: src}
 	p := New(src, Options{Marker: m})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -215,7 +215,7 @@ func TestDeleteRefusals(t *testing.T) {
 	}
 
 	unwalked := New(&oneShot{}, Options{Marker: m, FullRefresh: time.Hour, Now: func() time.Time { return at("2026-08-18T10:00:00Z") }})
-	unwalked.flights.Restore(map[string]time.Time{todos.RootContext: at("2026-08-18T10:00:00Z")}) // fresh, so Delete never waits on a walk
+	unwalked.flights.Restore(map[string]time.Time{todos.RootGrid: at("2026-08-18T10:00:00Z")}) // fresh, so Delete never waits on a walk
 	if _, err := unwalked.Delete(ctx, &pluginv1.DeleteRequest{Key: "todo:999"}); status.Code(err) != codes.Unavailable {
 		t.Errorf("unknown todo before the first walk = %v, want Unavailable", err)
 	}

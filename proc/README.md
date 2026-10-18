@@ -23,7 +23,7 @@ broken.
 
 ## Keys
 
-- A process's key is its pid (`4242`), and its grid's context is the same
+- A process's key is its pid (`4242`), and the key of its grid is the same
   pid. A pid the kernel reuses is a new process under the old key.
 - `info:<pid>` is the `@info` tile in that pid's own grid: name, state,
   memory, threads, cwd and command line, as markdown.
@@ -51,9 +51,9 @@ nothing otherwise. The label is always the pid.
 `/proc` cannot announce a change: inotify sees nothing there, and the netlink
 process connector needs `CAP_NET_ADMIN`. So the plugin polls, and only what
 is shown. While some client shows a pid's grid (the node's
-`WatchRequest.contexts`), the plugin reads that pid's children every 2 s
+`WatchRequest.grids`), the plugin reads that pid's children every 2 s
 (`PollEvery`), and when the set or a child's status emoji differs from the
-last read it sends one `ContextChanged` for the pid. A poll stops 10 s after
+last read it sends one `GridChanged` for the pid. A poll stops 10 s after
 the last client stops showing its pid (`memo.DefaultLinger`). Nothing shown,
 nothing read. The same poll reads the pid's `@info` body, and when it differs
 from the last read it sends one `EntryChanged` with the `@info` entry, so an

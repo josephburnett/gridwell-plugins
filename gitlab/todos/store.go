@@ -16,7 +16,7 @@ const CacheVersion = 1
 // has reached the end of GitLab's done list — the records to answer listings
 // from, and the high-water mark that lets the next done walk stop at the first
 // page carrying nothing unknown. WalkedAt is the plugin's flights' fact, when
-// each context's last walk landed, so a restart inside the full-refresh window
+// each grid's last walk landed, so a restart inside the full-refresh window
 // answers from the file without walking at all; Memory neither sets nor reads
 // it.
 type Snapshot struct {

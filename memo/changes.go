@@ -11,7 +11,7 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// DefaultBuffer is how many distinct contexts one stream may be owed before
+// DefaultBuffer is how many distinct grids one stream may be owed before
 // it is told its whole scope instead.
 const DefaultBuffer = 64
 
@@ -35,11 +35,11 @@ type ChangeOptions struct {
 	// Unscoped is the scope taken for a stream that names none (a node from
 	// before scopes): what the plugin judges cheap to watch.
 	Unscoped []string
-	// Work maps a context in scope to the units of background work it needs:
-	// an account-wide feed maps every context to one unit, a poll of a root
-	// maps the root and everything under it to the root. Nil maps a context
+	// Work maps a grid in scope to the units of background work it needs:
+	// an account-wide feed maps every grid to one unit, a poll of a root
+	// maps the root and everything under it to the root. Nil maps a grid
 	// to itself.
-	Work func(context string) []string
+	Work func(gridKey string) []string
 	// Do runs one unit while some stream needs it, until ctx ends: when the
 	// last stream needing it has been gone Linger, or the plugin's life ends.
 	// Nil runs nothing; Watching still answers.
@@ -51,7 +51,7 @@ type ChangeOptions struct {
 
 // Changes is the plugin's Watch: it fans each change out to every stream
 // without waiting on any, and it is the one place background work starts,
-// so a walk, a glance or a feed runs only while a stream has its context in
+// so a walk, a glance or a feed runs only while a stream has its grid in
 // scope (rule 8).
 type Changes struct {
 	life *Life
@@ -68,8 +68,8 @@ type unit struct {
 	cancel  context.CancelFunc
 }
 
-// sub is one stream's queue: distinct contexts in announcement order, since a
-// context changed twice needs one repaint, then distinct entries, each as it
+// sub is one stream's queue: distinct grids in announcement order, since a
+// grid changed twice needs one repaint, then distinct entries, each as it
 // was last published. Entries are not bounded by the buffer: a whole-scope
 // listing does not carry an entry's bytes, so one dropped would never be
 // told, and there are only as many as the plugin has entries.
@@ -85,7 +85,7 @@ type sub struct {
 	entries map[entryRef]*pluginv1.Entry
 }
 
-type entryRef struct{ context, key string }
+type entryRef struct{ gridKey, key string }
 
 // NewChanges builds the fan-out for one plugin, its work run under life.
 func NewChanges(life *Life, o ChangeOptions) *Changes {
@@ -106,13 +106,13 @@ func NewChanges(life *Life, o ChangeOptions) *Changes {
 
 // Serve is a plugin's Watch method: it takes the stream's scope, starts the
 // work that scope needs, sends the header (the node counts the stream open
-// only then), and sends a ContextChanged per queued context until the node
+// only then), and sends a GridChanged per queued grid until the node
 // hangs up, then an EntryChanged per queued entry. Every change goes to
-// every stream whatever its scope, because a change to one context can be
+// every stream whatever its scope, because a change to one grid can be
 // what repaints another that links to it; the scope decides what work runs
 // and what an overflow announces.
-func (c *Changes) Serve(contexts []string, stream Stream) error {
-	scope := contexts
+func (c *Changes) Serve(gridKeys []string, stream Stream) error {
+	scope := gridKeys
 	if len(scope) == 0 {
 		scope = c.o.Unscoped
 	}
@@ -137,27 +137,27 @@ func (c *Changes) Serve(contexts []string, stream Stream) error {
 	}
 }
 
-// Publish tells every stream these contexts' listings changed.
-func (c *Changes) Publish(contexts ...string) {
-	if len(contexts) == 0 {
+// Publish tells every stream these grids' listings changed.
+func (c *Changes) Publish(gridKeys ...string) {
+	if len(gridKeys) == 0 {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for s := range c.subs {
-		s.add(contexts, c.o.Buffer)
+		s.add(gridKeys, c.o.Buffer)
 	}
 }
 
 // PublishEntry tells every stream that one entry changed in place: e is the
-// entry re-read exactly as List answers it in context now, its content_stamp
+// entry re-read exactly as List answers it in grid now, its content_stamp
 // moved with its bytes. An entry published again before its send is sent
 // once, as published last.
-func (c *Changes) PublishEntry(context string, e *pluginv1.Entry) {
+func (c *Changes) PublishEntry(gridKey string, e *pluginv1.Entry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for s := range c.subs {
-		s.addEntry(context, e)
+		s.addEntry(gridKey, e)
 	}
 }
 
@@ -237,12 +237,12 @@ func (c *Changes) stopLocked(name string, u *unit) {
 	delete(c.units, name)
 }
 
-// add queues contexts. A stream owed more than buffer distinct contexts has
-// lost track of which: it is owed its whole scope, and the context being
+// add queues grids. A stream owed more than buffer distinct grids has
+// lost track of which: it is owed its whole scope, and the grid being
 // announced, which a repaint of the scope alone might miss.
-func (s *sub) add(contexts []string, buffer int) {
+func (s *sub) add(gridKeys []string, buffer int) {
 	s.mu.Lock()
-	for _, ctx := range contexts {
+	for _, ctx := range gridKeys {
 		if s.queued[ctx] {
 			continue
 		}
@@ -266,8 +266,8 @@ func (s *sub) add(contexts []string, buffer int) {
 	}
 }
 
-func (s *sub) addEntry(context string, e *pluginv1.Entry) {
-	ref := entryRef{context, e.GetKey()}
+func (s *sub) addEntry(gridKey string, e *pluginv1.Entry) {
+	ref := entryRef{gridKey, e.GetKey()}
 	s.mu.Lock()
 	if _, ok := s.entries[ref]; !ok {
 		s.owed = append(s.owed, ref)
@@ -281,7 +281,7 @@ func (s *sub) addEntry(context string, e *pluginv1.Entry) {
 }
 
 // next hands out one change, every listing before any entry, so the queue is
-// the stream's only buffer; nil when none is owed. A context or an entry
+// the stream's only buffer; nil when none is owed. A grid or an entry
 // announced again while in flight queues again: it changed after its send.
 func (s *sub) next() *pluginv1.Change {
 	s.mu.Lock()
@@ -290,8 +290,8 @@ func (s *sub) next() *pluginv1.Change {
 		ctx := s.pending[0]
 		s.pending = s.pending[1:]
 		delete(s.queued, ctx)
-		return &pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{
-			ContextChanged: &pluginv1.ContextChanged{Context: ctx},
+		return &pluginv1.Change{Payload: &pluginv1.Change_GridChanged{
+			GridChanged: &pluginv1.GridChanged{Grid: ctx},
 		}}
 	}
 	if len(s.owed) > 0 {
@@ -300,7 +300,7 @@ func (s *sub) next() *pluginv1.Change {
 		e := s.entries[ref]
 		delete(s.entries, ref)
 		return &pluginv1.Change{Payload: &pluginv1.Change_EntryChanged{
-			EntryChanged: &pluginv1.EntryChanged{Context: ref.context, Entry: e},
+			EntryChanged: &pluginv1.EntryChanged{Grid: ref.gridKey, Entry: e},
 		}}
 	}
 	return nil

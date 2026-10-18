@@ -1,5 +1,5 @@
 // Package plugin is the gitlab todos plugin: the wire half over
-// gitlab/todos. The one context, "todos", lists weeks; a week,
+// gitlab/todos. The one grid, "todos", lists weeks; a week,
 // "week:<monday>", lists the todos created that week as markdown text tiles.
 // Keys are GitLab's todo ids, stable forever. Listings are non-authoritative
 // and Probe never answers GONE: a todo never disappears from the grid, it
@@ -43,14 +43,14 @@ const DefaultRefresh = 30 * time.Second
 
 // DefaultFullRefresh is how long a full walk stays fresh (config
 // `full_refresh`): the delay before a todo done or deleted at GitLab shows
-// done, since only a full walk sees absence. The node lists a context on
+// done, since only a full walk sees absence. The node lists a grid on
 // every GetGrid and GetTile, and inside the window those reads cost GitLab
 // nothing.
 const DefaultFullRefresh = 10 * time.Minute
 
 // refreshUnit is the one unit of background work. The to-do list is one
-// account-wide list, so every context a stream shows needs the same refresher.
-const refreshUnit = todos.RootContext
+// account-wide list, so every grid a stream shows needs the same refresher.
+const refreshUnit = todos.RootGrid
 
 // Marker is the write half of the source: marking one todo done at GitLab.
 // It is a separate interface from Source because the walk and the write have
@@ -150,7 +150,7 @@ func New(src todos.Source, o Options) *Plugin {
 		Logf:        logf,
 	})
 	p.changes = memo.NewChanges(p.life, memo.ChangeOptions{
-		Unscoped: []string{todos.RootContext},
+		Unscoped: []string{todos.RootGrid},
 		Work:     func(string) []string { return []string{refreshUnit} },
 		Do:       p.refresher,
 		Linger:   o.Linger,
@@ -172,10 +172,10 @@ func (nowClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 // covers is the root walk answering for every week: it reads every page a
 // week walk would.
 func covers(key string) []string {
-	if key == todos.RootContext {
+	if key == todos.RootGrid {
 		return nil
 	}
-	return []string{todos.RootContext}
+	return []string{todos.RootGrid}
 }
 
 // since is key's walk window: zero for the root, meaning everything, and the
@@ -242,9 +242,9 @@ func (p *Plugin) refresher(ctx context.Context, _ string) {
 // since that walk reads everything a glance would.
 func (p *Plugin) tick(ctx context.Context) {
 	switch {
-	case p.flights.Busy(todos.RootContext):
-	case !p.flights.Fresh(todos.RootContext):
-		p.flights.Rewalk(todos.RootContext)
+	case p.flights.Busy(todos.RootGrid):
+	case !p.flights.Fresh(todos.RootGrid):
+		p.flights.Rewalk(todos.RootGrid)
 	default:
 		p.glance(ctx)
 	}
@@ -258,7 +258,7 @@ func (p *Plugin) tick(ctx context.Context) {
 func (p *Plugin) glance(ctx context.Context) {
 	err := p.mem.Glance(ctx, p.src)
 	if ctx.Err() == nil {
-		p.flights.Outcome(todos.RootContext, err)
+		p.flights.Outcome(todos.RootGrid, err)
 	}
 	if p.announce() {
 		p.save()
@@ -280,10 +280,10 @@ func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.I
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
-		// The one collection this plugin serves: the todo list. It declares no
+		// The one grid this plugin serves: the todo list. It declares no
 		// label, so the swatch reads as the configured instance.
-		MenuEntries: []*pluginv1.MenuEntry{{Id: todos.RootContext, Context: todos.RootContext}},
-		Watch:       true,
+		Grids: []*pluginv1.PluginGrid{{Id: todos.RootGrid, Grid: todos.RootGrid}},
+		Watch: true,
 	}, nil
 }
 
@@ -292,19 +292,19 @@ func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.I
 // as unreachable; only a cold read whose walk failed fails, with the walk's
 // own code.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	if req.Context != todos.RootContext {
-		if _, ok := todos.ParseWeekKey(req.Context); !ok {
-			return nil, status.Errorf(codes.InvalidArgument, "gitlab plugin: unknown context %q", req.Context)
+	if req.Grid != todos.RootGrid {
+		if _, ok := todos.ParseWeekKey(req.Grid); !ok {
+			return nil, status.Errorf(codes.InvalidArgument, "gitlab plugin: unknown gridKey %q", req.Grid)
 		}
 	}
-	start := since(req.Context)
-	unreachable, err := p.flights.Read(ctx, req.Context, p.mem.Shows(start))
+	start := since(req.Grid)
+	unreachable, err := p.flights.Read(ctx, req.Grid, p.mem.Shows(start))
 	if err != nil {
 		return nil, err
 	}
-	if req.Context != todos.RootContext {
+	if req.Grid != todos.RootGrid {
 		return &pluginv1.ListResponse{Entries: todos.WeekEntries(start, p.mem.Week(start)),
-			SourceLabel: req.Context, Unreachable: unreachable}, nil
+			SourceLabel: req.Grid, Unreachable: unreachable}, nil
 	}
 	weeks := p.mem.Weeks()
 	open, done := 0, 0
@@ -424,10 +424,10 @@ func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.F
 			continue
 		}
 		resp.Results = append(resp.Results, &pluginv1.FindResult{
-			Entry:       entries[0],
-			ContextPath: []string{todos.RootContext, todos.WeekKey(start)},
-			Snippet:     t.Action(),
-			Score:       1,
+			Entry:    entries[0],
+			GridPath: []string{todos.RootGrid, todos.WeekKey(start)},
+			Snippet:  t.Action(),
+			Score:    1,
 		})
 	}
 	return resp, nil

@@ -70,7 +70,7 @@ func TestGitLabFailingLogsOncePerEpisode(t *testing.T) {
 		p.tick(context.Background())
 		landed(t, p)
 	}
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 		t.Fatal(err)
 	}
 	landed(t, p)

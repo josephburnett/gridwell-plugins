@@ -44,7 +44,7 @@ type fakeHEY struct {
 	html  map[int64]string
 	// threadErr is what ThreadHTML answers for one thread, over err.
 	threadErr map[int64]error
-	// threadCtx is the context the last ThreadHTML ran under.
+	// threadCtx is the grid the last ThreadHTML ran under.
 	threadCtx context.Context
 	// boxErr is what Box answers for one box, over err.
 	boxErr map[string]error
@@ -191,10 +191,10 @@ func stable(t *testing.T, src Source, o Options) *Plugin {
 	return New(src, o)
 }
 
-// The six boxes and everything are seven contexts and seven (+) menu entries.
+// The six boxes and everything are seven grids and seven (+) declared grids.
 // There is no wrapper grid above them and no landing among them: a plugin is
-// not a place, it contributes doors, and each collection is one.
-func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
+// not a place, it contributes doors, and each grid is one.
+func TestInfoDeclaresEveryGridAsAMenuRow(t *testing.T) {
 	p := stable(t, newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
 	if err != nil {
@@ -203,8 +203,8 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	if info.Kind != Kind {
 		t.Errorf("kind = %q", info.Kind)
 	}
-	if info.RootContext != "" {
-		t.Errorf("root_context = %q; it is retired and the collections are declared", info.RootContext)
+	if info.RootGrid != "" {
+		t.Errorf("root_grid = %q; it is retired and the grids are declared", info.RootGrid)
 	}
 	if !info.HostContent {
 		t.Error("host_content not declared; these grids project a mail account")
@@ -216,20 +216,20 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 		t.Error("the live feed is not declared")
 	}
 	got := map[string]bool{}
-	for _, e := range info.MenuEntries {
-		got[e.Context] = true
+	for _, e := range info.Grids {
+		got[e.Grid] = true
 	}
-	if len(info.MenuEntries) != 4 || !got[mail.EverythingContext] {
-		t.Fatalf("menu entries = %+v, want the three door boxes and everything", info.MenuEntries)
+	if len(info.Grids) != 4 || !got[mail.EverythingGrid] {
+		t.Fatalf("declared grids = %+v, want the three door boxes and everything", info.Grids)
 	}
-	for _, c := range mail.Collections {
+	for _, c := range mail.Grids {
 		if got[c.Key] != c.Door {
-			t.Errorf("menu entry for %s = %v, want %v", c.Key, got[c.Key], c.Door)
+			t.Errorf("declared grid for %s = %v, want %v", c.Key, got[c.Key], c.Door)
 		}
 	}
 }
 
-func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
+func TestListsEachGridAndRefreshesOnAWindow(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	f.boxes["laterbox"] = []mail.Thread{th(2, "invoice", "2026-01-04T09:00:00Z")}
@@ -241,8 +241,8 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	p := stable(t, f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
 
-	for _, c := range mail.Collections {
-		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key})
+	for _, c := range mail.Grids {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: c.Key})
 		if err != nil {
 			t.Fatalf("%s: %v", c.Key, err)
 		}
@@ -260,7 +260,7 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 		t.Fatalf("imbox walked %d times", got)
 	}
 	// Inside the window: memory answers, HEY is not asked again.
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.count("imbox"); got != 1 {
@@ -268,7 +268,7 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	}
 	// Past it: one more walk, behind a read that answers from memory.
 	clock = clock.Add(2 * time.Minute)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	idle(t, p)
@@ -277,16 +277,16 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	}
 }
 
-func TestUnknownContextIsRefused(t *testing.T) {
+func TestUnknownGridIsRefused(t *testing.T) {
 	p := stable(t, newFake(), Options{})
-	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "box:spambox"})
+	_, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "box:spambox"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("err = %v, want InvalidArgument", err)
 	}
 }
 
 // A burst of readers costs HEY one CLI run, not one per reader: the node
-// lists a context on every GetGrid and GetTile.
+// lists a grid on every GetGrid and GetTile.
 func TestOneWalkServesABurst(t *testing.T) {
 	f := newFake()
 	f.block = make(chan struct{})
@@ -297,7 +297,7 @@ func TestOneWalkServesABurst(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+			_, _ = p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 		}()
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -315,7 +315,7 @@ func TestASlowWalkAnswersFromMemory(t *testing.T) {
 	f.block = make(chan struct{})
 	p := stable(t, f, Options{FirstAnswer: 20 * time.Millisecond})
 	start := time.Now()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestServeContentIsTheEmailAndThereIsNoCard(t *testing.T) {
 	f.html[1] = "<!doctype html><html><body><article>lunch</article></body></html>"
 	p := stable(t, f, Options{})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -378,7 +378,7 @@ func TestServeContentSaysWhenThereIsNoBody(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	p := stable(t, f, Options{})
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	s := &server{}
@@ -418,13 +418,13 @@ func TestAWalkRunsUnderThePluginsLife(t *testing.T) {
 	life := memo.NewLife()
 	p := stable(t, f, Options{Life: life, FirstAnswer: time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	cancel()
-	if !p.flights.Busy(mail.ImboxContext) {
+	if !p.flights.Busy(mail.ImboxGrid) {
 		t.Fatal("a reader's hangup ended the walk it shares")
 	}
 	life.End()
-	if p.flights.Busy(mail.ImboxContext) {
+	if p.flights.Busy(mail.ImboxGrid) {
 		t.Fatal("the plugin ended and its walk ran on")
 	}
 }
@@ -439,7 +439,7 @@ func TestServeContentSurfacesAFailure(t *testing.T) {
 	}
 }
 
-// Nothing is GONE until every collection has been read to its end: a thread
+// Nothing is GONE until every grid has been read to its end: a thread
 // missing from the Imbox is usually in Reply Later, and retiring its id would
 // cost the user the tile and its placement.
 func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
@@ -453,8 +453,8 @@ func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED {
 		t.Fatalf("cold probe = %v", got.Presence)
 	}
-	// One collection walked: still cannot say about a thread it did not hold.
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+	// One grid walked: still cannot say about a thread it did not hold.
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "thread:1"})
@@ -465,9 +465,9 @@ func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED {
 		t.Fatalf("half-swept probe = %v", got.Presence)
 	}
-	// Every collection walked to its end: now absence is an answer.
-	for _, c := range mail.Collections[1:] {
-		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
+	// Every grid walked to its end: now absence is an answer.
+	for _, c := range mail.Grids[1:] {
+		if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: c.Key}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -488,8 +488,8 @@ func TestACappedWalkNeverSweeps(t *testing.T) {
 	f.whole["asidebox"] = false
 	p := stable(t, f, Options{})
 	ctx := context.Background()
-	for _, c := range mail.Collections {
-		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
+	for _, c := range mail.Grids {
+		if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: c.Key}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -501,14 +501,14 @@ func TestACappedWalkNeverSweeps(t *testing.T) {
 
 // A thread that moves from the Imbox to Reply Later keeps its key, so the
 // node keeps its id and every link to it still resolves.
-func TestAThreadKeepsItsKeyAcrossCollections(t *testing.T) {
+func TestAThreadKeepsItsKeyAcrossGrids(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	clock := at("2026-01-06T12:00:00Z")
 	p := stable(t, f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
-	for _, c := range mail.Collections {
-		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
+	for _, c := range mail.Grids {
+		if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: c.Key}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -517,13 +517,13 @@ func TestAThreadKeepsItsKeyAcrossCollections(t *testing.T) {
 	f.boxes["laterbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	f.mu.Unlock()
 	clock = clock.Add(2 * time.Minute)
-	for _, c := range mail.Collections {
-		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
+	for _, c := range mail.Grids {
+		if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: c.Key}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	idle(t, p)
-	later, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ReplyLaterContext})
+	later, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ReplyLaterGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func TestAFailedFirstWalkAnswersMemoryWithItsReason(t *testing.T) {
 	f := newFake()
 	f.err = status.Error(codes.PermissionDenied, "hey plugin: box view imbox: Not logged in")
 	p := stable(t, f, Options{})
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	if err != nil {
 		t.Fatalf("a failed walk refused the listing: %v", err)
 	}
@@ -563,7 +563,7 @@ func TestAWarmReadAnswersMemoryAndTheLastFailure(t *testing.T) {
 	ctx := context.Background()
 	list := func() *pluginv1.ListResponse {
 		t.Helper()
-		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 		if err != nil {
 			t.Fatalf("a warm read refused: %v", err)
 		}
@@ -612,7 +612,7 @@ func TestMemoryForgetsOnlyWhatHEYNoLongerHas(t *testing.T) {
 	p := stable(t, f, Options{})
 	walk := func() {
 		t.Helper()
-		p.flights.Rewalk(mail.ImboxContext)
+		p.flights.Rewalk(mail.ImboxGrid)
 		idle(t, p)
 	}
 	walk()
@@ -659,8 +659,8 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 		Logf: func(string, ...any) {}}
 	p := stable(t, f, opts)
 	ctx := context.Background()
-	for _, c := range mail.Collections {
-		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
+	for _, c := range mail.Grids {
+		if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: c.Key}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -670,7 +670,7 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 
 	cold := newFake() // a source that answers nothing: only the cache can
 	back := stable(t, cold, opts)
-	resp, err := back.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+	resp, err := back.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -703,7 +703,7 @@ func TestAnUnreadableCacheStartsColdAndSaysSo(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatal("an unreadable cache was swallowed")
 	}
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	if err != nil || len(resp.Entries) != 1 {
 		t.Fatalf("cold start did not recover: %v %+v", err, resp)
 	}
@@ -714,7 +714,7 @@ func TestFindReadsMemoryOnly(t *testing.T) {
 	f.boxes["laterbox"] = []mail.Thread{th(2, "invoice", "2026-01-04T09:00:00Z")}
 	p := stable(t, f, Options{})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ReplyLaterContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ReplyLaterGrid}); err != nil {
 		t.Fatal(err)
 	}
 	before := f.count("laterbox")
@@ -725,8 +725,8 @@ func TestFindReadsMemoryOnly(t *testing.T) {
 	if len(res.Results) != 1 || res.Results[0].Entry.Key != "thread:2" {
 		t.Fatalf("results = %+v", res.Results)
 	}
-	if got := res.Results[0].ContextPath; len(got) != 1 || got[0] != mail.EverythingContext {
-		t.Errorf("context path = %v", got)
+	if got := res.Results[0].GridPath; len(got) != 1 || got[0] != mail.EverythingGrid {
+		t.Errorf("grid path = %v", got)
 	}
 	if f.count("laterbox") != before {
 		t.Error("find walked HEY")
@@ -767,7 +767,7 @@ func TestOverTheRealCLIContract(t *testing.T) {
 	p := stable(t, heycli.New(heycli.Exec{Binary: bin}), Options{StateDir: t.TempDir()})
 	ctx := context.Background()
 
-	resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+	resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -800,8 +800,8 @@ func TestOverTheRealCLIContract(t *testing.T) {
 
 	// laterbox reports a cursor, so the sweep is never whole and nothing can
 	// be declared gone through it.
-	for _, c := range mail.Collections[1:] {
-		if _, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key}); err != nil {
+	for _, c := range mail.Grids[1:] {
+		if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: c.Key}); err != nil {
 			t.Fatalf("%s: %v", c.Key, err)
 		}
 	}
@@ -822,7 +822,7 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
 	p := stable(t, f, Options{Refresh: time.Minute, FirstAnswer: time.Hour, Now: now})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
@@ -833,7 +833,7 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	f.mu.Unlock()
 	done := make(chan *pluginv1.ListResponse, 1)
 	go func() {
-		resp, _ := p.List(ctx, &pluginv1.ListRequest{Context: mail.ImboxContext})
+		resp, _ := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 		done <- resp
 	}()
 	select {
@@ -860,7 +860,7 @@ func TestAColdReadWaitsTheFirstAnswer(t *testing.T) {
 	const bound = 50 * time.Millisecond
 	p := stable(t, f, Options{FirstAnswer: bound})
 	start := time.Now()
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mail.ImboxContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	if d := time.Since(start); d < bound {
@@ -869,7 +869,7 @@ func TestAColdReadWaitsTheFirstAnswer(t *testing.T) {
 }
 
 // A source that is not ready refuses Info with its sentence, so the node
-// shows the plugin broken rather than three empty collections; one that is
+// shows the plugin broken rather than three empty grids; one that is
 // ready declares them. The check is asked on every Info until it passes.
 func TestInfoRefusesWhileTheCLIIsMissing(t *testing.T) {
 	missing := errors.New(`the hey CLI "hey" is not installed: it is not on PATH`)
@@ -880,8 +880,8 @@ func TestInfoRefusesWhileTheCLIIsMissing(t *testing.T) {
 		t.Fatalf("missing CLI → Info %v, want FailedPrecondition %q", err, missing)
 	}
 	ready = nil
-	if info, err := p.Info(context.Background(), &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) == 0 {
-		t.Errorf("installed CLI → Info %v, %v; want its collections", info, err)
+	if info, err := p.Info(context.Background(), &pluginv1.InfoRequest{}); err != nil || len(info.Grids) == 0 {
+		t.Errorf("installed CLI → Info %v, %v; want its grids", info, err)
 	}
 	ready = missing
 	if _, err := p.Info(context.Background(), &pluginv1.InfoRequest{}); err != nil {
@@ -901,8 +901,8 @@ func TestAWalkLogsOnlyTheEdgesOfAFailure(t *testing.T) {
 	}
 	f := newFake()
 	p := stable(t, f, Options{Logf: logf})
-	c := mail.Collections[0]
-	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: c.Key})
+	c := mail.Grids[0]
+	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Grid: c.Key})
 	idle(t, p)
 	mu.Lock()
 	n := len(logs)

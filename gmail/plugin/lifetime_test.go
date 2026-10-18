@@ -67,7 +67,7 @@ func TestATransportFailureAtFirstInfoPassesAndReadsDark(t *testing.T) {
 		t.Fatalf("the second Info = %v after %d profile reads; it latched on the first", err, f.count("profile")-asked)
 	}
 	landed(t, p)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); status.Code(err) != codes.Unavailable {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); status.Code(err) != codes.Unavailable {
 		t.Fatalf("a cold read with Google out of reach = %v, want Unavailable", err)
 	}
 }
@@ -86,7 +86,7 @@ func TestServeContentTakesTheRequestsContext(t *testing.T) {
 	if f.ctxOf("html").Err() == nil {
 		t.Error("the email was fetched under a context the request's hangup does not end")
 	}
-	if _, err := p.Probe(ctx, &pluginv1.ProbeRequest{Context: mailbox.AllMailContext, Key: "msg:a"}); err != nil {
+	if _, err := p.Probe(ctx, &pluginv1.ProbeRequest{Grid: mailbox.AllMailGrid, Key: "msg:a"}); err != nil {
 		t.Fatal(err)
 	}
 	if f.ctxOf("headers").Err() == nil {
@@ -102,7 +102,7 @@ func TestTheWalkRunsUnderThePluginsLifetime(t *testing.T) {
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
 	p := stable(f, Options{FirstAnswer: time.Millisecond})
 	reader, hangup := context.WithCancel(context.Background())
-	if _, err := p.List(reader, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
+	if _, err := p.List(reader, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	hangup()

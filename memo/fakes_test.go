@@ -139,13 +139,13 @@ func (s *fakeStream) Send(c *pluginv1.Change) error {
 	return nil
 }
 
-// said is one change as a test reads it: a context's key, or an entry's
-// context, key and label.
+// said is one change as a test reads it: a grid's key, or an entry's
+// grid, key and label.
 func said(c *pluginv1.Change) string {
 	if e := c.GetEntryChanged(); e != nil {
-		return "entry " + e.GetContext() + "/" + e.GetEntry().GetKey() + "@" + e.GetEntry().GetLabel()
+		return "entry " + e.GetGrid() + "/" + e.GetEntry().GetKey() + "@" + e.GetEntry().GetLabel()
 	}
-	return c.GetContextChanged().GetContext()
+	return c.GetGridChanged().GetGrid()
 }
 
 func (s *fakeStream) hasHeader() bool {

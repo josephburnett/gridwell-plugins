@@ -57,7 +57,7 @@ func TestInfoRefusesARefusedTokenThenLatches(t *testing.T) {
 	}
 
 	k.set(nil)
-	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
+	if info, err := p.Info(ctx, &pluginv1.InfoRequest{}); err != nil || len(info.Grids) != 1 {
 		t.Fatalf("Info once the token is fixed = (%v, %v)", info, err)
 	}
 	k.set(status.Error(codes.PermissionDenied, sentence))
@@ -74,7 +74,7 @@ func TestInfoRefusesARefusedTokenThenLatches(t *testing.T) {
 func TestInfoPassesWhenGitLabDoesNotAnswer(t *testing.T) {
 	k := &token{err: status.Error(codes.Unavailable, "gitlab: dial tcp: connection refused")}
 	p := New(&oneShot{}, Options{Token: k})
-	if info, err := p.Info(context.Background(), &pluginv1.InfoRequest{}); err != nil || len(info.MenuEntries) != 1 {
+	if info, err := p.Info(context.Background(), &pluginv1.InfoRequest{}); err != nil || len(info.Grids) != 1 {
 		t.Fatalf("Info with GitLab unreachable = (%v, %v), want a pass", info, err)
 	}
 	k.set(status.Error(codes.PermissionDenied, "refused"))

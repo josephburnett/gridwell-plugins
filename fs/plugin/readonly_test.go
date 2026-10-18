@@ -44,7 +44,7 @@ func TestATextEntryAWriteWouldRefuseIsReadOnly(t *testing.T) {
 	p := New(root, nil)
 	entries := map[string]*pluginv1.Entry{}
 	for _, ctx := range []string{".", "sealed"} {
-		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctx})
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctx})
 		if err != nil {
 			t.Fatal(err)
 		}

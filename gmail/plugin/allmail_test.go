@@ -29,11 +29,11 @@ func TestAllMailIsEveryMessageOnceAndLabelsLinkToIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len(info.MenuEntries); n != 3 || info.MenuEntries[2].Context != mailbox.AllMailContext {
-		t.Fatalf("menu = %+v, want the labels and then all mail", info.MenuEntries)
+	if n := len(info.Grids); n != 3 || info.Grids[2].Grid != mailbox.AllMailGrid {
+		t.Fatalf("menu = %+v, want the labels and then all mail", info.Grids)
 	}
 
-	all, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.AllMailContext})
+	all, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.AllMailGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +45,8 @@ func TestAllMailIsEveryMessageOnceAndLabelsLinkToIt(t *testing.T) {
 			t.Errorf("all mail's %s = %+v, want the page itself", e.Key, e)
 		}
 	}
-	for label, want := range map[string]string{mailbox.InboxContext: "msg:a,msg:b", mailbox.StarredContext: "msg:c,msg:b"} {
-		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: label})
+	for label, want := range map[string]string{mailbox.InboxGrid: "msg:a,msg:b", mailbox.StarredGrid: "msg:c,msg:b"} {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: label})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,18 +54,18 @@ func TestAllMailIsEveryMessageOnceAndLabelsLinkToIt(t *testing.T) {
 			t.Errorf("%s = %s, want %s", label, got, want)
 		}
 		for _, e := range resp.Entries {
-			if e.LinkTarget.GetContext() != mailbox.AllMailContext || e.LinkTarget.GetKey() != e.Key {
+			if e.LinkTarget.GetGrid() != mailbox.AllMailGrid || e.LinkTarget.GetKey() != e.Key {
 				t.Errorf("%s's %s links to %+v, want its all mail page", label, e.Key, e.LinkTarget)
 			}
 		}
 	}
 }
 
-// Probe answers for the context it names. A label after a whole read: its
+// Probe answers for the grid it names. A label after a whole read: its
 // membership. All mail: a labelled message at once, else Gmail's own word,
 // and only NotFound is gone. A capped label, or a Gmail that cannot answer,
 // cannot say.
-func TestProbeAnswersForTheContextAsked(t *testing.T) {
+func TestProbeAnswersForTheGridAsked(t *testing.T) {
 	f := newFake()
 	a, b := msg("a", "one", "2026-01-05T09:00:00Z"), msg("b", "two", "2026-01-05T10:00:00Z")
 	f.hold("INBOX", a)
@@ -75,9 +75,9 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 	listAll(t, p)
 	ctx := context.Background()
 
-	probe := func(p *Plugin, context, key string) pluginv1.ProbeResponse_Presence {
+	probe := func(p *Plugin, gridKey, key string) pluginv1.ProbeResponse_Presence {
 		t.Helper()
-		got, err := p.Probe(ctx, &pluginv1.ProbeRequest{Context: context, Key: key})
+		got, err := p.Probe(ctx, &pluginv1.ProbeRequest{Grid: gridKey, Key: key})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,33 +86,33 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 	present, gone, unsure := pluginv1.ProbeResponse_PRESENCE_PRESENT, pluginv1.ProbeResponse_PRESENCE_GONE, pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED
 	headers := f.count("headers")
 	for _, c := range []struct {
-		context, key string
+		gridKey, key string
 		want         pluginv1.ProbeResponse_Presence
 	}{
-		{mailbox.InboxContext, "msg:a", present},
-		{mailbox.InboxContext, "msg:b", gone}, // starred, not in the inbox: leaving a label is not gone
-		{mailbox.StarredContext, "msg:b", present},
-		{mailbox.AllMailContext, "msg:a", present},
-		{mailbox.AllMailContext, "msg:b", present},
-		{"label:SPAM", "msg:a", gone}, // a context this plugin never lists
+		{mailbox.InboxGrid, "msg:a", present},
+		{mailbox.InboxGrid, "msg:b", gone}, // starred, not in the inbox: leaving a label is not gone
+		{mailbox.StarredGrid, "msg:b", present},
+		{mailbox.AllMailGrid, "msg:a", present},
+		{mailbox.AllMailGrid, "msg:b", present},
+		{"label:SPAM", "msg:a", gone}, // a gridKey this plugin never lists
 	} {
-		if got := probe(p, c.context, c.key); got != c.want {
-			t.Errorf("Probe(%s, %s) = %v, want %v", c.context, c.key, got, c.want)
+		if got := probe(p, c.gridKey, c.key); got != c.want {
+			t.Errorf("Probe(%s, %s) = %v, want %v", c.gridKey, c.key, got, c.want)
 		}
 	}
 	if f.count("headers") != headers {
 		t.Error("a labelled message cost a Gmail read to probe")
 	}
-	if got := probe(p, mailbox.AllMailContext, "msg:x"); got != present {
+	if got := probe(p, mailbox.AllMailGrid, "msg:x"); got != present {
 		t.Errorf("an archived message Gmail still has probed %v in all mail", got)
 	}
-	if got := probe(p, mailbox.AllMailContext, "msg:z"); got != gone {
+	if got := probe(p, mailbox.AllMailGrid, "msg:z"); got != gone {
 		t.Errorf("a message Gmail says is not found probed %v in all mail", got)
 	}
 	f.mu.Lock()
 	f.headerErr = status.Error(codes.Unavailable, "gmail is down")
 	f.mu.Unlock()
-	if got := probe(p, mailbox.AllMailContext, "msg:x"); got != unsure {
+	if got := probe(p, mailbox.AllMailGrid, "msg:x"); got != unsure {
 		t.Errorf("a Gmail that cannot answer probed %v, want cannot say", got)
 	}
 
@@ -121,7 +121,7 @@ func TestProbeAnswersForTheContextAsked(t *testing.T) {
 	g.hold("INBOX", a, b)
 	q := stable(g, Options{MaxMessages: 1})
 	listAll(t, q)
-	if got := probe(q, mailbox.InboxContext, "msg:a"); got != unsure {
+	if got := probe(q, mailbox.InboxGrid, "msg:a"); got != unsure {
 		t.Errorf("a message below a capped read probed %v, want cannot say", got)
 	}
 }
@@ -149,14 +149,14 @@ func TestALabelListingIsAuthoritativeOnlyWhenDefinitive(t *testing.T) {
 			}
 			p := stable(f, c.o)
 			listAll(t, p)
-			resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+			resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if resp.Authoritative != c.want {
 				t.Errorf("authoritative = %v, want %v", resp.Authoritative, c.want)
 			}
-			all, _ := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.AllMailContext})
+			all, _ := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.AllMailGrid})
 			if all.Authoritative {
 				t.Error("all mail listed authoritatively; it is a union, and leaving it is Probe's to say")
 			}
@@ -171,7 +171,7 @@ func TestALabelListingIsAuthoritativeOnlyWhenDefinitive(t *testing.T) {
 		f.err = status.Error(codes.Unavailable, "gmail is down")
 		f.mu.Unlock()
 		refreshed(t, p, clock, 2*time.Minute)
-		resp, _ := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+		resp, _ := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 		if resp.GetAuthoritative() {
 			t.Error("a listing after a failed refresh claimed authority")
 		}
@@ -194,8 +194,8 @@ func TestFindLandsOnTheAllMailTile(t *testing.T) {
 		t.Fatalf("results = %+v, want the one message once", res.Results)
 	}
 	r := res.Results[0]
-	if r.Entry.Key != "msg:a" || r.Entry.LinkTarget != nil || len(r.ContextPath) != 1 || r.ContextPath[0] != mailbox.AllMailContext {
-		t.Errorf("hit = %+v at %v, want all mail's page", r.Entry, r.ContextPath)
+	if r.Entry.Key != "msg:a" || r.Entry.LinkTarget != nil || len(r.GridPath) != 1 || r.GridPath[0] != mailbox.AllMailGrid {
+		t.Errorf("hit = %+v at %v, want all mail's page", r.Entry, r.GridPath)
 	}
 }
 
@@ -213,7 +213,7 @@ func TestMemoryForgetsAMessageOnlyWhenGmailSaysItIsGone(t *testing.T) {
 		t.Fatal("an archived message was forgotten; Gmail still has it")
 	}
 	f.deleted("a")
-	got, _ := p.Probe(context.Background(), &pluginv1.ProbeRequest{Context: mailbox.AllMailContext, Key: "msg:a"})
+	got, _ := p.Probe(context.Background(), &pluginv1.ProbeRequest{Grid: mailbox.AllMailGrid, Key: "msg:a"})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_GONE {
 		t.Fatalf("a deleted message probed %v", got.Presence)
 	}

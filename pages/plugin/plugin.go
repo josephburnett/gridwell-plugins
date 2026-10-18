@@ -52,9 +52,9 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	return &pluginv1.InfoResponse{
 		Kind:        Kind,
 		DisplayName: displayName,
-		// The one collection this plugin serves: the site. It declares no
+		// The one grid this plugin serves: the site. It declares no
 		// label, so the swatch reads as the configured instance.
-		MenuEntries: []*pluginv1.MenuEntry{{Id: site.RootContext, Context: site.RootContext}},
+		Grids: []*pluginv1.PluginGrid{{Id: site.RootGrid, Grid: site.RootGrid}},
 		// host_content stays false, unlike fs and proc: this plugin's grid is
 		// not a window onto state that lives outside Gridwell. The pages are
 		// the plugin's own content, so the tiles wear the ordinary treatment.
@@ -63,11 +63,11 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 }
 
 // List enumerates the site. It is authoritative — the site is fixed, so a key
-// absent from this listing is gone rather than unseen — and every context
+// absent from this listing is gone rather than unseen — and every grid
 // other than the root answers an empty listing, because there is only one.
 func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	resp := &pluginv1.ListResponse{Authoritative: true, SourceLabel: displayName}
-	if req.Context != site.RootContext {
+	if req.Grid != site.RootGrid {
 		return resp, nil
 	}
 	for _, d := range site.Docs() {
@@ -160,10 +160,10 @@ func (p *Plugin) GetPreview(_ context.Context, req *pluginv1.GetPreviewRequest) 
 
 // Probe answers definitively either way: the site is a fixed list, so a key
 // it does not hold is gone, not merely unreadable this pass. It answers for
-// the context asked, and the site lists every key in its one context; an
-// empty context asks after the plugin as a whole.
+// the grid asked, and the site lists every key in its one grid; an
+// empty grid asks after the plugin as a whole.
 func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
-	if (req.Context != "" && req.Context != site.RootContext) || site.Lookup(req.Key) == nil {
+	if (req.Grid != "" && req.Grid != site.RootGrid) || site.Lookup(req.Key) == nil {
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
 	}
 	return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil

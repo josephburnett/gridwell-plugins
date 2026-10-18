@@ -14,7 +14,7 @@ plugins:
       root: /home/me/docs
 ```
 
-No `root` means the plugin declares no collection and contributes nothing to
+No `root` means the plugin declares no grid and contributes nothing to
 the (+) menu. A `root` that does not exist, is not a directory, or cannot be
 read refuses `Info` with that reason, and the plugin's row shows it broken
 until the directory is there; no restart is needed. Once the root has been
@@ -100,11 +100,11 @@ work nobody on screen asked for.
 ## Changes
 
 The plugin watches only the directories some client shows right now: the
-node's `WatchRequest.contexts`. A file open in a pane is covered by its
+node's `WatchRequest.grids`. A file open in a pane is covered by its
 directory. A directory that leaves the scope loses its watch at once, and
 while nothing is shown nothing is watched, so a large tree never runs into
 the operating system's watch limit. A node from before scopes asks with
-none, and then nothing is watched. A context that is not a directory of the
+none, and then nothing is watched. A grid that is not a directory of the
 tree, such as a dead link's target, is never watched.
 
 Watches are the OS's own change notifications through
@@ -116,7 +116,7 @@ open-file limit.
 - Changes in one directory within 200 ms (`DebounceWindow`) are told once:
   an editor's save or a build is many events.
 - A file created, removed, renamed or re-stamped (its attributes changed)
-  announces its directory as a `ContextChanged`; the node lists it and tells
+  announces its directory as a `GridChanged`; the node lists it and tells
   clients only if the listing moved, and that listing retires a gone key.
 - A file written in place, or created over its own name as an editor's save
   does, is an `EntryChanged` carrying the file's entry re-read, so a pane

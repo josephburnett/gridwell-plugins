@@ -50,7 +50,7 @@ func (p *Plugin) watch(ctx context.Context) {
 		}
 		switch status.Code(err) {
 		case codes.InvalidArgument:
-			p.logf("hey plugin: this CLI cannot watch (%v); a read re-walks a collection older than %s instead", err, p.refresh)
+			p.logf("hey plugin: this CLI cannot watch (%v); a read re-walks a grid older than %s instead", err, p.refresh)
 			return
 		case codes.Unavailable:
 		default:
@@ -126,7 +126,7 @@ func (p *Plugin) apply(ev mail.Event) {
 		p.liveGen++
 		p.mu.Unlock()
 		p.verdict(nil)
-		for _, c := range mail.Collections {
+		for _, c := range mail.Grids {
 			p.flights.Rewalk(c.Key)
 		}
 	case mail.ChangeDisconnected:
@@ -152,14 +152,14 @@ func (p *Plugin) apply(ev mail.Event) {
 }
 
 // verdict records why the feed last ended, nil once one is live. Every read
-// answers it as its unreachable reason, so its edges repaint every context.
+// answers it as its unreachable reason, so its edges repaint every grid.
 func (p *Plugin) verdict(err error) {
 	p.mu.Lock()
 	edge := (p.watchErr == nil) != (err == nil)
 	p.watchErr = err
 	p.mu.Unlock()
 	if edge {
-		p.changes.Publish(contexts()...)
+		p.changes.Publish(gridKeys()...)
 	}
 }
 
@@ -169,13 +169,13 @@ func (p *Plugin) setLive(live bool) {
 	p.mu.Unlock()
 }
 
-// Watch streams a ContextChanged for every collection whose listing changes
+// Watch streams a GridChanged for every grid whose listing changes
 // from now on, by the feed or by a walk, everything included: a thread's
 // record changing moves everything, which the node passes on to every box
 // that links into it. A thread whose page changed is its EntryChanged in
 // everything (publish). Absence is Probe's to settle, not the feed's. The
-// feed is account-wide, so every context in any scope needs the one feed
-// unit, and a stream that names none watches every collection.
+// feed is account-wide, so every grid in any scope needs the one feed
+// unit, and a stream that names none watches every grid.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
-	return p.changes.Serve(req.GetContexts(), stream)
+	return p.changes.Serve(req.GetGrids(), stream)
 }

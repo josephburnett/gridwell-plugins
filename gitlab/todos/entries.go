@@ -7,7 +7,7 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// RootEntries derives the collection grid: one door per week, newest first,
+// RootEntries derives the root grid: one door per week, newest first,
 // hinted by calendar.WeekCell and named by its Monday.
 func RootEntries(weeks []WeekSummary) []*pluginv1.Entry {
 	out := make([]*pluginv1.Entry, 0, len(weeks))
@@ -18,7 +18,7 @@ func RootEntries(weeks []WeekSummary) []*pluginv1.Entry {
 			Key:           key,
 			Kind:          "door",
 			Label:         WeekLabel(w.Start),
-			ChildContext:  key,
+			ChildGrid:     key,
 			PlacementHint: &pluginv1.PlacementHint{X: x, Y: y, W: 1, H: 1},
 		})
 	}

@@ -26,11 +26,11 @@ type Labelled struct {
 }
 
 // WatchedLabels are the labels whose changes this projection can see: every
-// collection's, and UNREAD. A change to any other label moves no tile and
+// grid's, and UNREAD. A change to any other label moves no tile and
 // changes no tile.
 func WatchedLabels() []string {
 	out := []string{UnreadLabel}
-	for _, c := range Collections {
+	for _, c := range Grids {
 		out = append(out, c.LabelIDs...)
 	}
 	return out

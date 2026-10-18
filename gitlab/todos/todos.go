@@ -139,12 +139,12 @@ func (t *Todo) Label() string {
 // Key is the todo's plugin key: GitLab's own id, stable forever.
 func (t *Todo) Key() string { return KeyPrefix + strconv.FormatInt(t.ID, 10) }
 
-// KeyPrefix namespaces todo keys; WeekPrefix namespaces week contexts;
-// RootContext is the plugin's one collection: the todo list.
+// KeyPrefix namespaces todo keys; WeekPrefix namespaces week grids;
+// RootGrid is the plugin's one grid: the todo list.
 const (
-	KeyPrefix   = "todo:"
-	WeekPrefix  = "week:"
-	RootContext = "todos"
+	KeyPrefix  = "todo:"
+	WeekPrefix = "week:"
+	RootGrid   = "todos"
 )
 
 // ParseKey resolves a todo key to its id.
@@ -169,10 +169,10 @@ func WeekStart(t time.Time) time.Time {
 	return d.AddDate(0, 0, -wd)
 }
 
-// WeekKey is the context key of the week starting at start.
+// WeekKey is the grid key of the week starting at start.
 func WeekKey(start time.Time) string { return WeekPrefix + start.UTC().Format("2006-01-02") }
 
-// ParseWeekKey resolves a week context key to its Monday.
+// ParseWeekKey resolves a week grid key to its Monday.
 func ParseWeekKey(key string) (time.Time, bool) {
 	s, ok := strings.CutPrefix(key, WeekPrefix)
 	if !ok {

@@ -77,7 +77,7 @@ func watchingScope(t *testing.T, p *Plugin, block chan struct{}, scope []string)
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &watchStream{ctx: ctx, cancel: cancel, sent: make(chan *pluginv1.Change, 1024), block: block}
 	done := make(chan error, 1)
-	go func() { done <- p.Watch(&pluginv1.WatchRequest{Contexts: scope}, w) }()
+	go func() { done <- p.Watch(&pluginv1.WatchRequest{Grids: scope}, w) }()
 	t.Cleanup(func() {
 		cancel()
 		if block != nil {
@@ -118,8 +118,8 @@ func unwatched(t *testing.T, p *Plugin) {
 }
 
 // changed collects the changes sent until want of them arrived, or until a
-// quiet spell when want is zero, sorted: a context by its key, an entry as
-// "entry <context>/<key>".
+// quiet spell when want is zero, sorted: a grid by its key, an entry as
+// "entry <grid>/<key>".
 func changed(t *testing.T, w *watchStream, want int) []string {
 	t.Helper()
 	var got []string
@@ -133,7 +133,7 @@ func changed(t *testing.T, w *watchStream, want int) []string {
 			got = append(got, said(c))
 		case <-time.After(quiet):
 			if want > 0 {
-				t.Fatalf("announced %v, want %d contexts", got, want)
+				t.Fatalf("announced %v, want %d grids", got, want)
 			}
 			sort.Strings(got)
 			return got
@@ -151,9 +151,9 @@ func changed(t *testing.T, w *watchStream, want int) []string {
 
 func said(c *pluginv1.Change) string {
 	if e := c.GetEntryChanged(); e != nil {
-		return "entry " + e.GetContext() + "/" + e.GetEntry().GetKey()
+		return "entry " + e.GetGrid() + "/" + e.GetEntry().GetKey()
 	}
-	return c.GetContextChanged().GetContext()
+	return c.GetGridChanged().GetGrid()
 }
 
 // A walk that learns a todo's body changed behind its unchanged name tells
@@ -167,7 +167,7 @@ func TestAWalkTellsAChangedBodyAsItsEntry(t *testing.T) {
 	walk := func() []*pluginv1.Change {
 		t.Helper()
 		clock = clock.Add(DefaultFullRefresh + time.Second)
-		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 			t.Fatal(err)
 		}
 		landed(t, p)
@@ -189,7 +189,7 @@ func TestAWalkTellsAChangedBodyAsItsEntry(t *testing.T) {
 		t.Fatalf("a body change sent %v, want one EntryChanged", got)
 	}
 	now := listed(t, p, "week:2026-08-17", "todo:1")
-	if e := got[0].GetEntryChanged(); e.GetContext() != "week:2026-08-17" || !proto.Equal(e.GetEntry(), now) {
+	if e := got[0].GetEntryChanged(); e.GetGrid() != "week:2026-08-17" || !proto.Equal(e.GetEntry(), now) {
 		t.Errorf("told %v, want the week's listed entry %v", e, now)
 	}
 	if now.GetContentStamp() == before.GetContentStamp() {
@@ -200,10 +200,10 @@ func TestAWalkTellsAChangedBodyAsItsEntry(t *testing.T) {
 	}
 }
 
-// listed is key's entry as context's List answers it.
-func listed(t *testing.T, p *Plugin, context, key string) *pluginv1.Entry {
+// listed is key's entry as grid's List answers it.
+func listed(t *testing.T, p *Plugin, gridKey, key string) *pluginv1.Entry {
 	t.Helper()
-	resp, err := p.List(t.Context(), &pluginv1.ListRequest{Context: context})
+	resp, err := p.List(t.Context(), &pluginv1.ListRequest{Grid: gridKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func listed(t *testing.T, p *Plugin, context, key string) *pluginv1.Entry {
 			return e
 		}
 	}
-	t.Fatalf("%s lists no %s", context, key)
+	t.Fatalf("%s lists no %s", gridKey, key)
 	return nil
 }
 
@@ -220,7 +220,7 @@ func listed(t *testing.T, p *Plugin, context, key string) *pluginv1.Entry {
 // it moved, and one that changed nothing tells nobody anything. Before Watch
 // nothing outside the plugin observed a walk landing: the node repainted only
 // when it next read.
-func TestAWalkAnnouncesExactlyTheContextsItMoved(t *testing.T) {
+func TestAWalkAnnouncesExactlyTheGridsItMoved(t *testing.T) {
 	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending"), mk(2, "2026-08-25T10:00:00Z", "pending")}}
 	clock := at("2026-08-25T12:00:00Z")
 	p := New(src, Options{Now: func() time.Time { return clock }, Marker: &fakeMarker{src: src}})
@@ -228,7 +228,7 @@ func TestAWalkAnnouncesExactlyTheContextsItMoved(t *testing.T) {
 	walk := func() {
 		t.Helper()
 		clock = clock.Add(DefaultFullRefresh + time.Second)
-		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: todos.RootContext}); err != nil {
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid}); err != nil {
 			t.Fatal(err)
 		}
 		landed(t, p)

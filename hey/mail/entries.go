@@ -6,7 +6,7 @@ import (
 	"github.com/josephburnett/gridwell/api/rpc"
 )
 
-// CollectionEntries derives everything's grid: every thread it holds as a
+// GridEntries derives everything's grid: every thread it holds as a
 // url tile serving its own page, named by its Stamp, at calendar.Cell of its
 // creation time, so a thread's hint is the same whatever else arrives. Seen
 // is a box's fact, so these tiles carry no status.
@@ -14,7 +14,7 @@ import (
 // A thread is a page, so it is a url entry that serves one: the node derives
 // the address at its /content/ API, so there is none to declare here, and a
 // url entry offers no text body beside the page.
-func CollectionEntries(threads []Thread) []*pluginv1.Entry {
+func GridEntries(threads []Thread) []*pluginv1.Entry {
 	out := make([]*pluginv1.Entry, 0, len(threads))
 	for i := range threads {
 		t := &threads[i]
@@ -31,34 +31,34 @@ func CollectionEntries(threads []Thread) []*pluginv1.Entry {
 	return out
 }
 
-// BoxEntries derives one box's grid: CollectionEntries, each a link to the
+// BoxEntries derives one box's grid: GridEntries, each a link to the
 // same thread in everything carrying its seen state in this box. The content
 // facts stay, so a node that predates link_target still shows the box as
 // pages of its own.
 func BoxEntries(threads []Thread) []*pluginv1.Entry {
-	out := CollectionEntries(threads)
+	out := GridEntries(threads)
 	for i, e := range out {
-		e.LinkTarget = &pluginv1.EntryRef{Context: EverythingContext, Key: e.Key}
+		e.LinkTarget = &pluginv1.EntryRef{Grid: EverythingGrid, Key: e.Key}
 		e.StatusDetail = threads[i].StatusDetail()
 	}
 	return out
 }
 
-// MenuEntries declares every door collection, one (+) menu entry each,
-// everything last. There is no privileged collection and no landing grid: a
+// Grids declares every door grid, one (+) declared grid each,
+// everything last. There is no privileged grid and no landing grid: a
 // plugin is not a place, it contributes doors. A box that is not a door
 // still lists, so a link into it keeps resolving.
-func MenuEntries() []*pluginv1.MenuEntry {
-	out := make([]*pluginv1.MenuEntry, 0, len(Collections)+1)
-	for _, c := range Collections {
+func Declared() []*pluginv1.PluginGrid {
+	out := make([]*pluginv1.PluginGrid, 0, len(Grids)+1)
+	for _, c := range Grids {
 		if !c.Door {
 			continue
 		}
-		out = append(out, &pluginv1.MenuEntry{
-			Id:      c.Key,
-			Label:   c.Label,
-			Context: c.Key,
+		out = append(out, &pluginv1.PluginGrid{
+			Id:    c.Key,
+			Label: c.Label,
+			Grid:  c.Key,
 		})
 	}
-	return append(out, &pluginv1.MenuEntry{Id: EverythingContext, Label: EverythingLabel, Context: EverythingContext})
+	return append(out, &pluginv1.PluginGrid{Id: EverythingGrid, Label: EverythingLabel, Grid: EverythingGrid})
 }

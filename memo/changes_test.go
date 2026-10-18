@@ -85,7 +85,7 @@ func TestChangesFanOut(t *testing.T) {
 			}
 			s.hangUp(t)
 		}},
-		{"a burst is one change per context", ChangeOptions{}, func(t *testing.T, c *Changes) {
+		{"a burst is one change per grid", ChangeOptions{}, func(t *testing.T, c *Changes) {
 			s := serve(t, c, []string{"inbox"}, held())
 			c.Publish("inbox")
 			s.entered(t, 1)
@@ -212,7 +212,7 @@ func (w *worklog) starts() []string {
 }
 
 // TestChangesWork: background work runs exactly while some stream has its
-// context in scope, and lingers across the node swapping one stream for
+// grid in scope, and lingers across the node swapping one stream for
 // another.
 func TestChangesWork(t *testing.T) {
 	todosOnly := func(ctx string) []string {
@@ -231,7 +231,7 @@ func TestChangesWork(t *testing.T) {
 				t.Errorf("work ran with no stream: %v", w.starts())
 			}
 		}},
-		{"a scope's contexts start their units once", ChangeOptions{Work: todosOnly}, func(t *testing.T, c *Changes, w *worklog, _ *fakeClock) {
+		{"a scope's gridKeys start their units once", ChangeOptions{Work: todosOnly}, func(t *testing.T, c *Changes, w *worklog, _ *fakeClock) {
 			s := serve(t, c, []string{"todos", "week:1", "week:2", "elsewhere"}, newFakeStream())
 			eventually(t, "the poll", func() bool { return w.is("todos") })
 			if got := w.starts(); !reflect.DeepEqual(got, []string{"todos"}) {

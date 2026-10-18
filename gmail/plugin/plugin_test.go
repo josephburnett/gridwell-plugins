@@ -105,7 +105,7 @@ func newFake() *fakeGmail {
 		ctxs: map[string]context.Context{}}
 }
 
-func (f *fakeGmail) hold(collection string, ms ...mailbox.Message) {
+func (f *fakeGmail) hold(grid string, ms ...mailbox.Message) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ids []string
@@ -113,7 +113,7 @@ func (f *fakeGmail) hold(collection string, ms ...mailbox.Message) {
 		ids = append(ids, ms[i].ID)
 		f.recs[ms[i].ID] = ms[i]
 	}
-	f.labels[collection] = ids
+	f.labels[grid] = ids
 }
 
 func (f *fakeGmail) Label(ctx context.Context, labelIDs []string, limit int) ([]string, bool, error) {
@@ -303,17 +303,17 @@ func stable(src Source, o Options) *Plugin {
 
 func listAll(t *testing.T, p *Plugin) {
 	t.Helper()
-	for _, c := range mailbox.Collections {
-		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: c.Key}); err != nil {
+	for _, c := range mailbox.Grids {
+		if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: c.Key}); err != nil {
 			t.Fatalf("%s: %v", c.Key, err)
 		}
 	}
 	landed(t, p)
 }
 
-// Every context is a (+) menu entry, and none is a root: root_context is
+// Every grid is a (+) declared grid, and none is a root: root_grid is
 // retired.
-func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
+func TestInfoDeclaresEveryGridAsAMenuRow(t *testing.T) {
 	p := stable(newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
 	if err != nil {
@@ -322,8 +322,8 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	if info.Kind != Kind {
 		t.Errorf("kind = %q", info.Kind)
 	}
-	if info.RootContext != "" {
-		t.Errorf("root_context = %q; it is retired and the collections are declared", info.RootContext)
+	if info.RootGrid != "" {
+		t.Errorf("root_grid = %q; it is retired and the grids are declared", info.RootGrid)
 	}
 	if !info.HostContent {
 		t.Error("host_content not declared; these grids project a mail account")
@@ -331,13 +331,13 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	if info.Writable {
 		t.Error("a read-only projection declared itself writable")
 	}
-	if len(info.MenuEntries) != 3 || info.MenuEntries[0].Context != mailbox.InboxContext ||
-		info.MenuEntries[1].Context != mailbox.StarredContext || info.MenuEntries[2].Context != mailbox.AllMailContext {
-		t.Fatalf("menu entries = %+v, want one per context", info.MenuEntries)
+	if len(info.Grids) != 3 || info.Grids[0].Grid != mailbox.InboxGrid ||
+		info.Grids[1].Grid != mailbox.StarredGrid || info.Grids[2].Grid != mailbox.AllMailGrid {
+		t.Fatalf("declared grids = %+v, want one per grid", info.Grids)
 	}
 }
 
-func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
+func TestListsEachGridAndRefreshesOnAWindow(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
 	f.hold("STARRED", msg("b", "invoice", "2026-01-04T09:00:00Z"))
@@ -345,8 +345,8 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
 
-	for _, c := range mailbox.Collections {
-		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: c.Key})
+	for _, c := range mailbox.Grids {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: c.Key})
 		if err != nil {
 			t.Fatalf("%s: %v", c.Key, err)
 		}
@@ -361,7 +361,7 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 		t.Fatalf("the inbox was listed %d times", got)
 	}
 	// Inside the window: memory answers, Gmail is not asked again.
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.count("INBOX"); got != 1 {
@@ -369,7 +369,7 @@ func TestListsEachCollectionAndRefreshesOnAWindow(t *testing.T) {
 	}
 	// Past it: one more walk.
 	clock = clock.Add(2 * time.Minute)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	landed(t, p)
@@ -388,7 +388,7 @@ func TestASecondWalkOnlyFetchesWhatIsNew(t *testing.T) {
 	clock := at("2026-01-06T12:00:00Z")
 	p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.count("headers"); got != 2 {
@@ -397,9 +397,9 @@ func TestASecondWalkOnlyFetchesWhatIsNew(t *testing.T) {
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"), msg("b", "two", "2026-01-05T10:00:00Z"),
 		msg("c", "three", "2026-01-05T11:00:00Z"))
 	clock = clock.Add(2 * time.Minute)
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	landed(t, p)
-	resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestUnreadComesFromASecondListing(t *testing.T) {
 	p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
 
-	resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,9 +437,9 @@ func TestUnreadComesFromASecondListing(t *testing.T) {
 	f.labels["INBOX+UNREAD"] = nil
 	f.mu.Unlock()
 	clock = clock.Add(2 * time.Minute)
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	landed(t, p)
-	resp, err = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err = p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,11 +462,11 @@ func TestOneMessageReadsTheSameOnBothGrids(t *testing.T) {
 	ctx := context.Background()
 	listAll(t, p) // both walked: the star is a memory fact, not a walk's order
 
-	inbox, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	inbox, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
-	starred, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.StarredContext})
+	starred, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.StarredGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,16 +484,16 @@ func TestOneMessageReadsTheSameOnBothGrids(t *testing.T) {
 	}
 }
 
-func TestUnknownContextIsRefused(t *testing.T) {
+func TestUnknownGridIsRefused(t *testing.T) {
 	p := stable(newFake(), Options{})
-	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "label:SPAM"})
+	_, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "label:SPAM"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("err = %v, want InvalidArgument", err)
 	}
 }
 
 // A burst of readers costs Gmail one walk, not one per reader: the node lists
-// a context on every GetGrid and GetTile.
+// a grid on every GetGrid and GetTile.
 func TestOneWalkServesABurst(t *testing.T) {
 	f := newFake()
 	f.block = make(chan struct{})
@@ -504,7 +504,7 @@ func TestOneWalkServesABurst(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+			_, _ = p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 		}()
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -522,7 +522,7 @@ func TestASlowWalkAnswersFromMemory(t *testing.T) {
 	f.block = make(chan struct{})
 	p := stable(f, Options{FirstAnswer: 20 * time.Millisecond})
 	start := time.Now()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,7 +544,7 @@ func TestTheEmailIsThePageAndThereIsNoCard(t *testing.T) {
 	f.html["a"] = "<div>Are you free friday?</div>"
 	p := stable(f, Options{})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -586,7 +586,7 @@ func TestServeContentSaysWhenThereIsNoBody(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
 	p := stable(f, Options{})
-	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
+	if _, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	s := &server{}
@@ -614,7 +614,7 @@ func TestServeContentSurfacesAFailure(t *testing.T) {
 	}
 }
 
-// Nothing is GONE until every collection has been read: a message missing
+// Nothing is GONE until every grid has been read: a message missing
 // from the inbox is often still starred, and retiring its id would cost the
 // user the tile and its placement.
 func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
@@ -631,7 +631,7 @@ func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 		t.Fatalf("cold probe = %v", got.Presence)
 	}
 	// The refresh walks the inbox, then fails on the starred mail.
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	landed(t, p)
 	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:a"})
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_PRESENT {
@@ -645,7 +645,7 @@ func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 	f.failLabel = ""
 	f.mu.Unlock()
 	clock = clock.Add(2 * time.Minute)
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}) // answers the last failure, and refreshes
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}) // answers the last failure, and refreshes
 	landed(t, p)
 	listAll(t, p)
 	got, _ = p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:z"})
@@ -661,7 +661,7 @@ func TestProbeOnlySaysGoneAfterAWholeSweep(t *testing.T) {
 
 // A message starred out of the inbox keeps its key, so the node keeps its id
 // and every link to it still resolves.
-func TestAMessageKeepsItsKeyAcrossCollections(t *testing.T) {
+func TestAMessageKeepsItsKeyAcrossGrids(t *testing.T) {
 	f := newFake()
 	m := msg("a", "lunch", "2026-01-05T14:00:00Z")
 	f.hold("INBOX", m)
@@ -675,7 +675,7 @@ func TestAMessageKeepsItsKeyAcrossCollections(t *testing.T) {
 	clock = clock.Add(2 * time.Minute)
 	listAll(t, p)
 
-	starred, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.StarredContext})
+	starred, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.StarredGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -694,7 +694,7 @@ func TestAWalkFailureSurfaces(t *testing.T) {
 	f := newFake()
 	f.err = status.Error(codes.PermissionDenied, "the stored token was refused")
 	p := stable(f, Options{})
-	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	_, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("err = %v", err)
 	}
@@ -713,7 +713,7 @@ func TestOneUnreadableMessageDoesNotCostTheWalk(t *testing.T) {
 	p := stable(f, Options{Logf: func(format string, args ...any) { lines = append(lines, format) }})
 	ctx := context.Background()
 
-	resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatalf("one unreadable message failed the walk: %v", err)
 	}
@@ -746,7 +746,7 @@ func TestAMessageGmailWillNotReadNeverFailsAWalk(t *testing.T) {
 			p := stable(f, Options{Refresh: time.Minute, Now: func() time.Time { return clock }})
 			listAll(t, p)
 			refreshed(t, p, &clock, 2*time.Minute) // b is all this walk has to read
-			resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+			resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 			if err != nil || resp.Unreachable != "" {
 				t.Fatalf("the walk after one unreadable message = %q, %v", resp.GetUnreachable(), err)
 			}
@@ -764,7 +764,7 @@ func TestEveryMetadataReadFailingFailsTheWalk(t *testing.T) {
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
 	f.headerErr = status.Error(codes.Unavailable, "gmail is down")
 	p := stable(f, Options{})
-	_, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	_, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v, want the walk to fail with Gmail's reason", err)
 	}
@@ -794,7 +794,7 @@ func TestTheCapBoundsTheWalkAndACappedReadNeverRetires(t *testing.T) {
 	p := stable(f, Options{MaxMessages: 2, Refresh: time.Minute, Now: func() time.Time { return clock }})
 	ctx := context.Background()
 
-	resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +808,7 @@ func TestTheCapBoundsTheWalkAndACappedReadNeverRetires(t *testing.T) {
 	// A message that was on the grid and is no longer read still has its
 	// tile: absence below a capped read's watermark is not evidence.
 	clock = clock.Add(2 * time.Minute)
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.StarredContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.StarredGrid}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := p.Probe(ctx, &pluginv1.ProbeRequest{Key: "msg:b"})
@@ -824,7 +824,7 @@ func TestTheCapBoundsTheWalkAndACappedReadNeverRetires(t *testing.T) {
 		msg("c", "three", "2026-01-05T11:00:00Z"),
 		msg("d", "four", "2026-01-05T12:00:00Z"))
 	refreshed(t, p, &clock, 2*time.Minute)
-	if got := keys(t, p, mailbox.InboxContext); got != "msg:b,msg:c,msg:d" {
+	if got := keys(t, p, mailbox.InboxGrid); got != "msg:b,msg:c,msg:d" {
 		t.Errorf("inbox after a second capped walk = %s, want what memory holds", got)
 	}
 }
@@ -848,7 +848,7 @@ func TestTheCacheSurvivesARestart(t *testing.T) {
 
 	cold := newFake() // a source that answers nothing: only the cache can
 	back := stable(cold, opts)
-	resp, err := back.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := back.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -884,7 +884,7 @@ func TestAnUnreadableCacheStartsColdAndSaysSo(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatal("an unreadable cache was swallowed")
 	}
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil || len(resp.Entries) != 1 {
 		t.Fatalf("cold start did not recover: %v %+v", err, resp)
 	}
@@ -930,8 +930,8 @@ func TestFindReadsMemoryOnly(t *testing.T) {
 	if len(res.Results) != 1 || res.Results[0].Entry.Key != "msg:b" {
 		t.Fatalf("results = %+v", res.Results)
 	}
-	if got := res.Results[0].ContextPath; len(got) != 1 || got[0] != mailbox.AllMailContext {
-		t.Errorf("context path = %v", got)
+	if got := res.Results[0].GridPath; len(got) != 1 || got[0] != mailbox.AllMailGrid {
+		t.Errorf("grid path = %v", got)
 	}
 	if f.count("STARRED") != before {
 		t.Error("find called Gmail")
@@ -966,7 +966,7 @@ func TestAWarmReadAnswersMemoryAndSaysWhyTheWalkFailed(t *testing.T) {
 	clock := at("2026-01-06T12:00:00Z")
 	p := stable(f, Options{Refresh: time.Minute, FirstAnswer: time.Hour, Now: func() time.Time { return clock }})
 	ctx := context.Background()
-	if _, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil {
+	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -976,7 +976,7 @@ func TestAWarmReadAnswersMemoryAndSaysWhyTheWalkFailed(t *testing.T) {
 	clock = clock.Add(2 * time.Minute)
 	answered := make(chan *pluginv1.ListResponse, 1)
 	go func() {
-		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 		if err != nil {
 			t.Error(err)
 		}
@@ -997,8 +997,8 @@ func TestAWarmReadAnswersMemoryAndSaysWhyTheWalkFailed(t *testing.T) {
 	f.mu.Unlock()
 	close(f.block)
 	landed(t, p)
-	for _, c := range mailbox.Contexts() {
-		resp, err := p.List(ctx, &pluginv1.ListRequest{Context: c})
+	for _, c := range mailbox.GridKeys() {
+		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: c})
 		if err != nil {
 			t.Fatalf("%s after a failed walk = %v, want memory's answer", c, err)
 		}
@@ -1012,9 +1012,9 @@ func TestAWarmReadAnswersMemoryAndSaysWhyTheWalkFailed(t *testing.T) {
 	f.err = nil
 	f.mu.Unlock()
 	clock = clock.Add(2 * time.Minute)
-	_, _ = p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	_, _ = p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	landed(t, p)
-	if resp, err := p.List(ctx, &pluginv1.ListRequest{Context: mailbox.InboxContext}); err != nil || resp.Unreachable != "" {
+	if resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil || resp.Unreachable != "" {
 		t.Errorf("after a walk landed = unreachable %q, %v; want live again", resp.GetUnreachable(), err)
 	}
 }
@@ -1037,13 +1037,13 @@ func warmHistory(t *testing.T, f *fakeGmail, o Options) (*Plugin, *time.Time) {
 func refreshed(t *testing.T, p *Plugin, clock *time.Time, by time.Duration) {
 	t.Helper()
 	*clock = clock.Add(by)
-	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	_, _ = p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	landed(t, p)
 }
 
 func keys(t *testing.T, p *Plugin, ctxKey string) string {
 	t.Helper()
-	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: ctxKey})
+	resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: ctxKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1060,7 +1060,7 @@ func TestAQuietRefreshIsOneHistoryRequest(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
 	p, clock := warmHistory(t, f, Options{})
-	before := keys(t, p, mailbox.InboxContext)
+	before := keys(t, p, mailbox.InboxGrid)
 	inbox, headers := f.count("INBOX"), f.count("headers")
 
 	refreshed(t, p, clock, 2*time.Minute)
@@ -1070,7 +1070,7 @@ func TestAQuietRefreshIsOneHistoryRequest(t *testing.T) {
 	if f.count("INBOX") != inbox || f.count("headers") != headers || f.count("profile") != 1 {
 		t.Errorf("a quiet refresh listed or read: calls = %v", f.calls)
 	}
-	if after := keys(t, p, mailbox.InboxContext); after != before {
+	if after := keys(t, p, mailbox.InboxGrid); after != before {
 		t.Errorf("inbox %s became %s", before, after)
 	}
 }
@@ -1095,10 +1095,10 @@ func TestACatchUpAppliesExactlyWhatHistoryNames(t *testing.T) {
 	f.deleted("d")
 	refreshed(t, p, clock, 2*time.Minute)
 
-	if got := keys(t, p, mailbox.InboxContext); got != "msg:u,msg:a,msg:c" {
+	if got := keys(t, p, mailbox.InboxGrid); got != "msg:u,msg:a,msg:c" {
 		t.Errorf("inbox = %s", got)
 	}
-	if got := keys(t, p, mailbox.StarredContext); got != "msg:a" {
+	if got := keys(t, p, mailbox.StarredGrid); got != "msg:a" {
 		t.Errorf("starred = %s", got)
 	}
 	if got := f.count("headers") - headers; got != 3 {
@@ -1107,7 +1107,7 @@ func TestACatchUpAppliesExactlyWhatHistoryNames(t *testing.T) {
 	if f.count("INBOX") != inbox {
 		t.Error("a catch-up listed a label")
 	}
-	resp, _ := p.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, _ := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	for _, e := range resp.Entries {
 		if e.Key == "msg:a" && e.StatusDetail != mailbox.StarMark {
 			t.Errorf("a starred message has no star in the inbox: %q", e.StatusDetail)
@@ -1143,7 +1143,7 @@ func TestAnExpiredHistoryIDWalksOnceThenCatchesUp(t *testing.T) {
 }
 
 // The history id rides the cache: a restart past the refresh window catches
-// up from it instead of walking every collection.
+// up from it instead of walking every grid.
 func TestTheHistoryIDSurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
 	f := newFake()
@@ -1155,9 +1155,9 @@ func TestTheHistoryIDSurvivesARestart(t *testing.T) {
 
 	later := clock.Add(2 * time.Minute)
 	back := stable(f, Options{StateDir: dir, Refresh: time.Minute, Now: func() time.Time { return later }})
-	_, _ = back.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	_, _ = back.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	landed(t, back)
-	if got := keys(t, back, mailbox.InboxContext); got != "msg:a,msg:b" {
+	if got := keys(t, back, mailbox.InboxGrid); got != "msg:a,msg:b" {
 		t.Errorf("inbox after restart = %s", got)
 	}
 	if f.count("INBOX") != inbox {
@@ -1166,7 +1166,7 @@ func TestTheHistoryIDSurvivesARestart(t *testing.T) {
 }
 
 // History is the whole truth only for what a catch-up can see, so once
-// SweepEvery has passed a refresh walks every collection again.
+// SweepEvery has passed a refresh walks every grid again.
 func TestTheConsistencyPassWalksAgain(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"))
@@ -1201,10 +1201,10 @@ func (w *watchStream) Send(c *pluginv1.Change) error {
 		<-w.gate
 	}
 	if e := c.GetEntryChanged(); e != nil {
-		w.sent <- "entry " + e.GetContext() + "/" + e.GetEntry().GetKey()
+		w.sent <- "entry " + e.GetGrid() + "/" + e.GetEntry().GetKey()
 		return nil
 	}
-	w.sent <- c.GetContextChanged().GetContext()
+	w.sent <- c.GetGridChanged().GetGrid()
 	return nil
 }
 
@@ -1264,7 +1264,7 @@ func announced(w *watchStream) []string {
 	}
 }
 
-// A refresh announces exactly the collections whose answer it changed, and a
+// A refresh announces exactly the grids whose answer it changed, and a
 // quiet one announces nothing. A message touched at Gmail is never told as
 // an entry changed in place: its labels moved, and its page cannot.
 func TestWatchAnnouncesExactlyWhatARefreshChanged(t *testing.T) {
@@ -1285,14 +1285,14 @@ func TestWatchAnnouncesExactlyWhatARefreshChanged(t *testing.T) {
 
 	f.deleted("d") // starred only
 	refreshed(t, p, clock, 2*time.Minute)
-	if got := announced(w); !slices.Equal(got, []string{mailbox.StarredContext, mailbox.AllMailContext}) {
+	if got := announced(w); !slices.Equal(got, []string{mailbox.StarredGrid, mailbox.AllMailGrid}) {
 		t.Errorf("a starred deletion announced %v", got)
 	}
 
 	f.hold("STARRED", msg("a", "one", "2026-01-05T09:00:00Z")) // a gains a star: every listing changes
 	f.changed("a")
 	refreshed(t, p, clock, 2*time.Minute)
-	if got := announced(w); !slices.Equal(got, []string{mailbox.InboxContext, mailbox.StarredContext, mailbox.AllMailContext}) {
+	if got := announced(w); !slices.Equal(got, []string{mailbox.InboxGrid, mailbox.StarredGrid, mailbox.AllMailGrid}) {
 		t.Errorf("starring an inbox message announced %v", got)
 	}
 }
@@ -1334,7 +1334,7 @@ func TestAMissingHistoryIDCostsAWalkNotTheGrid(t *testing.T) {
 			mu.Unlock()
 		}})
 	listAll(t, p)
-	if got := keys(t, p, mailbox.InboxContext); got != "msg:a" {
+	if got := keys(t, p, mailbox.InboxGrid); got != "msg:a" {
 		t.Fatalf("inbox = %q", got)
 	}
 	mu.Lock()

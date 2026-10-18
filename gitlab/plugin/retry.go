@@ -35,7 +35,7 @@ type retrying struct {
 	backoff  time.Duration
 }
 
-// Page tries src.Page until it answers, the attempts run out, the context is
+// Page tries src.Page until it answers, the attempts run out, the grid is
 // done, or the failure is a verdict rather than weather. A verdict — a token
 // without the read_api scope, a malformed request — will not read differently
 // the second time, and retrying it only delays the reason reaching the user.

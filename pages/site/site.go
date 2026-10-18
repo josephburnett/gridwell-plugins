@@ -18,10 +18,10 @@ import (
 	"image/jpeg"
 )
 
-// RootContext is the plugin's one collection — the one context this site has.
-// Keys are flat because the site is flat; a plugin with a tree of contexts
+// RootGrid is the plugin's one grid — the one grid this site has.
+// Keys are flat because the site is flat; a plugin with a tree of grids
 // gives its keys a path shape, as fs does.
-const RootContext = "."
+const RootGrid = "."
 
 // PreviewStamp is the generation number of every page preview. The site is
 // fixed, so there is exactly one generation: the client's thumbnail cache

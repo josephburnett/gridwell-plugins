@@ -30,13 +30,13 @@ func eq(a, b []string) bool {
 // still reads as the email it was.
 func TestAWholeReadReplacesTheMembership(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(InboxContext, []string{"b", "a"}, map[string]bool{"b": true},
+	m.Absorb(InboxGrid, []string{"b", "a"}, map[string]bool{"b": true},
 		[]Message{msg("a", "one", "2026-01-03T09:00:00Z"), msg("b", "two", "2026-01-04T09:00:00Z")}, true)
-	if got := ids(m.Collection(InboxContext)); !eq(got, []string{"a", "b"}) { // oldest first
-		t.Fatalf("collection = %v", got)
+	if got := ids(m.Grid(InboxGrid)); !eq(got, []string{"a", "b"}) { // oldest first
+		t.Fatalf("grid = %v", got)
 	}
-	m.Absorb(InboxContext, []string{"b"}, nil, nil, true)
-	if got := ids(m.Collection(InboxContext)); !eq(got, []string{"b"}) {
+	m.Absorb(InboxGrid, []string{"b"}, nil, nil, true)
+	if got := ids(m.Grid(InboxGrid)); !eq(got, []string{"b"}) {
 		t.Fatalf("after an archive = %v", got)
 	}
 	if _, ok := m.View("a"); !ok {
@@ -58,21 +58,21 @@ func TestACappedReadIsAuthoritativeAboveItsWatermark(t *testing.T) {
 		msg("mid", "mid", "2026-01-03T09:00:00Z"),
 		msg("new", "new", "2026-01-05T09:00:00Z"),
 	}
-	m.Absorb(InboxContext, []string{"new", "mid", "old"}, nil, all, true)
+	m.Absorb(InboxGrid, []string{"new", "mid", "old"}, nil, all, true)
 
 	// "new" is archived and "newer" arrives; the next read is capped two
 	// messages down, at "mid". "new" was above the watermark and did not come
 	// back, so it has left. "old" is below it, where the read said nothing, so
 	// it stays.
-	m.Absorb(InboxContext, []string{"newer", "mid"}, nil,
+	m.Absorb(InboxGrid, []string{"newer", "mid"}, nil,
 		[]Message{msg("newer", "newer", "2026-01-06T09:00:00Z")}, false)
-	got := ids(m.Collection(InboxContext))
+	got := ids(m.Grid(InboxGrid))
 	if !eq(got, []string{"old", "mid", "newer"}) {
-		t.Fatalf("collection = %v; want old (below the watermark), mid and newer", got)
+		t.Fatalf("grid = %v; want old (below the watermark), mid and newer", got)
 	}
 	// A capped read that HAS a watermark is still a usable membership, so it
 	// counts towards the sweep that lets Probe ever answer GONE.
-	m.Absorb(StarredContext, []string{"newer"}, nil, nil, false)
+	m.Absorb(StarredGrid, []string{"newer"}, nil, nil, false)
 	if !m.Swept() {
 		t.Error("a capped read with a watermark did not count as a usable membership")
 	}
@@ -82,15 +82,15 @@ func TestACappedReadIsAuthoritativeAboveItsWatermark(t *testing.T) {
 // merge rather than retire, and it must not claim the membership is usable.
 func TestACappedReadWithNoDatesIsNoEvidence(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(InboxContext, []string{"a"}, nil, []Message{msg("a", "one", "2026-01-03T09:00:00Z")}, true)
+	m.Absorb(InboxGrid, []string{"a"}, nil, []Message{msg("a", "one", "2026-01-03T09:00:00Z")}, true)
 	// "z" has no record, so the read has no watermark to stand on.
-	m.Absorb(StarredContext, []string{"z"}, nil, nil, false)
+	m.Absorb(StarredGrid, []string{"z"}, nil, nil, false)
 	if m.Swept() {
-		t.Error("a walk that proved nothing declared the collection usable")
+		t.Error("a walk that proved nothing declared the grid usable")
 	}
-	m.Absorb(StarredContext, []string{"a"}, nil, nil, true)
+	m.Absorb(StarredGrid, []string{"a"}, nil, nil, true)
 	if !m.Swept() {
-		t.Error("every collection read and still not swept")
+		t.Error("every grid read and still not swept")
 	}
 }
 
@@ -99,12 +99,12 @@ func TestACappedReadWithNoDatesIsNoEvidence(t *testing.T) {
 func TestStateComesFromTheMemoryNotTheRecord(t *testing.T) {
 	m := NewMemory()
 	rec := []Message{msg("a", "one", "2026-01-03T09:00:00Z")}
-	m.Absorb(InboxContext, []string{"a"}, map[string]bool{"a": true}, rec, true)
-	m.Absorb(StarredContext, []string{"a"}, map[string]bool{"a": true}, nil, true)
+	m.Absorb(InboxGrid, []string{"a"}, map[string]bool{"a": true}, rec, true)
+	m.Absorb(StarredGrid, []string{"a"}, map[string]bool{"a": true}, nil, true)
 
-	inbox, starred := m.Collection(InboxContext), m.Collection(StarredContext)
+	inbox, starred := m.Grid(InboxGrid), m.Grid(StarredGrid)
 	if len(inbox) != 1 || len(starred) != 1 {
-		t.Fatalf("collections = %v %v", ids(inbox), ids(starred))
+		t.Fatalf("grids = %v %v", ids(inbox), ids(starred))
 	}
 	if inbox[0] != starred[0] {
 		t.Errorf("one message read two ways: %+v vs %+v", inbox[0], starred[0])
@@ -112,13 +112,13 @@ func TestStateComesFromTheMemoryNotTheRecord(t *testing.T) {
 	if !inbox[0].Unread || !inbox[0].Starred {
 		t.Errorf("state = %+v", inbox[0])
 	}
-	// Read at Gmail: the next walk of either collection clears the mark.
-	m.Absorb(InboxContext, []string{"a"}, nil, nil, true)
+	// Read at Gmail: the next walk of either grid clears the mark.
+	m.Absorb(InboxGrid, []string{"a"}, nil, nil, true)
 	if v, _ := m.View("a"); v.Unread {
 		t.Error("a message read at Gmail kept its unread mark")
 	}
 	// Unstarred: it leaves the starred membership, and the mark with it.
-	m.Absorb(StarredContext, nil, nil, nil, true)
+	m.Absorb(StarredGrid, nil, nil, nil, true)
 	if v, _ := m.View("a"); v.Starred {
 		t.Error("an unstarred message kept its star")
 	}
@@ -129,10 +129,10 @@ func TestStateComesFromTheMemoryNotTheRecord(t *testing.T) {
 // it gone — and gets its tile on the next walk.
 func TestAMemberWithNoRecordIsNotATileAndIsNotGone(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(InboxContext, []string{"a", "b"}, nil, []Message{msg("a", "one", "2026-01-03T09:00:00Z")}, true)
-	m.Absorb(StarredContext, nil, nil, nil, true)
-	if got := ids(m.Collection(InboxContext)); !eq(got, []string{"a"}) {
-		t.Fatalf("collection = %v", got)
+	m.Absorb(InboxGrid, []string{"a", "b"}, nil, []Message{msg("a", "one", "2026-01-03T09:00:00Z")}, true)
+	m.Absorb(StarredGrid, nil, nil, nil, true)
+	if got := ids(m.Grid(InboxGrid)); !eq(got, []string{"a"}) {
+		t.Fatalf("grid = %v", got)
 	}
 	if !m.Member("b") {
 		t.Error("a member with no record read as gone")
@@ -147,9 +147,9 @@ func TestAMemberWithNoRecordIsNotATileAndIsNotGone(t *testing.T) {
 // unread set, each membership, its usability and its wholeness.
 func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(InboxContext, []string{"b", "a"}, map[string]bool{"b": true},
+	m.Absorb(InboxGrid, []string{"b", "a"}, map[string]bool{"b": true},
 		[]Message{msg("a", "one", "2026-01-03T09:00:00Z"), msg("b", "two", "2026-01-04T09:00:00Z")}, true)
-	m.Absorb(StarredContext, []string{"b"}, map[string]bool{"b": true}, nil, true)
+	m.Absorb(StarredGrid, []string{"b"}, map[string]bool{"b": true}, nil, true)
 	m.SetHistoryID(4242)
 
 	raw, err := json.Marshal(m.Snapshot())
@@ -162,7 +162,7 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	}
 	back := NewMemory()
 	back.Restore(snap)
-	if got := ids(back.Collection(InboxContext)); !eq(got, []string{"a", "b"}) {
+	if got := ids(back.Grid(InboxGrid)); !eq(got, []string{"a", "b"}) {
 		t.Fatalf("restored inbox = %v", got)
 	}
 	v, ok := back.View("b")
@@ -172,11 +172,11 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	if !back.Swept() {
 		t.Error("a restored sweep did not count")
 	}
-	if !back.Definitive(InboxContext) {
+	if !back.Definitive(InboxGrid) {
 		t.Error("a restored whole read did not count")
 	}
 	if got := back.HistoryID(); got != 4242 {
-		t.Errorf("restored history id = %d; a restart would re-walk every collection", got)
+		t.Errorf("restored history id = %d; a restart would re-walk every grid", got)
 	}
 	// Two snapshots of the same memory are byte-identical, so a save that
 	// changes nothing does not churn the file.
@@ -187,13 +187,13 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 }
 
 // A catch-up places each message by the labels it carries now, whatever it
-// was before, and a deletion leaves every collection. Applying it twice is
+// was before, and a deletion leaves every grid. Applying it twice is
 // applying it once.
 func TestApplyPlacesByCurrentLabels(t *testing.T) {
 	m := NewMemory()
-	m.Absorb(InboxContext, []string{"b", "a"}, map[string]bool{"a": true},
+	m.Absorb(InboxGrid, []string{"b", "a"}, map[string]bool{"a": true},
 		[]Message{msg("a", "one", "2026-01-03T09:00:00Z"), msg("b", "two", "2026-01-04T09:00:00Z")}, true)
-	m.Absorb(StarredContext, nil, nil, nil, true)
+	m.Absorb(StarredGrid, nil, nil, nil, true)
 
 	delta := []Labelled{
 		{Message: msg("a", "one", "2026-01-03T09:00:00Z"), Labels: []string{"STARRED"}},         // archived, starred, read
@@ -201,10 +201,10 @@ func TestApplyPlacesByCurrentLabels(t *testing.T) {
 	}
 	for range 2 {
 		m.Apply(delta, []string{"b"})
-		if got := ids(m.Collection(InboxContext)); !eq(got, []string{"c"}) {
+		if got := ids(m.Grid(InboxGrid)); !eq(got, []string{"c"}) {
 			t.Fatalf("inbox = %v", got)
 		}
-		if got := ids(m.Collection(StarredContext)); !eq(got, []string{"a"}) {
+		if got := ids(m.Grid(StarredGrid)); !eq(got, []string{"a"}) {
 			t.Fatalf("starred = %v", got)
 		}
 		if a, _ := m.View("a"); a.Unread || !a.Starred {

@@ -1,6 +1,6 @@
 // Package plugin is the fs content plugin: a stateless projection of a
 // directory tree. Keys are slash-relative paths under the configured root, and
-// a directory's key is its context, "." the root's. Every derivation and
+// a directory's key is its grid, "." the root's. Every derivation and
 // byte-level answer comes from fs/fsfile. There is no database, no
 // ids, and no layout; the node owns those.
 package plugin
@@ -55,7 +55,7 @@ type Plugin struct {
 // It is the one owner of the config-to-plugin derivation, so the subprocess
 // main and a bundled binary compose exactly the same plugin. The config key is
 // root, the projected directory. No root means the plugin declares no
-// collection — listed, contributing nothing to the (+) menu — rather than a
+// grid — listed, contributing nothing to the (+) menu — rather than a
 // refusal.
 func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	return New(strings.TrimSpace(cfg["root"]), nil), nil
@@ -121,9 +121,9 @@ func (p *Plugin) abs(key string) (string, error) {
 	return filepath.Join(root, filepath.FromSlash(clean)), nil
 }
 
-// dir is abs for a context, which must not be a link itself either.
-func (p *Plugin) dir(context string) (string, error) {
-	full, err := p.abs(context)
+// dir is abs for a grid, which must not be a link itself either.
+func (p *Plugin) dir(gridKey string) (string, error) {
+	full, err := p.abs(gridKey)
 	if err != nil {
 		return "", err
 	}
@@ -164,8 +164,8 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		// no list of host-backed kinds to consult.
 		HostContent: true,
 	}
-	// No configured root means there is no context to serve, so the plugin
-	// declares no collection and contributes nothing to the (+) menu.
+	// No configured root means there is no grid to serve, so the plugin
+	// declares no grid and contributes nothing to the (+) menu.
 	if p.root == "" || p.root == "." {
 		return resp, nil
 	}
@@ -175,9 +175,9 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		}
 		p.served.Store(true)
 	}
-	// The one collection this plugin serves: the configured tree. It
+	// The one grid this plugin serves: the configured tree. It
 	// declares no label, so the swatch reads as the configured instance.
-	resp.MenuEntries = []*pluginv1.MenuEntry{{Id: ".", Context: "."}}
+	resp.Grids = []*pluginv1.PluginGrid{{Id: ".", Grid: "."}}
 	resp.Watch = true
 	resp.Writable = true
 	if label := filepath.Base(p.root); label != "/" && label != "." {
@@ -237,17 +237,17 @@ func gone(err error) bool {
 	return errors.Is(err, iofs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
-// List enumerates one directory context. A directory that is gone, is now a
+// List enumerates one directory grid. A directory that is gone, is now a
 // file, or is not in the tree (errOutside) is an authoritative empty listing;
 // one that cannot be read answers Unavailable, and the node serves its rows
 // with the source dark.
 func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	dir, err := p.dir(req.Context)
+	dir, err := p.dir(req.Grid)
 	if errors.Is(err, errOutside) {
 		return &pluginv1.ListResponse{Authoritative: true}, nil
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", req.Context, pathErr(err))
+		return nil, status.Errorf(codes.Unavailable, "fs plugin: read %s: %v", req.Grid, pathErr(err))
 	}
 	entries, readErr := fssource.Read(dir)
 	if readErr != nil {
@@ -262,24 +262,24 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 	}
 	resp := &pluginv1.ListResponse{Authoritative: true, SourceLabel: dir}
 	for _, e := range entries {
-		resp.Entries = append(resp.Entries, entryOf(req.Context, dir, root, e))
+		resp.Entries = append(resp.Entries, entryOf(req.Grid, dir, root, e))
 	}
 	return resp, nil
 }
 
-// entryOf is what List answers for e, read from dir, which context names
+// entryOf is what List answers for e, read from dir, which grid names
 // under the real root: the one owner, so a Watch's EntryChanged carries the
 // entry a listing would.
-func entryOf(context, dir, root string, e fssource.Entry) *pluginv1.Entry {
+func entryOf(gridKey, dir, root string, e fssource.Entry) *pluginv1.Entry {
 	key := e.Name
-	if context != "." && context != "" {
-		key = context + "/" + e.Name
+	if gridKey != "." && gridKey != "" {
+		key = gridKey + "/" + e.Name
 	}
 	out := &pluginv1.Entry{Key: key, Label: e.Name}
 	switch e.Kind {
 	case fssource.KindDir:
 		out.Kind = "door"
-		out.ChildContext = key
+		out.ChildGrid = key
 	case fssource.KindLink:
 		linkEntry(out, root, e)
 	default:
@@ -311,7 +311,7 @@ func fileFacts(out *pluginv1.Entry, dir, name string) {
 
 // linkEntry lists a symlink as a link to where it lands, so a thing reached
 // two ways is one key: a directory as a door onto the directory's own
-// context, so a link back up the tree is one grid rather than an endless
+// grid, so a link back up the tree is one grid rather than an endless
 // descent, and a file as an entry whose link_target is the file's key. A link
 // that lands outside the root, or nowhere, targets the key of where it points,
 // which no listing holds, so the node reads it dead.
@@ -323,7 +323,7 @@ func linkEntry(out *pluginv1.Entry, root string, e fssource.Entry) {
 	reachable := e.TargetKind != "" && !escapes(target)
 	if reachable && e.TargetKind == fssource.KindDir {
 		out.Kind = "door"
-		out.ChildContext = target
+		out.ChildGrid = target
 		return
 	}
 	// The content facts are the target's, for a node that predates
@@ -333,7 +333,7 @@ func linkEntry(out *pluginv1.Entry, root string, e fssource.Entry) {
 	} else {
 		fileFacts(out, "", e.Name)
 	}
-	out.LinkTarget = &pluginv1.EntryRef{Context: path.Dir(target), Key: target}
+	out.LinkTarget = &pluginv1.EntryRef{Grid: path.Dir(target), Key: target}
 }
 
 func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {

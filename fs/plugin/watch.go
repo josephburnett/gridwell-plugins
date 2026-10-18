@@ -1,6 +1,6 @@
 package plugin
 
-// Watch follows only the directories some client shows (WatchRequest.contexts)
+// Watch follows only the directories some client shows (WatchRequest.grids)
 // through the operating system's change notifications, so what it costs is
 // what is on screen, never the size of the tree under the root.
 
@@ -29,15 +29,15 @@ import (
 // milliseconds, and every announcement costs the node a listing.
 const DebounceWindow = 200 * time.Millisecond
 
-// Watch tells a shown directory's changes: a ContextChanged when a name in it
+// Watch tells a shown directory's changes: a GridChanged when a name in it
 // may have come, gone or moved, and an EntryChanged, the entry as List would
 // answer it now, for each file in it written or replaced in place, whose
-// bytes no listing carries. Empty contexts is a node from before scopes, and
-// no directory is cheap to watch, so it watches none. A context not in the
+// bytes no listing carries. Empty grids is a node from before scopes, and
+// no directory is cheap to watch, so it watches none. A grid not in the
 // tree, such as a dead link's target, never changes and is not watched.
 func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchServer) error {
 	scope := map[string]string{}
-	for _, key := range req.GetContexts() {
+	for _, key := range req.GetGrids() {
 		dir, err := p.dir(key)
 		if errors.Is(err, errOutside) {
 			continue
@@ -74,10 +74,10 @@ func (p *Plugin) Watch(req *pluginv1.WatchRequest, stream pluginv1.Plugin_WatchS
 // tell sends what s is owed, every listing before any entry. A file that is
 // gone or a directory by now has no entry to send; its listing says so.
 func (p *Plugin) tell(stream pluginv1.Plugin_WatchServer, s *watchSub) error {
-	contexts, files := p.watch.take(s)
-	for _, key := range contexts {
-		if err := stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_ContextChanged{
-			ContextChanged: &pluginv1.ContextChanged{Context: key},
+	gridKeys, files := p.watch.take(s)
+	for _, key := range gridKeys {
+		if err := stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_GridChanged{
+			GridChanged: &pluginv1.GridChanged{Grid: key},
 		}}); err != nil {
 			return err
 		}
@@ -95,7 +95,7 @@ func (p *Plugin) tell(stream pluginv1.Plugin_WatchServer, s *watchSub) error {
 			continue
 		}
 		if err := stream.Send(&pluginv1.Change{Payload: &pluginv1.Change_EntryChanged{
-			EntryChanged: &pluginv1.EntryChanged{Context: f.context, Entry: entryOf(f.context, filepath.Dir(f.path), root, e)},
+			EntryChanged: &pluginv1.EntryChanged{Grid: f.gridKey, Entry: entryOf(f.gridKey, filepath.Dir(f.path), root, e)},
 		}}); err != nil {
 			return err
 		}
@@ -129,14 +129,14 @@ type window struct {
 	files   map[string]bool
 }
 
-// watchSub is one Watch stream: its scope (absolute directory to context
+// watchSub is one Watch stream: its scope (absolute directory to grid
 // key) and what it is owed, under the watcher's mu. Owing is a set, so a
 // stream that falls behind owes each thing once and loses none; all is owed
 // after an OS overflow, when which things changed is lost.
 type watchSub struct {
 	scope    map[string]string
-	contexts map[string]bool
-	files    map[string]string // path to its directory's context key
+	gridKeys map[string]bool
+	files    map[string]string // path to its directory's grid key
 	all      bool
 	ready    chan struct{}
 	failed   chan error
@@ -144,35 +144,35 @@ type watchSub struct {
 
 // owedFile is a file whose entry a stream is owed.
 type owedFile struct {
-	context, path string
+	gridKey, path string
 }
 
 // take empties what s is owed, sorted, for its stream to send. After an
 // overflow that is every directory of the scope and every file in them.
-func (w *watcher) take(s *watchSub) (contexts []string, files []owedFile) {
+func (w *watcher) take(s *watchSub) (gridKeys []string, files []owedFile) {
 	w.mu.Lock()
 	all := s.all
-	for k := range s.contexts {
-		contexts = append(contexts, k)
+	for k := range s.gridKeys {
+		gridKeys = append(gridKeys, k)
 	}
 	for path, k := range s.files {
-		files = append(files, owedFile{context: k, path: path})
+		files = append(files, owedFile{gridKey: k, path: path})
 	}
-	s.all, s.contexts, s.files = false, map[string]bool{}, map[string]string{}
+	s.all, s.gridKeys, s.files = false, map[string]bool{}, map[string]string{}
 	w.mu.Unlock()
 	if all {
-		contexts, files = nil, nil
+		gridKeys, files = nil, nil
 		for dir, k := range s.scope {
-			contexts = append(contexts, k)
+			gridKeys = append(gridKeys, k)
 			entries, _ := fssource.Read(dir)
 			for _, e := range entries {
-				files = append(files, owedFile{context: k, path: e.AbsPath})
+				files = append(files, owedFile{gridKey: k, path: e.AbsPath})
 			}
 		}
 	}
-	slices.Sort(contexts)
+	slices.Sort(gridKeys)
 	slices.SortFunc(files, func(a, b owedFile) int { return strings.Compare(a.path, b.path) })
-	return contexts, files
+	return gridKeys, files
 }
 
 func newWatcher() *watcher {
@@ -190,7 +190,7 @@ func newWatcher() *watcher {
 func (w *watcher) subscribe(scope map[string]string) (*watchSub, error) {
 	s := &watchSub{
 		scope:    scope,
-		contexts: map[string]bool{},
+		gridKeys: map[string]bool{},
 		files:    map[string]string{},
 		ready:    make(chan struct{}, 1),
 		failed:   make(chan error, 1),
@@ -416,7 +416,7 @@ func (w *watcher) owe(dir string) {
 			continue
 		}
 		if win.listing {
-			s.contexts[key] = true
+			s.gridKeys[key] = true
 		}
 		for f := range win.files {
 			s.files[f] = key

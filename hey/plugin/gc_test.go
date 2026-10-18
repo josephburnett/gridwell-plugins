@@ -19,7 +19,7 @@ func TestAnArchivedThreadHEYLaterDeletesIsForgotten(t *testing.T) {
 	p := stable(t, f, Options{})
 	walk := func() {
 		t.Helper()
-		p.flights.Rewalk(mail.ImboxContext)
+		p.flights.Rewalk(mail.ImboxGrid)
 		idle(t, p)
 	}
 	walk()

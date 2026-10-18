@@ -10,8 +10,8 @@ import (
 
 // A thread is a page, and a page is a url entry the plugin serves from: the
 // address is the node's to derive, and no text body rides beside it.
-func TestCollectionEntriesAreURLsThatServeTheirPage(t *testing.T) {
-	entries := CollectionEntries([]Thread{
+func TestGridEntriesAreURLsThatServeTheirPage(t *testing.T) {
+	entries := GridEntries([]Thread{
 		{TopicID: 1, Subject: "a", CreatedAt: at("2026-01-02T09:00:00Z")},
 	})
 	if len(entries) != 1 {
@@ -43,7 +43,7 @@ func TestEntriesHintIsPureInTheCreationTime(t *testing.T) {
 	earlier := Thread{TopicID: 1, CreatedAt: at("2026-09-02T09:00:00Z")}
 	wx, wy := calendar.Cell(later.CreatedAt, ThreadTileW)
 	for name, derive := range map[string]func([]Thread) []*pluginv1.Entry{
-		"everything": CollectionEntries,
+		"everything": GridEntries,
 		"box":        BoxEntries,
 	} {
 		alone := derive([]Thread{later})
@@ -70,7 +70,7 @@ func TestStatusIsTheUnseenMarkInABoxOnly(t *testing.T) {
 	if box[1].StatusDetail != "" {
 		t.Errorf("seen box tile status = %q, want none", box[1].StatusDetail)
 	}
-	for _, e := range CollectionEntries(threads) {
+	for _, e := range GridEntries(threads) {
 		if e.StatusDetail != "" {
 			t.Errorf("everything tile %s status = %q, want none", e.Key, e.StatusDetail)
 		}
@@ -79,20 +79,20 @@ func TestStatusIsTheUnseenMarkInABoxOnly(t *testing.T) {
 
 // The (+) menu offers imbox, reply later, set aside and everything; the
 // other boxes are walked into everything but are not doors.
-func TestMenuEntriesDeclareTheDoors(t *testing.T) {
-	got := MenuEntries()
-	want := []Collection{
-		{Key: ImboxContext, Label: "imbox"},
-		{Key: ReplyLaterContext, Label: "reply later"},
-		{Key: SetAsideContext, Label: "set aside"},
-		{Key: EverythingContext, Label: EverythingLabel},
+func TestGridsDeclareTheDoors(t *testing.T) {
+	got := Declared()
+	want := []Grid{
+		{Key: ImboxGrid, Label: "imbox"},
+		{Key: ReplyLaterGrid, Label: "reply later"},
+		{Key: SetAsideGrid, Label: "set aside"},
+		{Key: EverythingGrid, Label: EverythingLabel},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("got %d menu entries, want the four doors (%d)", len(got), len(want))
+		t.Fatalf("got %d declared grids, want the four doors (%d)", len(got), len(want))
 	}
 	for i, e := range got {
-		if e.Context != want[i].Key || e.Id != want[i].Key || e.Label != want[i].Label {
-			t.Errorf("entry %d = %+v, want collection %+v", i, e, want[i])
+		if e.Grid != want[i].Key || e.Id != want[i].Key || e.Label != want[i].Label {
+			t.Errorf("entry %d = %+v, want grid %+v", i, e, want[i])
 		}
 	}
 }

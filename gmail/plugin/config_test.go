@@ -98,7 +98,7 @@ func TestFromConfigReadsTheConfiguredEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := impl.List(context.Background(), &pluginv1.ListRequest{Context: mailbox.InboxContext})
+	resp, err := impl.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

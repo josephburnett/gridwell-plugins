@@ -24,7 +24,7 @@ func TestATextEntryAndItsReadNameTheBytesByOneStamp(t *testing.T) {
 	}
 	p := New(root, nil)
 	listed := func() map[string]string {
-		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Context: "."})
+		resp, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: "."})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -6,17 +6,17 @@ package mail
 const CacheFile = "mail.json"
 
 // Snapshot is the memory as the cache file holds it: every thread the memory
-// has seen, each collection's membership, and the strays in the order they
+// has seen, each grid's membership, and the strays in the order they
 // wait to be asked about.
 type Snapshot struct {
-	Threads     []Thread                `json:"threads"`
-	Collections map[string]CollectionIn `json:"collections"`
-	Strays      []int64                 `json:"strays,omitempty"`
+	Threads []Thread          `json:"threads"`
+	Grids   map[string]GridIn `json:"grids"`
+	Strays  []int64           `json:"strays,omitempty"`
 }
 
-// CollectionIn is one collection's remembered membership: what it held, and
+// GridIn is one grid's remembered membership: what it held, and
 // whether the walk that read it reached the end of the box.
-type CollectionIn struct {
+type GridIn struct {
 	Complete bool    `json:"complete"`
 	TopicIDs []int64 `json:"topicIds"`
 }
@@ -27,13 +27,13 @@ func (m *Memory) Snapshot() Snapshot {
 	threads := m.All()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cols := make(map[string]CollectionIn, len(m.members))
+	cols := make(map[string]GridIn, len(m.members))
 	for key, ids := range m.members {
 		out := make([]int64, len(ids))
 		copy(out, ids)
-		cols[key] = CollectionIn{Complete: m.complete[key], TopicIDs: out}
+		cols[key] = GridIn{Complete: m.complete[key], TopicIDs: out}
 	}
-	return Snapshot{Threads: threads, Collections: cols, Strays: m.strayOrderLocked()}
+	return Snapshot{Threads: threads, Grids: cols, Strays: m.strayOrderLocked()}
 }
 
 // Restore folds a snapshot into the memory. It is the boot path only: the
@@ -48,7 +48,7 @@ func (m *Memory) Restore(s Snapshot) {
 		t := s.Threads[i]
 		m.threads[t.TopicID] = &t
 	}
-	for key, in := range s.Collections {
+	for key, in := range s.Grids {
 		ids := make([]int64, len(in.TopicIDs))
 		copy(ids, in.TopicIDs)
 		m.members[key] = ids

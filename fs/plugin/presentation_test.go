@@ -23,7 +23,7 @@ func TestEveryTextEntryDeclaresAPresentation(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := New(root, nil).List(context.Background(), &pluginv1.ListRequest{Context: "."})
+	resp, err := New(root, nil).List(context.Background(), &pluginv1.ListRequest{Grid: "."})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
 // Package plugin is the proc content plugin: a stateless projection of the
-// process table. A context is a pid, whose grid lists that process's direct
+// process table. A grid is a pid, whose grid lists that process's direct
 // children; tile keys are pid strings, plus "info:<pid>" for the @info
 // metadata tile. Listings are non-authoritative — a child unreadable this pass
 // is not gone — and the node arbitrates absence through Probe. There is no
@@ -125,12 +125,12 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		Kind:        "proc",
 		DisplayName: label,
 		Glyph:       "process",
-		// The one collection this plugin serves: the process tree under the
+		// The one grid this plugin serves: the process tree under the
 		// configured pid. It declares no label, so the swatch reads as the
 		// configured instance.
-		MenuEntries: []*pluginv1.MenuEntry{{
-			Id:      strconv.FormatInt(p.rootPID, 10),
-			Context: strconv.FormatInt(p.rootPID, 10),
+		Grids: []*pluginv1.PluginGrid{{
+			Id:   strconv.FormatInt(p.rootPID, 10),
+			Grid: strconv.FormatInt(p.rootPID, 10),
 		}},
 		// The process table is host state, projected: declaring it is what
 		// earns these grids the host treatment on the client.
@@ -169,11 +169,11 @@ func parseKey(key string) (pid int64, info bool, err error) {
 	return pid, info, nil
 }
 
-// contextPID resolves a context, which is always a bare pid.
-func contextPID(context string) (int64, error) {
-	pid, ok := parsePID(context)
+// gridPID resolves a grid, which is always a bare pid.
+func gridPID(gridKey string) (int64, error) {
+	pid, ok := parsePID(gridKey)
 	if !ok {
-		return 0, status.Errorf(codes.InvalidArgument, "proc plugin: invalid context %q", context)
+		return 0, status.Errorf(codes.InvalidArgument, "proc plugin: invalid gridKey %q", gridKey)
 	}
 	return pid, nil
 }
@@ -187,7 +187,7 @@ func parsePID(s string) (int64, bool) {
 // the ids the node mints stay stable. A process table it cannot read is
 // Unavailable: a partial listing would look like the truth.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	pid, err := contextPID(req.Context)
+	pid, err := gridPID(req.Grid)
 	if err != nil {
 		return nil, err
 	}
@@ -195,10 +195,10 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "proc plugin: pid %d: %v", pid, err)
 	}
-	resp := &pluginv1.ListResponse{Authoritative: false, SourceLabel: req.Context}
+	resp := &pluginv1.ListResponse{Authoritative: false, SourceLabel: req.Grid}
 	if up {
 		_, stamp, _ := p.info(pid)
-		resp.Entries = append(resp.Entries, infoEntry(req.Context, stamp))
+		resp.Entries = append(resp.Entries, infoEntry(req.Grid, stamp))
 	}
 	children, err := p.scan(ctx, pid)
 	if ctx.Err() != nil {
@@ -210,17 +210,17 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 	for _, c := range children {
 		key := strconv.FormatInt(c.PID, 10)
 		resp.Entries = append(resp.Entries, &pluginv1.Entry{
-			Key: key, Kind: "door", Label: key, ChildContext: key,
+			Key: key, Kind: "door", Label: key, ChildGrid: key,
 			StatusDetail: stateMark(c.State),
 		})
 	}
 	return resp, nil
 }
 
-// infoEntry is context's @info entry, its body named by stamp.
-func infoEntry(context, stamp string) *pluginv1.Entry {
+// infoEntry is grid's @info entry, its body named by stamp.
+func infoEntry(gridKey, stamp string) *pluginv1.Entry {
 	return &pluginv1.Entry{
-		Key:  infoKeyPrefix + context,
+		Key:  infoKeyPrefix + gridKey,
 		Kind: "text", Label: infoLabel, TextPresentation: "both",
 		ContentStamp: stamp,
 	}
@@ -271,8 +271,8 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	return stream.Send(&pluginv1.ContentChunk{Data: body, MediaType: "text/markdown", ContentStamp: stamp})
 }
 
-// Probe answers for the context named, or for the plugin as a whole when none
-// is. A process is under its parent's context now, so a child reparented
+// Probe answers for the grid named, or for the plugin as a whole when none
+// is. A process is under its parent's grid now, so a child reparented
 // after its parent died is gone from the old grid; info:<pid> lives only in
 // <pid>'s grid, and only while <pid> runs.
 func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
@@ -281,9 +281,9 @@ func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1
 		return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil
 	}
 	var under int64 // 0: the plugin as a whole
-	if req.Context != "" {
-		if under, err = contextPID(req.Context); err != nil {
-			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a context this plugin never lists
+	if req.Grid != "" {
+		if under, err = gridPID(req.Grid); err != nil {
+			return presence(pluginv1.ProbeResponse_PRESENCE_GONE), nil // a grid this plugin never lists
 		}
 	}
 	if isInfo && under != 0 && under != pid {

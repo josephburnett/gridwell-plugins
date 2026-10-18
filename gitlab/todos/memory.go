@@ -93,12 +93,12 @@ type Changes struct {
 	Todos []Todo
 }
 
-// Contexts names the contexts whose listings moved: the root first, then each
+// Grids names the grids whose listings moved: the root first, then each
 // week, newest first.
-func (c Changes) Contexts() []string {
+func (c Changes) Grids() []string {
 	var out []string
 	if c.Root {
-		out = append(out, RootContext)
+		out = append(out, RootGrid)
 	}
 	for _, w := range c.Weeks {
 		out = append(out, WeekKey(w))
