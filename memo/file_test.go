@@ -69,7 +69,7 @@ func TestFileLoad(t *testing.T) {
 }
 
 // TestFileWithNoStateDirIsAlwaysCold: a node that hands no state_dir gets a
-// the cache that lives as long as the process and writes nothing.
+// cache that lives as long as the process and writes nothing.
 func TestFileWithNoStateDirIsAlwaysCold(t *testing.T) {
 	f := NewFile[snap]("", "cache.json", 1, nil)
 	if err := f.Save(func() snap { return snap{Items: []string{"x"}} }); err != nil {
