@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/josephburnett/gridwell-plugins/guest v0.1.0
-	github.com/josephburnett/gridwell/api v0.4.0
+	github.com/josephburnett/gridwell/api v0.8.0
 	google.golang.org/grpc v1.84.0
 )
 
@@ -24,5 +24,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
-
-replace github.com/josephburnett/gridwell/api => /home/joe/gridwell/.claude/worktrees/rename/api

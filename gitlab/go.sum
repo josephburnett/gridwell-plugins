@@ -20,6 +20,10 @@ github.com/jhump/protoreflect v1.17.0 h1:qOEr613fac2lOuTgWN4tPAtLL7fUSbuJL5X5Xum
 github.com/jhump/protoreflect v1.17.0/go.mod h1:h9+vUUL38jiBzck8ck+6G/aeMX8Z4QUY/NiJPwPNi+8=
 github.com/josephburnett/gridwell-plugins/guest v0.1.0 h1:ifGeNEwq5OZ+iLuAalmfYL36Ym4u0jtWzXM6thk2jwY=
 github.com/josephburnett/gridwell-plugins/guest v0.1.0/go.mod h1:K/NNXVFn0yN3OXXhBa1+WnPetpqbRAWN/gkcPCG7RGg=
+github.com/josephburnett/gridwell-plugins/memo v0.4.0 h1:dZGngCZe4dpJZkRBQim5W1PvoR/Waw1DjNbR5auxJp4=
+github.com/josephburnett/gridwell-plugins/memo v0.4.0/go.mod h1:R8WqnQdqDdY4ZD47thNXJMZugZQ9ep4WKou2JLjubTI=
+github.com/josephburnett/gridwell/api v0.8.0 h1:wzXVC5Pyrkom3oMbnXB4zelo+Vs9Ga2zy49HZJ8IBGc=
+github.com/josephburnett/gridwell/api v0.8.0/go.mod h1:YOip8PZe0bfa17occHRbMLZAeDRFnuSS4nvzCB8z+oc=
 github.com/mattn/go-colorable v0.1.9/go.mod h1:u6P/XSegPjTcexA+o6vUJrdnUu04hMope9wVRipJSqc=
 github.com/mattn/go-colorable v0.1.12/go.mod h1:u5H1YNBxpqRaxsYJYSkiCWKzEfiAb1Gb520KVy5xxl4=
 github.com/mattn/go-colorable v0.1.15 h1:+u9SLTRGnXv73cEsnsmoZBom+dMU88B2M0aDcWy0/jY=
