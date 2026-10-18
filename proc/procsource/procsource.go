@@ -221,7 +221,7 @@ func parseStatus(path string, out *Info) error {
 		case "State":
 			// "R (running)" — keep the whole label so callers can
 			// surface a short char (split on whitespace) or the full
-			// label depending on how much room the renderer has.
+			// label depending on how much space the renderer has.
 			out.State = v
 		case "PPid":
 			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
