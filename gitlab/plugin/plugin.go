@@ -318,7 +318,7 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		SourceLabel: fmt.Sprintf("%s · %d open · %d done", displayName, open, done)}, nil
 }
 
-// ReadContent answers the todo's markdown: the text tile's face and rendered
+// ReadContent answers the todo's markdown: the text tile's preview and rendered
 // document, whose target link opens an ephemeral visit. An unknown key reads as
 // a one-line notice.
 func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.Plugin_ReadContentServer) error {

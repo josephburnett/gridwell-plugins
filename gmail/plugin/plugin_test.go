@@ -1289,7 +1289,7 @@ func TestWatchAnnouncesExactlyWhatARefreshChanged(t *testing.T) {
 		t.Errorf("a starred deletion announced %v", got)
 	}
 
-	f.hold("STARRED", msg("a", "one", "2026-01-05T09:00:00Z")) // a gains a star: every face changes
+	f.hold("STARRED", msg("a", "one", "2026-01-05T09:00:00Z")) // a gains a star: every listing changes
 	f.changed("a")
 	refreshed(t, p, clock, 2*time.Minute)
 	if got := announced(w); !slices.Equal(got, []string{mailbox.InboxContext, mailbox.StarredContext, mailbox.AllMailContext}) {

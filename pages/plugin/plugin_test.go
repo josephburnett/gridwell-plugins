@@ -286,7 +286,7 @@ func TestDeleteIsRefusedWithAReason(t *testing.T) {
 	}
 }
 
-// GetPreview answers a page's face and nothing for a doc without one. nil is
+// GetPreview answers a page's preview and nothing for a doc without one. nil is
 // "no thumbnail", never an error: the tile falls back to its label.
 func TestGetPreviewAnswersOnlyForPages(t *testing.T) {
 	p := New()

@@ -13,8 +13,8 @@ func (p *Plugin) views(key string) []mailbox.View {
 	return p.mem.Collection(key)
 }
 
-// faces is what every context answers now.
-func (p *Plugin) faces() map[string][]mailbox.View {
+// listings is what every context answers now.
+func (p *Plugin) listings() map[string][]mailbox.View {
 	out := map[string][]mailbox.View{}
 	for _, key := range mailbox.Contexts() {
 		out[key] = p.views(key)

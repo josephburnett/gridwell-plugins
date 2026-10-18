@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// The tile content is markdown: a text tile renders it on its grid face and,
+// The tile content is markdown: a text tile renders it in its grid preview and,
 // descended, as the read-only selectable document. A link in a rendered
 // document opens an ephemeral visit in a split below, which is the whole point
 // of the target link. A plugin-served HTML page cannot do that: it is
@@ -17,7 +17,7 @@ import (
 // markdown, so it shows rendered and as its source.
 const TextPresentation = "both"
 
-// SnippetRunes bounds the body excerpt on the face.
+// SnippetRunes bounds the body excerpt on the preview.
 const SnippetRunes = 240
 
 // Snippet is the body's first SnippetRunes runes on one line.

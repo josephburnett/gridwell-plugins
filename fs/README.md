@@ -120,7 +120,7 @@ open-file limit.
   clients only if the listing moved, and that listing retires a gone key.
 - A file written in place, or created over its own name as an editor's save
   does, is an `EntryChanged` carrying the file's entry re-read, so a pane
-  showing the file, and the file's face in its grid, show the new bytes.
+  showing the file, and the file's preview in its grid, show the new bytes.
 - A shown directory that stops existing announces itself and its parent (if
   shown) and drops its watch. One created again at a shown path is watched
   again.

@@ -68,7 +68,7 @@ func SameViews(a, b []View) bool {
 
 // Collection is one of the two Gmail labels this plugin walks. Key is the
 // plugin's context key, stable forever. LabelIDs are the label ids Gmail's
-// messages.list takes. Label is the face of the (+) menu row that opens it.
+// messages.list takes. Label is the name on the (+) menu row that opens it.
 type Collection struct {
 	Key      string
 	LabelIDs []string
