@@ -135,7 +135,7 @@ will not answer for costs that message's tile, never the walk.
 
 ## Keys and the grid
 
-Three grids, one (+) declared grid each: **inbox**, **starred**, and **all
+Three grids, each a swatch on the (+) menu: **inbox**, **starred**, and **all
 mail**, their union. All mail holds each message once, as a url tile whose
 page is the email. The inbox and the starred grid hold links to those tiles,
 so a message that is in both is one tile, and a message starred out of the

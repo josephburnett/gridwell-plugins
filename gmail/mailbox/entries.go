@@ -48,7 +48,7 @@ func entries(gridKey string, views []View) []*Entry {
 	return out
 }
 
-// Grids declares every grid, one (+) declared grid each, all mail
+// Declared lists every grid, each a swatch on the (+) menu, all mail
 // last. There is no privileged grid and no landing grid: a plugin is
 // not a place, it contributes doors, and each of these is one.
 func Declared() []*pluginv1.PluginGrid {

@@ -191,7 +191,7 @@ func stable(t *testing.T, src Source, o Options) *Plugin {
 	return New(src, o)
 }
 
-// The six boxes and everything are seven grids and seven (+) declared grids.
+// The six boxes and everything are seven grids and seven (+) menu swatches.
 // There is no wrapper grid above them and no landing among them: a plugin is
 // not a place, it contributes doors, and each grid is one.
 func TestInfoDeclaresEveryGridAsAMenuRow(t *testing.T) {

@@ -44,7 +44,7 @@ func BoxEntries(threads []Thread) []*pluginv1.Entry {
 	return out
 }
 
-// Grids declares every door grid, one (+) declared grid each,
+// Declared lists every door grid, each a swatch on the (+) menu,
 // everything last. There is no privileged grid and no landing grid: a
 // plugin is not a place, it contributes doors. A box that is not a door
 // still lists, so a link into it keeps resolving.

@@ -311,7 +311,7 @@ func listAll(t *testing.T, p *Plugin) {
 	landed(t, p)
 }
 
-// Every grid is a (+) declared grid, and none is a root: root_grid is
+// Every grid is a swatch on the (+) menu, and none is a root: root_grid is
 // retired.
 func TestInfoDeclaresEveryGridAsAMenuRow(t *testing.T) {
 	p := stable(newFake(), Options{})

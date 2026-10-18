@@ -93,7 +93,7 @@ Deleting something already gone succeeds.
 
 ## Find
 
-The plugin finds nothing: a find comes back empty in the tree. It
+The plugin does not answer `Find`, so a find returns nothing from the tree. It
 keeps no cache of the tree to look in, and walking the disk for a query is
 work nobody on screen asked for.
 
