@@ -26,3 +26,5 @@ require (
 )
 
 replace github.com/josephburnett/gridwell/api => /home/joe/gridwell/.claude/worktrees/rename/api
+
+replace github.com/josephburnett/gridwell-plugins/memo => ../memo
