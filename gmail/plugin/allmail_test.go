@@ -178,15 +178,15 @@ func TestALabelListingIsAuthoritativeOnlyWhenDefinitive(t *testing.T) {
 	})
 }
 
-// A search hit is the message's one tile, in all mail.
-func TestSearchLandsOnTheAllMailTile(t *testing.T) {
+// A find hit is the message's one tile, in all mail.
+func TestFindLandsOnTheAllMailTile(t *testing.T) {
 	f := newFake()
 	m := msg("a", "lunch", "2026-01-05T09:00:00Z")
 	f.hold("INBOX", m)
 	f.hold("STARRED", m)
 	p := stable(f, Options{})
 	listAll(t, p)
-	res, err := p.Search(context.Background(), &pluginv1.SearchRequest{Query: "lunch"})
+	res, err := p.Find(context.Background(), &pluginv1.FindRequest{Query: "lunch"})
 	if err != nil {
 		t.Fatal(err)
 	}

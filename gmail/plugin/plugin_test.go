@@ -916,14 +916,14 @@ func TestTheCacheHoldsNoCredential(t *testing.T) {
 	}
 }
 
-func TestSearchReadsMemoryOnly(t *testing.T) {
+func TestFindReadsMemoryOnly(t *testing.T) {
 	f := newFake()
 	f.hold("STARRED", msg("b", "invoice", "2026-01-04T09:00:00Z"))
 	p := stable(f, Options{})
 	ctx := context.Background()
 	listAll(t, p)
 	before := f.count("STARRED")
-	res, err := p.Search(ctx, &pluginv1.SearchRequest{Query: "invoice"})
+	res, err := p.Find(ctx, &pluginv1.FindRequest{Query: "invoice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -934,9 +934,9 @@ func TestSearchReadsMemoryOnly(t *testing.T) {
 		t.Errorf("context path = %v", got)
 	}
 	if f.count("STARRED") != before {
-		t.Error("search called Gmail")
+		t.Error("find called Gmail")
 	}
-	empty, _ := p.Search(ctx, &pluginv1.SearchRequest{Query: "  "})
+	empty, _ := p.Find(ctx, &pluginv1.FindRequest{Query: "  "})
 	if len(empty.Results) != 0 {
 		t.Error("an empty query matched")
 	}

@@ -34,7 +34,7 @@ const PreviewStamp = 1
 // doc is one entry in docs and nothing else.
 type Doc struct {
 	// Key is stable forever. It is what the node mints an id against, so
-	// changing one orphans every stored reference to the tile.
+	// changing one orphans every stored link to the tile.
 	Key   string
 	Label string
 	// Note is a text doc's markdown body: what ReadContent answers. A doc

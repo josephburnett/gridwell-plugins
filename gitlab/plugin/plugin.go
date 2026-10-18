@@ -399,18 +399,18 @@ func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1
 	return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
 }
 
-// Search matches the query against titles, refs, bodies, projects and
+// Find matches the query against titles, refs, bodies, projects and
 // authors of every remembered todo; each result's path is root → week.
-func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
+func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.FindResponse, error) {
 	q := strings.ToLower(strings.TrimSpace(req.Query))
 	if q == "" {
-		return &pluginv1.SearchResponse{}, nil
+		return &pluginv1.FindResponse{}, nil
 	}
 	limit := int(req.Limit)
 	if limit <= 0 {
 		limit = 50
 	}
-	resp := &pluginv1.SearchResponse{}
+	resp := &pluginv1.FindResponse{}
 	all := p.mem.All()
 	for i := len(all) - 1; i >= 0 && len(resp.Results) < limit; i-- { // newest first
 		t := all[i]
@@ -423,7 +423,7 @@ func (p *Plugin) Search(_ context.Context, req *pluginv1.SearchRequest) (*plugin
 		if len(entries) == 0 {
 			continue
 		}
-		resp.Results = append(resp.Results, &pluginv1.SearchResult{
+		resp.Results = append(resp.Results, &pluginv1.FindResult{
 			Entry:       entries[0],
 			ContextPath: []string{todos.RootContext, todos.WeekKey(start)},
 			Snippet:     t.Action(),

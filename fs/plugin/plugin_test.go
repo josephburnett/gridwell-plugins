@@ -168,7 +168,7 @@ func (s *contentStream) Send(c *pluginv1.ContentChunk) error {
 	return nil
 }
 
-// lockedDir answers a root holding locked/f.md, with locked made unsearchable
+// lockedDir answers a root holding locked/f.md, with locked made untraversable
 // so every stat inside it fails with EACCES. It skips where permissions do not
 // bind.
 func lockedDir(t *testing.T) (root string) {

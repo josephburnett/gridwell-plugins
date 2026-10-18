@@ -170,12 +170,12 @@ func (r *rebuilding) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*
 	return impl.Delete(ctx, req)
 }
 
-func (r *rebuilding) Search(ctx context.Context, req *pluginv1.SearchRequest) (*pluginv1.SearchResponse, error) {
+func (r *rebuilding) Find(ctx context.Context, req *pluginv1.FindRequest) (*pluginv1.FindResponse, error) {
 	impl, err := r.built()
 	if err != nil {
 		return nil, err
 	}
-	return impl.Search(ctx, req)
+	return impl.Find(ctx, req)
 }
 
 func (r *rebuilding) Watch(req *pluginv1.WatchRequest, s grpc.ServerStreamingServer[pluginv1.Change]) error {

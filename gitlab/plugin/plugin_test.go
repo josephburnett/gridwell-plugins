@@ -183,9 +183,9 @@ func TestReadContentAndProbe(t *testing.T) {
 		probe("junk") != pluginv1.ProbeResponse_PRESENCE_GONE {
 		t.Error("probe verdicts: known PRESENT, unknown UNSPECIFIED (never GONE), malformed GONE")
 	}
-	res, _ := p.Search(ctx, &pluginv1.SearchRequest{Query: "REVIEW"})
+	res, _ := p.Find(ctx, &pluginv1.FindRequest{Query: "REVIEW"})
 	if len(res.Results) != 1 || res.Results[0].Entry.Key != "todo:1" || strings.Join(res.Results[0].ContextPath, "/") != "todos/week:2026-08-17" {
-		t.Errorf("search = %v", res.Results)
+		t.Errorf("find = %v", res.Results)
 	}
 }
 
