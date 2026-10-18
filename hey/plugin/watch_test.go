@@ -221,7 +221,7 @@ func listed(t *testing.T, p *Plugin, ctx string) []string {
 	return keys
 }
 
-// Every thread line moves memory and tells the watcher which grids
+// Every thread line moves the cache and tells the watcher which grids
 // changed, with no walk: a thread arrives, is read, and leaves, each line
 // moving its box and everything, and a line about another box moves that box.
 func TestTheFeedMovesTheListingAndTellsTheWatcher(t *testing.T) {
@@ -237,7 +237,7 @@ func TestTheFeedMovesTheListingAndTellsTheWatcher(t *testing.T) {
 	send(t, f.feed, evs[lineUpdated])
 	expect(t, w, mail.ImboxGrid)
 	expect(t, w, mail.EverythingGrid)
-	if got, _ := p.mem.Get(103); !got.Seen {
+	if got, _ := p.cache.Get(103); !got.Seen {
 		t.Error("the update did not land")
 	}
 
@@ -386,7 +386,7 @@ func TestAFeedThatEndsRestartsWithBackoff(t *testing.T) {
 }
 
 // A CLI that refuses `watch` as usage has no feed to restart; the refresher
-// keeps memory instead, and the log says so.
+// keeps the cache instead, and the log says so.
 func TestACLIThatCannotWatchIsNotRestarted(t *testing.T) {
 	var mu sync.Mutex
 	var logs []string
@@ -524,7 +524,7 @@ func TestASlowWatcherNeverBlocksTheFeed(t *testing.T) {
 	}
 }
 
-// While the feed is live, memory is current: no read and no clock walks a
+// While the feed is live, the cache is current: no read and no clock walks a
 // box. Once it disconnects, the refresh window rules again.
 func TestALiveFeedKeepsReadsFromWalking(t *testing.T) {
 	var mu sync.Mutex
@@ -575,7 +575,7 @@ func TestAFailedCatchUpIsWalkedByTheNextRead(t *testing.T) {
 }
 
 // A feed that ends on a verdict — not signed in — is every read's reason
-// until a feed reaches ready again, never a refusal: the memory it leaves
+// until a feed reaches ready again, never a refusal: the cache it leaves
 // still answers (decision 3). Both edges repaint every open grid, so the
 // reason reaches the screen and leaves it without a gesture.
 func TestAFeedVerdictIsEveryReadsReason(t *testing.T) {
@@ -614,7 +614,7 @@ func TestAFeedVerdictIsEveryReadsReason(t *testing.T) {
 	}
 	repainted()
 	if r := list(); len(r.Entries) != 1 || !strings.Contains(r.Unreachable, "Not logged in") {
-		t.Fatalf("listing under the verdict = %+v, want memory and the reason", r)
+		t.Fatalf("listing under the verdict = %+v, want the cache and the reason", r)
 	}
 	mu.Lock()
 	if !slices.ContainsFunc(logs, func(l string) bool { return strings.Contains(l, "watch ended") }) {

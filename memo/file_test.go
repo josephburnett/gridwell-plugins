@@ -48,10 +48,10 @@ func TestFileLoad(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			path := filepath.Join(dir, "memory.json")
+			path := filepath.Join(dir, "cache.json")
 			tc.on(t, path)
 			var l logs
-			got, ok := NewFile[snap](dir, "memory.json", 2, l.logf).Load()
+			got, ok := NewFile[snap](dir, "cache.json", 2, l.logf).Load()
 			if ok != tc.wantOK {
 				t.Fatalf("Load ok = %v, want %v", ok, tc.wantOK)
 			}
@@ -59,7 +59,7 @@ func TestFileLoad(t *testing.T) {
 				t.Errorf("Load = %+v, want %+v", got, want)
 			}
 			if !ok && !reflect.DeepEqual(got, snap{}) {
-				t.Errorf("a cold Load answered %+v, want the zero memory", got)
+				t.Errorf("a cold Load answered %+v, want the zero cache", got)
 			}
 			if l.count() != tc.wantLog {
 				t.Errorf("logged %v, want %d lines", l.lines, tc.wantLog)
@@ -69,14 +69,14 @@ func TestFileLoad(t *testing.T) {
 }
 
 // TestFileWithNoStateDirIsAlwaysCold: a node that hands no state_dir gets a
-// memory that lives as long as the process and writes nothing.
+// the cache that lives as long as the process and writes nothing.
 func TestFileWithNoStateDirIsAlwaysCold(t *testing.T) {
-	f := NewFile[snap]("", "memory.json", 1, nil)
+	f := NewFile[snap]("", "cache.json", 1, nil)
 	if err := f.Save(func() snap { return snap{Items: []string{"x"}} }); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := f.Load(); ok {
-		t.Error("Load with no state_dir answered a memory")
+		t.Error("Load with no state_dir answered a cache")
 	}
 	if f.Path() != "" {
 		t.Errorf("Path = %q, want none", f.Path())
@@ -87,7 +87,7 @@ func TestFileWithNoStateDirIsAlwaysCold(t *testing.T) {
 // no temp file is left beside it.
 func TestFileSave(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "plugins", "p1")
-	f := NewFile[snap](dir, "memory.json", 1, nil)
+	f := NewFile[snap](dir, "cache.json", 1, nil)
 	if err := f.Save(func() snap { return snap{Items: []string{"x"}} }); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestFileSaveLogsOncePerEpisode(t *testing.T) {
 	root := t.TempDir()
 	blocker := filepath.Join(root, "state")
 	var l logs
-	f := NewFile[snap](blocker, "memory.json", 1, l.logf)
+	f := NewFile[snap](blocker, "cache.json", 1, l.logf)
 	save := func() error { return f.Save(func() snap { return snap{} }) }
 
 	write(t, blocker, "a file where the directory should be")

@@ -48,7 +48,7 @@ const DefaultBinary = "hey"
 // park the plugin's sweep forever — the shared flight then holds every reader
 // on that one hung process, and the grid says "loading" for the life of the
 // process with no error to surface. A timeout turns the stall into
-// Unavailable, "not right now", and the node serves its remembered listing.
+// Unavailable, "not right now", and the node serves its cached listing.
 const DefaultTimeout = 2 * time.Minute
 
 // Runner runs the CLI once and reports what it printed. err is only for a

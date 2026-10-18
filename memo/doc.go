@@ -1,4 +1,4 @@
-// Package memo is a plugin's memory of its source, shared by every plugin
+// Package memo is a plugin's cache of its source, shared by every plugin
 // that keeps one: the cache file in state_dir (File), the walks that refresh
 // it (Flights), the changes it announces to Watch streams and the background
 // work those streams' scopes ask for (Changes), and the lifetime both run

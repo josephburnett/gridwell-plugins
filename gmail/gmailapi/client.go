@@ -56,7 +56,7 @@ const PageSize = 500
 // forever — the plugin's shared flight then holds every reader on that one
 // hung request, and the grid says "loading" for the life of the process with
 // no error to surface. A timeout turns the stall into Unavailable, "not right
-// now", and the node serves its remembered listing.
+// now", and the node serves its cached listing.
 const DefaultTimeout = 60 * time.Second
 
 // MetadataHeaders are the only headers this plugin reads. Asking for three
@@ -113,7 +113,7 @@ func NewForTest(ctx context.Context, endpoint string, hc *http.Client) (*Client,
 // Label lists the ids one label holds, newest first — Gmail's own order —
 // stopping at limit. whole reports that the read reached the end of the
 // label; when it is false the caller has the newest `limit` and knows nothing
-// about what is older, which is exactly what mailbox.Memory's watermark
+// about what is older, which is exactly what mailbox.Cache's watermark
 // needs.
 //
 // labelIDs are ANDed by Gmail, so ["INBOX","UNREAD"] is the unread part of

@@ -25,7 +25,7 @@ func TestAnArchivedThreadHEYLaterDeletesIsForgotten(t *testing.T) {
 	walk()
 	f.setBox("imbox", th(4, "stays", "2026-01-04T09:00:00Z"))
 	walk()
-	if _, ok := p.mem.Get(2); !ok {
+	if _, ok := p.cache.Get(2); !ok {
 		t.Fatal("setup: an archived thread HEY still has was forgotten")
 	}
 	f.mu.Lock()
@@ -35,7 +35,7 @@ func TestAnArchivedThreadHEYLaterDeletesIsForgotten(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		walk()
 	}
-	if _, ok := p.mem.Get(2); ok {
-		t.Error("a thread HEY deleted after archiving is remembered forever: nothing asks about it again")
+	if _, ok := p.cache.Get(2); ok {
+		t.Error("a thread HEY deleted after archiving is cached forever: nothing asks about it again")
 	}
 }

@@ -3,7 +3,7 @@
 // "week:<monday>", lists the todos created that week as markdown text tiles.
 // Keys are GitLab's todo ids, stable forever. Listings are non-authoritative
 // and Probe never answers GONE: a todo never disappears from the grid, it
-// changes state when refreshed. The plugin's memory of GitLab answers every
+// changes state when refreshed. The plugin's cache of GitLab answers every
 // listing and survives a restart through its file in `state_dir`; memo's
 // flights refresh it for reads, and its changes' work while a grid is shown.
 // The one write is Delete, which here means mark-as-done: the trash gesture
@@ -73,9 +73,9 @@ type Plugin struct {
 	marker Marker
 	token  Token
 	// proven latches Info's first pass: after it, GitLab failing is weather
-	// that memory answers through, never a refusal.
+	// that cache answers through, never a refusal.
 	proven      atomic.Bool
-	mem         *todos.Memory
+	cache       *todos.Cache
 	refresh     time.Duration
 	fullRefresh time.Duration
 	clock       memo.Clock
@@ -102,7 +102,7 @@ type Options struct {
 	// Token is asked at Info until it passes once. Nil passes at once.
 	Token Token
 	// StateDir is the private directory the node hands the plugin. Empty
-	// means no file: the plugin keeps its memory for its process lifetime.
+	// means no file: the plugin keeps its cache for its process lifetime.
 	StateDir string
 	// Logf takes every line the plugin writes. It defaults to the standard
 	// logger, which the node captures from the subprocess's stderr.
@@ -111,7 +111,7 @@ type Options struct {
 
 // New builds a plugin over src. Whether there is a source is decided before
 // this point: FromConfig refuses a missing token, and the node shows the
-// plugin broken with its reason. The memory's file is loaded here, before the
+// plugin broken with its reason. The cache's file is loaded here, before the
 // plugin serves its first request, so the first listing is answered from what
 // the last process walked.
 func New(src todos.Source, o Options) *Plugin {
@@ -119,7 +119,7 @@ func New(src todos.Source, o Options) *Plugin {
 		src:         retrying{src: src, attempts: pageAttempts, backoff: pageBackoff},
 		marker:      o.Marker,
 		token:       o.Token,
-		mem:         todos.NewMemory(),
+		cache:       todos.NewCache(),
 		refresh:     o.Refresh,
 		fullRefresh: o.FullRefresh,
 		clock:       memo.System,
@@ -157,7 +157,7 @@ func New(src todos.Source, o Options) *Plugin {
 		Clock:    p.clock,
 	})
 	if snap, ok := p.file.Load(); ok {
-		p.mem.Restore(snap)
+		p.cache.Restore(snap)
 		p.flights.Restore(snap.WalkedAt)
 	}
 	return p
@@ -189,7 +189,7 @@ func since(key string) time.Time {
 // client's own timeout and each PAGE is retried in place a bounded number of
 // times, so a dead source ends the walk with its error rather than hanging it.
 func (p *Plugin) walk(ctx context.Context, key string) error {
-	return p.mem.Sync(ctx, p.src, since(key))
+	return p.cache.Sync(ctx, p.src, since(key))
 }
 
 // landed announces what a walk moved, a failed one included, since the pages
@@ -200,11 +200,11 @@ func (p *Plugin) landed(_ string, err error) {
 	}
 }
 
-// save writes memory and the flights' walk stamps to the file. memo.File logs
+// save writes the cache and the flights' walk stamps to the file. memo.File logs
 // its own failure, once per episode.
 func (p *Plugin) save() {
 	_ = p.file.Save(func() todos.Snapshot {
-		s := p.mem.Snapshot()
+		s := p.cache.Snapshot()
 		s.WalkedAt = p.flights.WalkedAt()
 		return s
 	})
@@ -256,7 +256,7 @@ func (p *Plugin) tick(ctx context.Context) {
 // glance cut short because the refresher stopped heard no verdict from
 // GitLab, so it records none.
 func (p *Plugin) glance(ctx context.Context) {
-	err := p.mem.Glance(ctx, p.src)
+	err := p.cache.Glance(ctx, p.src)
 	if ctx.Err() == nil {
 		p.flights.Outcome(todos.RootGrid, err)
 	}
@@ -288,7 +288,7 @@ func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.I
 }
 
 // List answers the root, listing weeks, or one week, listing todos. A read
-// memory can answer is answered from memory, with the last refresh's failure
+// the cache can answer is answered from the cache, with the last refresh's failure
 // as unreachable; only a cold read whose walk failed fails, with the walk's
 // own code.
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
@@ -298,15 +298,15 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 		}
 	}
 	start := since(req.Grid)
-	unreachable, err := p.flights.Read(ctx, req.Grid, p.mem.Shows(start))
+	unreachable, err := p.flights.Read(ctx, req.Grid, p.cache.Shows(start))
 	if err != nil {
 		return nil, err
 	}
 	if req.Grid != todos.RootGrid {
-		return &pluginv1.ListResponse{Entries: todos.WeekEntries(start, p.mem.Week(start)),
+		return &pluginv1.ListResponse{Entries: todos.WeekEntries(start, p.cache.Week(start)),
 			SourceLabel: req.Grid, Unreachable: unreachable}, nil
 	}
-	weeks := p.mem.Weeks()
+	weeks := p.cache.Weeks()
 	open, done := 0, 0
 	for _, w := range weeks {
 		open += w.Open
@@ -326,12 +326,12 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	if !ok {
 		return stream.Send(&pluginv1.ContentChunk{}) // a week key: no body
 	}
-	t, known := p.mem.Get(id)
+	t, known := p.cache.Get(id)
 	if !known {
-		// Before the first completed walk, "not in memory" means "not yet",
+		// Before the first completed walk, "not in the cache" means "not yet",
 		// not "gone": Unavailable, transport-shaped, reads at the node as the
 		// source dark while the walk runs, not as the todo gone.
-		if !p.mem.Walked() {
+		if !p.cache.Walked() {
 			return status.Error(codes.Unavailable, "gitlab plugin: the first walk has not completed")
 		}
 		body := todos.GoneMarkdown(req.Key)
@@ -344,7 +344,7 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 // Delete is what the trash gesture means here: mark the todo done at GitLab.
 // The tile does not vanish — a todo never disappears from the grid, it changes
 // state — so the next listing shows it done and the week's counts move. The
-// flip lands in memory and its file only after GitLab accepted the
+// flip lands in the cache and its file only after GitLab accepted the
 // write, so a refused write changes nothing anywhere. A week door refuses:
 // one gesture must not resolve a whole week. An already-done todo succeeds
 // without a write — the gesture is idempotent, like fs's already-gone path.
@@ -359,9 +359,9 @@ func (p *Plugin) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*plug
 	if p.marker == nil {
 		return nil, status.Error(codes.Unimplemented, "gitlab plugin: no mark-done writer configured")
 	}
-	t, known := p.mem.Get(id)
+	t, known := p.cache.Get(id)
 	if !known {
-		if !p.mem.Walked() {
+		if !p.cache.Walked() {
 			return nil, status.Error(codes.Unavailable, "gitlab plugin: the first walk has not completed")
 		}
 		return nil, status.Errorf(codes.NotFound, "gitlab plugin: no todo %d", id)
@@ -372,7 +372,7 @@ func (p *Plugin) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*plug
 	if err := p.marker.MarkDone(ctx, id); err != nil {
 		return nil, err
 	}
-	p.mem.MarkDone(id)
+	p.cache.MarkDone(id)
 	p.announce()
 	// The flip is worth a restart. Marking done is not a walk: the save
 	// carries the standing walk stamps, never a new one.
@@ -380,18 +380,18 @@ func (p *Plugin) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*plug
 	return &pluginv1.DeleteResponse{}, nil
 }
 
-// Probe never says GONE: a remembered todo is PRESENT, and one this process
+// Probe never says GONE: a cached todo is PRESENT, and one this process
 // has not seen is UNSPECIFIED, meaning "cannot say", which keeps the node's
-// remembered tile.
+// cached tile.
 func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
 	if id, ok := todos.ParseKey(req.Key); ok {
-		if _, known := p.mem.Get(id); known {
+		if _, known := p.cache.Get(id); known {
 			return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
 		}
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
 	}
 	if start, ok := todos.ParseWeekKey(req.Key); ok {
-		if p.mem.Shows(start) {
+		if p.cache.Shows(start) {
 			return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
 		}
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
@@ -400,7 +400,7 @@ func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1
 }
 
 // Find matches the query against titles, refs, bodies, projects and
-// authors of every remembered todo; each result's path is root → week.
+// authors of every cached todo; each result's path is root → week.
 func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.FindResponse, error) {
 	q := strings.ToLower(strings.TrimSpace(req.Query))
 	if q == "" {
@@ -411,7 +411,7 @@ func (p *Plugin) Find(_ context.Context, req *pluginv1.FindRequest) (*pluginv1.F
 		limit = 50
 	}
 	resp := &pluginv1.FindResponse{}
-	all := p.mem.All()
+	all := p.cache.All()
 	for i := len(all) - 1; i >= 0 && len(resp.Results) < limit; i-- { // newest first
 		t := all[i]
 		hay := strings.ToLower(strings.Join([]string{t.Label(), t.Body, t.Project.PathWithNamespace, t.Author.Name, t.Author.Username}, "\n"))

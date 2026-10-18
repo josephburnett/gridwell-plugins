@@ -8,16 +8,16 @@ import (
 	"time"
 )
 
-// A restart is a snapshot written as JSON and read back into a fresh Memory:
+// A restart is a snapshot written as JSON and read back into a fresh Cache:
 // every listing answers from it, with the DERIVED state each todo carried, and the done
 // high-water mark comes back so the next walk stops early instead of paging
 // the whole done list again.
-func TestCacheFileCarriesMemoryAcrossARestart(t *testing.T) {
+func TestTheFileCarriesTheCacheAcrossARestart(t *testing.T) {
 	src := &fakeSource{per: 2,
 		pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(3, "2026-08-18T10:00:00Z", StatePending)},
 		done:    []Todo{mk(2, "2026-08-11T10:00:00Z", StateDone), mk(4, "2026-08-19T10:00:00Z", StateDone), mk(6, "2026-08-25T11:00:00Z", StateDone)},
 	}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestCacheFileCarriesMemoryAcrossARestart(t *testing.T) {
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		t.Fatal(err)
 	}
-	restored := NewMemory()
+	restored := NewCache()
 	restored.Restore(snap)
 
 	if got, want := len(restored.All()), len(m.All()); got != want {
@@ -50,7 +50,7 @@ func TestCacheFileCarriesMemoryAcrossARestart(t *testing.T) {
 	if got, want := restored.Weeks(), m.Weeks(); len(got) != len(want) || !got[0].Start.Equal(want[0].Start) || got[0].Done != want[0].Done {
 		t.Errorf("weeks after restore = %+v, want %+v", got, want)
 	}
-	// The restored memory keeps the high-water stop: a walk over the same
+	// The restored cache keeps the high-water stop: a walk over the same
 	// GitLab pages nothing it already knows past the first done page.
 	src.calls = nil
 	if err := restored.Sync(context.Background(), src, time.Time{}); err != nil {
@@ -62,16 +62,16 @@ func TestCacheFileCarriesMemoryAcrossARestart(t *testing.T) {
 }
 
 // Restore never lowers the high-water mark: a file written before the first
-// full done walk must not un-complete a memory that has since finished one.
+// full done walk must not un-complete a cache that has since finished one.
 func TestRestoreOnlyRaisesDoneComplete(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Restore(Snapshot{DoneComplete: true, Todos: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending)}})
 	if !m.Walked() {
 		t.Fatal("a snapshot with doneComplete must restore it")
 	}
 	m.Restore(Snapshot{Todos: []Todo{mk(2, "2026-08-11T10:00:00Z", StatePending)}})
 	if !m.Walked() {
-		t.Error("an incomplete snapshot un-completed the memory")
+		t.Error("an incomplete snapshot un-completed the cache")
 	}
 	if _, ok := m.Get(2); !ok {
 		t.Error("the second snapshot's todos were dropped")

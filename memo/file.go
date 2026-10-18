@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-// File is one snapshot of a plugin's memory in the state_dir the node hands
+// File is one snapshot of a plugin's cache in the state_dir the node hands
 // it, under cache.db's contract: disposable, safe to delete, rewarmed by use.
 // A file that is missing, unreadable, corrupt or of another version is a cold
 // start, never a failure; one that cannot be written costs the next restart a
@@ -26,7 +26,7 @@ type File[T any] struct {
 }
 
 // envelope is the file's shape. data is required, so a file from before
-// memo, which carries a version and no data, is not read as an empty memory.
+// memo, which carries a version and no data, is not read as an empty cache.
 type envelope struct {
 	Version int             `json:"version"`
 	Data    json.RawMessage `json:"data"`
@@ -97,7 +97,7 @@ func (f *File[T]) decode(raw []byte) (v T, err error) {
 
 // Save writes the snapshot snap takes, atomically: the next boot sees the
 // whole old file or the whole new one. snap runs under the file's lock, so of
-// two racing saves the one that writes last holds the later memory. The
+// two racing saves the one that writes last holds the later cache. The
 // directory is minted if missing. A failure is returned, and logged once
 // until a save lands.
 func (f *File[T]) Save(snap func() T) error {

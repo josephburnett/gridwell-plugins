@@ -227,7 +227,7 @@ func infoEntry(gridKey, stamp string) *pluginv1.Entry {
 }
 
 // info is pid's @info body and its content stamp: a hash of the body, since
-// the process table keeps no version and this plugin no memory, so the stamp
+// the process table keeps no version and this plugin no cache, so the stamp
 // moves exactly when the bytes do.
 func (p *Plugin) info(pid int64) (body []byte, stamp string, err error) {
 	info, err := procsource.Get(p.procRoot, pid)

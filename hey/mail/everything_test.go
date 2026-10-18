@@ -10,7 +10,7 @@ import (
 // Everything is every thread some box holds, each once, oldest first: the
 // one home a thread's tile has, whichever box it is in.
 func TestEverythingIsTheUnionOfEveryBox(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-04")}, true)
 	m.Absorb(ReplyLaterGrid, []Thread{thread(2, "b", "2026-01-04"), thread(3, "c", "2026-01-03")}, true)
 	m.Absorb(FeedGrid, []Thread{thread(4, "d", "2026-01-01")}, true)
@@ -49,9 +49,9 @@ func TestBoxEntriesLinkToEverything(t *testing.T) {
 
 // A box says a thread has left it only when it knows: a whole walk that did
 // not list it, or the feed's delete of the posting that held it. A capped
-// walk and an empty memory cannot say.
+// walk and an empty cache cannot say.
 func TestInBoxSaysGoneOnlyWhenTheBoxKnows(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	if got := m.InBox(ImboxGrid, 1); got != Unknown {
 		t.Fatalf("cold = %v", got)
 	}
@@ -80,7 +80,7 @@ func TestInBoxSaysGoneOnlyWhenTheBoxKnows(t *testing.T) {
 // record changing, or the union gaining or losing it. A thread leaving one
 // box for another moves the boxes, not everything.
 func TestAChangeSaysWhetherEverythingMoved(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	if eff := m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true); !eff.Changed || !eff.Everything {
 		t.Fatalf("first walk = %+v", eff)
 	}

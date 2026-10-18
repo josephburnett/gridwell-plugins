@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// Memory is everything the plugin has seen: the record of every message, the
+// Cache is everything the plugin has seen: the record of every message, the
 // unread set, and which messages each grid last held. It survives a
 // restart as a Snapshot in the plugin's cache file, which holds this
-// plugin's memory of ITS SOURCE and never a node fact.
+// plugin's cache of ITS SOURCE and never a node fact.
 //
 // It is the one owner of every fact about a message that can change. A
 // Message record holds only what cannot: the id, the subject, the sender, the
@@ -21,9 +21,9 @@ import (
 // newest first, so a read that stopped at 500 messages still says exactly
 // which of the newest 500 the label holds — it says nothing about older ones.
 // Absorb therefore replaces the membership above the oldest message it read
-// and keeps everything remembered below it. An email archived this morning
+// and keeps everything cached below it. An email archived this morning
 // leaves the grid; one from last year that the cap never reached stays.
-type Memory struct {
+type Cache struct {
 	mu       sync.Mutex
 	messages map[string]*Message
 	unread   map[string]bool
@@ -31,21 +31,21 @@ type Memory struct {
 	// complete records that some walk of that grid — this process's, or
 	// one whose snapshot Restore folded back in — produced a usable
 	// membership. Until every grid has had one, nothing is ever GONE: a
-	// message missing from a memory nothing has walked is unseen, not deleted.
+	// message missing from a cache nothing has walked is unseen, not deleted.
 	complete map[string]bool
 	// whole records that a grid's last walk read the label to its end,
 	// so its membership is the label's and not only its newest part. History
 	// keeps a membership exact, so only a walk changes it.
 	whole map[string]bool
-	// historyID is the Gmail history id the memory is current to: every
+	// historyID is the Gmail history id the cache is current to: every
 	// change Gmail recorded after it is still to be applied. Zero means none
 	// is known, and only a full walk of every grid mints one.
 	historyID uint64
 }
 
-// NewMemory builds an empty memory.
-func NewMemory() *Memory {
-	return &Memory{
+// NewCache builds an empty cache.
+func NewCache() *Cache {
+	return &Cache{
 		messages: map[string]*Message{},
 		unread:   map[string]bool{},
 		members:  map[string][]string{},
@@ -54,10 +54,10 @@ func NewMemory() *Memory {
 	}
 }
 
-// Missing answers which of ids the memory holds no record for: the delta one
+// Missing answers which of ids the cache holds no record for: the delta one
 // walk must fetch metadata for. Everything else it already knows, and a
 // message's subject, sender and date do not change once Gmail has it.
-func (m *Memory) Missing(ids []string) []string {
+func (m *Cache) Missing(ids []string) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []string
@@ -73,14 +73,14 @@ func (m *Memory) Missing(ids []string) []string {
 //
 //	ids      what the label held, newest first, as far as the read reached
 //	unread   the ids of those that also carry Gmail's UNREAD label
-//	fetched  the records read for ids the memory did not have
+//	fetched  the records read for ids the cache did not have
 //	whole    the read reached the end of the label
 //
 // A whole read replaces the membership outright. A capped one replaces it
 // above the watermark — the date of the oldest message read — and keeps every
-// remembered member older than that, because the read proves nothing about
+// cached member older than that, because the read proves nothing about
 // what it did not reach.
-func (m *Memory) Absorb(grid string, ids []string, unread map[string]bool, fetched []Message, whole bool) {
+func (m *Cache) Absorb(grid string, ids []string, unread map[string]bool, fetched []Message, whole bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -119,7 +119,7 @@ func (m *Memory) Absorb(grid string, ids []string, unread map[string]bool, fetch
 		if have[id] {
 			continue
 		}
-		// Below the watermark the read said nothing, so what was remembered
+		// Below the watermark the read said nothing, so what was cached
 		// stands. A member with no record has no date to place, and losing it
 		// would cost the user a tile on no evidence, so it stays too.
 		msg, known := m.messages[id]
@@ -134,10 +134,10 @@ func (m *Memory) Absorb(grid string, ids []string, unread map[string]bool, fetch
 // Apply folds a history catch-up in. Each fetched message is placed by the
 // labels it carries now: a member of every grid whose labels it has,
 // of none it lacks, and unread exactly when it carries UNREAD. Each deleted
-// message leaves every grid and memory: Gmail said it is gone. Applying
+// message leaves every grid and the cache: Gmail said it is gone. Applying
 // the same catch-up twice changes nothing, which is what lets a refresh that
 // read only part of it keep the old history id and read it all again.
-func (m *Memory) Apply(fetched []Labelled, deleted []string) {
+func (m *Cache) Apply(fetched []Labelled, deleted []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range fetched {
@@ -171,13 +171,13 @@ func (m *Memory) Apply(fetched []Labelled, deleted []string) {
 // Forget drops a message Gmail says it no longer has, unless some grid
 // still holds it: a membership is the label's own word, newer than a lookup
 // that missed. It reports whether the message was forgotten.
-func (m *Memory) Forget(id string) bool {
+func (m *Cache) Forget(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.forgetLocked(id)
 }
 
-func (m *Memory) forgetLocked(id string) bool {
+func (m *Cache) forgetLocked(id string) bool {
 	for _, c := range Grids {
 		if m.memberLocked(c.Key, id) {
 			return false
@@ -204,24 +204,24 @@ func placed(ids []string, id string, in bool) []string {
 	return ids
 }
 
-// HistoryID answers the Gmail history id the memory is current to.
-func (m *Memory) HistoryID() uint64 {
+// HistoryID answers the Gmail history id the cache is current to.
+func (m *Cache) HistoryID() uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.historyID
 }
 
-// SetHistoryID records that the memory is current to id.
-func (m *Memory) SetHistoryID(id uint64) {
+// SetHistoryID records that the cache is current to id.
+func (m *Cache) SetHistoryID(id uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.historyID = id
 }
 
-// watermarkLocked is the date of the oldest message in ids the memory has a
+// watermarkLocked is the date of the oldest message in ids the cache has a
 // record for: the line below which a capped read is silent. The caller holds
 // m.mu.
-func (m *Memory) watermarkLocked(ids []string) (time.Time, bool) {
+func (m *Cache) watermarkLocked(ids []string) (time.Time, bool) {
 	var mark time.Time
 	for _, id := range ids {
 		msg, ok := m.messages[id]
@@ -257,7 +257,7 @@ func union(a, b []string) []string {
 // skipped rather than invented;
 // it keeps its place in the membership and gets a tile on the next walk that
 // reads its metadata.
-func (m *Memory) Grid(key string) []View {
+func (m *Cache) Grid(key string) []View {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ids := m.members[key]
@@ -273,7 +273,7 @@ func (m *Memory) Grid(key string) []View {
 
 // AllMail answers every message some grid holds, each once, oldest
 // first.
-func (m *Memory) AllMail() []View {
+func (m *Cache) AllMail() []View {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ids []string
@@ -290,7 +290,7 @@ func (m *Memory) AllMail() []View {
 	return out
 }
 
-// Presence is what memory can say about a message in one grid.
+// Presence is what the cache can say about a message in one grid.
 type Presence int
 
 const (
@@ -302,7 +302,7 @@ const (
 // InLabel says whether a grid holds a message: Present while it does,
 // Gone once its last walk read the whole label without it, Unknown when that
 // walk was capped and said nothing about what it did not reach.
-func (m *Memory) InLabel(grid, id string) Presence {
+func (m *Cache) InLabel(grid, id string) Presence {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
@@ -315,9 +315,9 @@ func (m *Memory) InLabel(grid, id string) Presence {
 }
 
 // Definitive reports whether a grid's answer is the whole label: its
-// last walk read to the end, and memory holds a record for every member, so
+// last walk read to the end, and the cache holds a record for every member, so
 // nothing it holds is missing from Grid.
-func (m *Memory) Definitive(grid string) bool {
+func (m *Cache) Definitive(grid string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.whole[grid] {
@@ -333,13 +333,13 @@ func (m *Memory) Definitive(grid string) bool {
 
 // View answers one message as a grid shows it, whatever grid holds it
 // and whether or not one still does.
-func (m *Memory) View(id string) (View, bool) {
+func (m *Cache) View(id string) (View, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.viewLocked(id)
 }
 
-func (m *Memory) viewLocked(id string) (View, bool) {
+func (m *Cache) viewLocked(id string) (View, bool) {
 	msg, ok := m.messages[id]
 	if !ok {
 		return View{}, false
@@ -348,7 +348,7 @@ func (m *Memory) viewLocked(id string) (View, bool) {
 }
 
 // Member reports whether some grid currently holds the message.
-func (m *Memory) Member(id string) bool {
+func (m *Cache) Member(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, c := range Grids {
@@ -359,7 +359,7 @@ func (m *Memory) Member(id string) bool {
 	return false
 }
 
-func (m *Memory) memberLocked(grid, id string) bool {
+func (m *Cache) memberLocked(grid, id string) bool {
 	for _, have := range m.members[grid] {
 		if have == id {
 			return true
@@ -368,11 +368,11 @@ func (m *Memory) memberLocked(grid, id string) bool {
 	return false
 }
 
-// Shows reports whether the memory has an answer for the grid: some
+// Shows reports whether the cache has an answer for the grid: some
 // walk produced a usable membership, or it holds a member. It is the line
 // between a warm read, answered at once, and a cold one, which waits on the
 // walk.
-func (m *Memory) Shows(key string) bool {
+func (m *Cache) Shows(key string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.complete[key] || len(m.members[key]) > 0
@@ -381,7 +381,7 @@ func (m *Memory) Shows(key string) bool {
 // Swept reports whether every grid has produced a usable membership at
 // least once. It is the one gate on answering GONE: only a pass over all of
 // them can say a message is in none.
-func (m *Memory) Swept() bool {
+func (m *Cache) Swept() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, c := range Grids {
@@ -392,8 +392,8 @@ func (m *Memory) Swept() bool {
 	return true
 }
 
-// All answers every remembered message, oldest first.
-func (m *Memory) All() []View {
+// All answers every cached message, oldest first.
+func (m *Cache) All() []View {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]View, 0, len(m.messages))
@@ -417,7 +417,7 @@ func sortViews(vs []View) {
 	})
 }
 
-// Snapshot is everything the memory holds, as the plugin's cache file keeps
+// Snapshot is everything the cache holds, as the plugin's cache file keeps
 // it: every message seen, the unread set, each grid's membership, and
 // the history id all of it is current to.
 type Snapshot struct {
@@ -427,7 +427,7 @@ type Snapshot struct {
 	HistoryID uint64            `json:"historyId,omitempty"`
 }
 
-// GridIn is one grid's remembered membership: what it held,
+// GridIn is one grid's cached membership: what it held,
 // whether the walk that read it produced a usable membership, and whether it
 // read the whole label.
 type GridIn struct {
@@ -436,10 +436,10 @@ type GridIn struct {
 	IDs      []string `json:"ids"`
 }
 
-// Snapshot copies out everything the memory holds, messages oldest first and
-// the unread set in the same order, so two snapshots of the same memory are
+// Snapshot copies out everything the cache holds, messages oldest first and
+// the unread set in the same order, so two snapshots of the same cache are
 // byte-identical.
-func (m *Memory) Snapshot() Snapshot {
+func (m *Cache) Snapshot() Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	msgs := make([]Message, 0, len(m.messages))
@@ -462,10 +462,10 @@ func (m *Memory) Snapshot() Snapshot {
 	return Snapshot{Messages: msgs, Unread: unread, Grids: cols, HistoryID: m.historyID}
 }
 
-// Restore folds a snapshot into the memory. It is the boot path only: the
+// Restore folds a snapshot into the cache. It is the boot path only: the
 // membership it carries is taken as read, because it is this plugin's own
 // last word about the same grids.
-func (m *Memory) Restore(s Snapshot) {
+func (m *Cache) Restore(s Snapshot) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range s.Messages {

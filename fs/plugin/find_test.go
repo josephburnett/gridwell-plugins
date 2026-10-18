@@ -14,7 +14,7 @@ import (
 
 // A file tree finds nothing, by rule rather than by omission
 // (docs/plugin-standard.md rule 20): Find is Unimplemented with the
-// plugin's own reason, so the node remembers it for the process, and no
+// plugin's own reason, so the node keeps it for the process, and no
 // query touches the disk, even one naming a file that is there.
 func TestFindIsUnimplementedByRule(t *testing.T) {
 	root := t.TempDir()

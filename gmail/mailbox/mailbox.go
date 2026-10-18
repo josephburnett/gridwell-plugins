@@ -1,6 +1,6 @@
 // Package mailbox is the pure half of the gmail plugin: the message record,
 // the two Gmail labels it projects and all mail, their union, the keys and
-// entries derived from them, and the memory of every message seen, with the
+// entries derived from them, and the cache of every message seen, with the
 // snapshot of it the plugin's cache file keeps. There is no HTTP and no gRPC
 // here, so everything is unit-tested against fakes, and the plugin package
 // only wires it to the wire.
@@ -14,18 +14,18 @@ import (
 
 // Message is one email as Gmail's metadata describes it: the facts that do
 // not change once the message exists. What CAN change — read/unread, starred,
-// which label holds it — is not here: it belongs to Memory, which every walk
+// which label holds it — is not here: it belongs to Cache, which every walk
 // refreshes, so one fact has one owner and a tile's body does not flip with
 // the order the walks happened to run in.
 //
 // The HTML body is not here either. It is fetched on descent and never
-// remembered, because a mailbox listing is small and a mailbox's bodies are
+// cached, because a mailbox listing is small and a mailbox's bodies are
 // not.
 type Message struct {
 	// ID is Gmail's message id: the one fact the plugin's key is built from,
 	// and what messages.get takes.
 	ID string `json:"id"`
-	// ThreadID is the conversation the message belongs to. It is remembered
+	// ThreadID is the conversation the message belongs to. It is cached
 	// for diagnosis and never keyed on: this plugin projects messages, and a
 	// thread key would put one tile on the grid for many emails.
 	ThreadID  string    `json:"threadId,omitempty"`
@@ -36,7 +36,7 @@ type Message struct {
 	Date      time.Time `json:"date"`
 }
 
-// View is a message as one grid shows it: the record, plus the state Memory
+// View is a message as one grid shows it: the record, plus the state Cache
 // owns. Nothing derives a status or an entry from a bare Message, so
 // the mutable half can never be read from a stale copy.
 type View struct {

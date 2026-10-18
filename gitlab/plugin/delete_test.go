@@ -104,7 +104,7 @@ func TestDeleteMarksTheTodoDone(t *testing.T) {
 
 	// The flip survives a restart from the cache file alone: the reborn
 	// plugin's source answers nothing, and the walk stamp is fresh, so what
-	// it lists is what the file remembered.
+	// it lists is what the file cached.
 	reborn := New(&oneShot{}, Options{StateDir: dir, Marker: m})
 	if got := weekState(t, reborn, week, key); got != todos.StateDone {
 		t.Fatalf("after restart the listing says %q, want done", got)
@@ -113,7 +113,7 @@ func TestDeleteMarksTheTodoDone(t *testing.T) {
 
 // A refused write changes nothing anywhere: the error surfaces, the listing
 // keeps saying pending, and no restart resurrects a flip that never landed.
-func TestDeleteFailureLeavesTheMemoryAlone(t *testing.T) {
+func TestDeleteFailureLeavesTheCacheAlone(t *testing.T) {
 	dir := t.TempDir()
 	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
 	m := &fakeMarker{src: src, err: status.Error(codes.PermissionDenied, "gitlab: 403 (marking done needs the token's api scope)")}
@@ -168,7 +168,7 @@ func TestATrashOutlivesAWalkAlreadyInFlight(t *testing.T) {
 	ctx := context.Background()
 	week, key := "week:2026-08-17", "todo:1"
 
-	// A warm read answers from memory and starts the walk behind it.
+	// A warm read answers from the cache and starts the walk behind it.
 	if got := weekState(t, p, week, key); got != todos.StatePending {
 		t.Fatalf("before: %q", got)
 	}
@@ -189,7 +189,7 @@ func TestATrashOutlivesAWalkAlreadyInFlight(t *testing.T) {
 }
 
 // The gesture's refusals: a week is not one todo, an unknown key is nothing,
-// an unwalked memory cannot judge, and a read-only plugin says so.
+// an unwalked cache cannot judge, and a read-only plugin says so.
 func TestDeleteRefusals(t *testing.T) {
 	src := &oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}
 	m := &fakeMarker{src: src}

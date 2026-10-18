@@ -2,10 +2,10 @@ package mail
 
 // CacheFile is the plugin's cache file in the private directory the node
 // hands it as `state_dir` (memo.File owns its contract). It holds this
-// plugin's memory of ITS SOURCE, never a node fact.
+// plugin's cache of ITS SOURCE, never a node fact.
 const CacheFile = "mail.json"
 
-// Snapshot is the memory as the cache file holds it: every thread the memory
+// Snapshot is the cache as the cache file holds it: every thread the cache
 // has seen, each grid's membership, and the strays in the order they
 // wait to be asked about.
 type Snapshot struct {
@@ -14,16 +14,16 @@ type Snapshot struct {
 	Strays  []int64           `json:"strays,omitempty"`
 }
 
-// GridIn is one grid's remembered membership: what it held, and
+// GridIn is one grid's cached membership: what it held, and
 // whether the walk that read it reached the end of the box.
 type GridIn struct {
 	Complete bool    `json:"complete"`
 	TopicIDs []int64 `json:"topicIds"`
 }
 
-// Snapshot copies out everything the memory holds, threads oldest first, so
-// two snapshots of the same memory are byte-identical.
-func (m *Memory) Snapshot() Snapshot {
+// Snapshot copies out everything the cache holds, threads oldest first, so
+// two snapshots of the same cache are byte-identical.
+func (m *Cache) Snapshot() Snapshot {
 	threads := m.All()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -36,12 +36,12 @@ func (m *Memory) Snapshot() Snapshot {
 	return Snapshot{Threads: threads, Grids: cols, Strays: m.strayOrderLocked()}
 }
 
-// Restore folds a snapshot into the memory. It is the boot path only: the
+// Restore folds a snapshot into the cache. It is the boot path only: the
 // membership it carries is taken as read, because it is this plugin's own
-// last word about the same boxes. A remembered thread in no box that the
+// last word about the same boxes. A cached thread in no box that the
 // strays do not name joins the back of the queue, so no record is kept
 // without ever being asked about.
-func (m *Memory) Restore(s Snapshot) {
+func (m *Cache) Restore(s Snapshot) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range s.Threads {

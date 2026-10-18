@@ -92,8 +92,8 @@ func Stamp(body []byte) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// GoneMarkdown is the content for a key the memory does not hold. The node
-// remembers the tile, because a todo never disappears, but this process has
+// GoneMarkdown is the content for a key the cache does not hold. The node
+// keeps the tile, because a todo never disappears, but this process has
 // not seen its content since it started, so say so.
 func GoneMarkdown(key string) []byte {
 	return []byte("_This todo (`" + key + "`) is no longer in GitLab, or has not been seen since the plugin started._\n")

@@ -72,7 +72,7 @@ func TestDefaultClientHasATimeout(t *testing.T) {
 }
 
 // TestStalledResponseIsUnavailable: a request that exceeds the client timeout
-// answers Unavailable — "not right now", transport-shaped — so memory answers
+// answers Unavailable — "not right now", transport-shaped — so the cache answers
 // with that reason instead of every reader waiting forever.
 func TestStalledResponseIsUnavailable(t *testing.T) {
 	stall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -147,12 +147,12 @@ func TestAWalkOverTheWireFetchesPagesConcurrently(t *testing.T) {
 		fmt.Fprintf(w, `[{"id":%d,"state":"pending","created_at":%q,"target_type":"Issue","target":{"iid":1,"title":"x"}}]`, page, created)
 	}))
 	defer srv.Close()
-	m := todos.NewMemory()
+	m := todos.NewCache()
 	if err := m.Sync(context.Background(), New(srv.URL, "tok", nil), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(m.All()); n != pages {
-		t.Errorf("remembered %d todos, want %d", n, pages)
+		t.Errorf("cached %d todos, want %d", n, pages)
 	}
 	if maxInFlight < 2 {
 		t.Errorf("at most %d requests in flight: the walk paged serially", maxInFlight)

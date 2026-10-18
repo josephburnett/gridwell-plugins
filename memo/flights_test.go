@@ -114,7 +114,7 @@ func await(t *testing.T, ch chan readResult) readResult {
 
 var errDown = status.Error(codes.Unavailable, "gitlab.example is not answering")
 
-// TestFlights: how one read answers, for each state memory and the source
+// TestFlights: how one read answers, for each state the cache and the source
 // can be in.
 func TestFlights(t *testing.T) {
 	for _, tc := range []struct {
@@ -137,13 +137,13 @@ func TestFlights(t *testing.T) {
 				t.Errorf("Read err = %v, want the walk's", got.err)
 			}
 		}},
-		{"a cold read answers memory so far after the first-answer bound", func(t *testing.T, h *flightHarness) {
+		{"a cold read answers what the cache holds so far after the first-answer bound", func(t *testing.T, h *flightHarness) {
 			r := h.readAsync("inbox", false)
 			h.walk.awaitCalls(t, 1)
 			h.clock.awaitWaiters(t, 1)
 			h.clock.Advance(time.Second)
 			if got := await(t, r); got != (readResult{}) {
-				t.Errorf("Read = %+v, want memory so far", got)
+				t.Errorf("Read = %+v, want the cache so far", got)
 			}
 			if !h.f.Busy("inbox") {
 				t.Error("the walk stopped when its reader stopped waiting")
@@ -158,7 +158,7 @@ func TestFlights(t *testing.T) {
 				t.Error("a warm read past the window started no walk")
 			}
 		}},
-		{"a warm read after a failed walk answers from memory, unreachable", func(t *testing.T, h *flightHarness) {
+		{"a warm read after a failed walk answers from the cache, unreachable", func(t *testing.T, h *flightHarness) {
 			await(t, h.readAsync("inbox", true))
 			h.land(t, errDown)
 			got := await(t, h.readAsync("inbox", true))

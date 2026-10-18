@@ -52,7 +52,7 @@ func TestEverythingIsEveryThreadOnceAndBoxesLinkToIt(t *testing.T) {
 	}
 }
 
-// One box that cannot be read costs everything nothing it remembers: every
+// One box that cannot be read costs everything nothing it caches: every
 // other box's threads still list, and the failure is the listing's
 // unreachable reason, as it is the failing box's. A refused everything would
 // cost the node every email's page, since each one is a tile in it.
@@ -80,7 +80,7 @@ func TestOneFailingBoxLeavesEverythingServing(t *testing.T) {
 	}
 	feed, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.FeedGrid})
 	if err != nil || !strings.Contains(feed.Unreachable, "no box of kind feedbox") {
-		t.Errorf("the failing box = %+v, %v; want memory and its reason", feed, err)
+		t.Errorf("the failing box = %+v, %v; want the cache and its reason", feed, err)
 	}
 	imbox, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid})
 	if err != nil || imbox.Unreachable != "" {

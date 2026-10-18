@@ -33,7 +33,7 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 		// state_dir is the private directory the node mints for this plugin
 		// and hands over beside uuid and kind. A node that hands none — an
 		// older one, or a hand-launched binary — is no error: the plugin then
-		// keeps its memory for its process lifetime.
+		// keeps its cache for its process lifetime.
 		StateDir: cfg["state_dir"],
 		// A plugin subprocess ends by being killed, so nothing ends its life.
 		Life: memo.NewLife(),

@@ -29,7 +29,7 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 	// state_dir is the private directory the node mints for this plugin and
 	// hands over beside uuid and kind. The plugin caches its walk there. A
 	// node that hands none — an older one, or a hand-launched binary — is no
-	// error: the plugin then keeps its memory for its process lifetime.
+	// error: the plugin then keeps its cache for its process lifetime.
 	opts := Options{StateDir: cfg["state_dir"]}
 	for key, into := range map[string]*time.Duration{"refresh": &opts.Refresh, "full_refresh": &opts.FullRefresh} {
 		r := strings.TrimSpace(cfg[key])

@@ -29,7 +29,7 @@ func eq(a, b []string) bool {
 // leaves the grid, and the record of it stays so a tile the node still holds
 // still reads as the email it was.
 func TestAWholeReadReplacesTheMembership(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(InboxGrid, []string{"b", "a"}, map[string]bool{"b": true},
 		[]Message{msg("a", "one", "2026-01-03T09:00:00Z"), msg("b", "two", "2026-01-04T09:00:00Z")}, true)
 	if got := ids(m.Grid(InboxGrid)); !eq(got, []string{"a", "b"}) { // oldest first
@@ -52,7 +52,7 @@ func TestAWholeReadReplacesTheMembership(t *testing.T) {
 // reached the label holds, and nothing about the older ones. Without it a
 // capped read either loses every old tile or never lets one go.
 func TestACappedReadIsAuthoritativeAboveItsWatermark(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	all := []Message{
 		msg("old", "old", "2026-01-01T09:00:00Z"),
 		msg("mid", "mid", "2026-01-03T09:00:00Z"),
@@ -81,7 +81,7 @@ func TestACappedReadIsAuthoritativeAboveItsWatermark(t *testing.T) {
 // A capped read with nothing datable in it is no evidence at all: it must
 // merge rather than retire, and it must not claim the membership is usable.
 func TestACappedReadWithNoDatesIsNoEvidence(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(InboxGrid, []string{"a"}, nil, []Message{msg("a", "one", "2026-01-03T09:00:00Z")}, true)
 	// "z" has no record, so the read has no watermark to stand on.
 	m.Absorb(StarredGrid, []string{"z"}, nil, nil, false)
@@ -96,8 +96,8 @@ func TestACappedReadWithNoDatesIsNoEvidence(t *testing.T) {
 
 // Read/unread and starred have one owner. A message in both grids reads the
 // same in each, whichever walk ran last.
-func TestStateComesFromTheMemoryNotTheRecord(t *testing.T) {
-	m := NewMemory()
+func TestStateComesFromTheCacheNotTheRecord(t *testing.T) {
+	m := NewCache()
 	rec := []Message{msg("a", "one", "2026-01-03T09:00:00Z")}
 	m.Absorb(InboxGrid, []string{"a"}, map[string]bool{"a": true}, rec, true)
 	m.Absorb(StarredGrid, []string{"a"}, map[string]bool{"a": true}, nil, true)
@@ -124,11 +124,11 @@ func TestStateComesFromTheMemoryNotTheRecord(t *testing.T) {
 	}
 }
 
-// Only what the memory has a record for becomes a tile. A member whose
+// Only what the cache has a record for becomes a tile. A member whose
 // metadata read failed keeps its place in the membership — so nothing calls
 // it gone — and gets its tile on the next walk.
 func TestAMemberWithNoRecordIsNotATileAndIsNotGone(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(InboxGrid, []string{"a", "b"}, nil, []Message{msg("a", "one", "2026-01-03T09:00:00Z")}, true)
 	m.Absorb(StarredGrid, nil, nil, nil, true)
 	if got := ids(m.Grid(InboxGrid)); !eq(got, []string{"a"}) {
@@ -142,11 +142,11 @@ func TestAMemberWithNoRecordIsNotATileAndIsNotGone(t *testing.T) {
 	}
 }
 
-// The snapshot is the plugin's memory of Gmail across a restart, as the cache
-// file's JSON, and it must carry every fact the memory owns: the records, the
+// The snapshot is the plugin's cache of Gmail across a restart, as the cache
+// file's JSON, and it must carry every fact the cache owns: the records, the
 // unread set, each membership, its usability and its wholeness.
 func TestSnapshotRoundTripsEveryFact(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(InboxGrid, []string{"b", "a"}, map[string]bool{"b": true},
 		[]Message{msg("a", "one", "2026-01-03T09:00:00Z"), msg("b", "two", "2026-01-04T09:00:00Z")}, true)
 	m.Absorb(StarredGrid, []string{"b"}, map[string]bool{"b": true}, nil, true)
@@ -160,7 +160,7 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		t.Fatal(err)
 	}
-	back := NewMemory()
+	back := NewCache()
 	back.Restore(snap)
 	if got := ids(back.Grid(InboxGrid)); !eq(got, []string{"a", "b"}) {
 		t.Fatalf("restored inbox = %v", got)
@@ -178,7 +178,7 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 	if got := back.HistoryID(); got != 4242 {
 		t.Errorf("restored history id = %d; a restart would re-walk every grid", got)
 	}
-	// Two snapshots of the same memory are byte-identical, so a save that
+	// Two snapshots of the same cache are byte-identical, so a save that
 	// changes nothing does not churn the file.
 	a, b := m.Snapshot(), m.Snapshot()
 	if len(a.Messages) != len(b.Messages) || a.Messages[0].ID != b.Messages[0].ID {
@@ -190,7 +190,7 @@ func TestSnapshotRoundTripsEveryFact(t *testing.T) {
 // was before, and a deletion leaves every grid. Applying it twice is
 // applying it once.
 func TestApplyPlacesByCurrentLabels(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(InboxGrid, []string{"b", "a"}, map[string]bool{"a": true},
 		[]Message{msg("a", "one", "2026-01-03T09:00:00Z"), msg("b", "two", "2026-01-04T09:00:00Z")}, true)
 	m.Absorb(StarredGrid, nil, nil, nil, true)

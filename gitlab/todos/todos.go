@@ -1,7 +1,7 @@
 // Package todos is the pure half of the gitlab todos plugin: the todo record,
-// the week calendar, the memory of every todo seen, and the derivations —
+// the week calendar, the cache of every todo seen, and the derivations —
 // entries, labels, placement hints — the plugin answers with, plus the
-// disposable cache file that memory rewarms itself from. There is no network
+// disposable file the cache rewarms itself from. There is no network
 // and no gRPC here, so everything is unit-tested against fakes, and the plugin
 // package only wires it to the wire.
 package todos
@@ -22,7 +22,7 @@ type Todo struct {
 	TargetURL  string `json:"target_url"`
 	Body       string `json:"body"`
 	// State is "pending" or "done", GitLab's word, and the one fact the
-	// plugin re-derives locally; see Memory.Sync. A todo absent from the
+	// plugin re-derives locally; see Cache.Sync. A todo absent from the
 	// pending set is done, whatever GitLab says about it.
 	State     string    `json:"state"`
 	CreatedAt time.Time `json:"created_at"`

@@ -259,14 +259,14 @@ func TestListsEachGridAndRefreshesOnAWindow(t *testing.T) {
 	if got := f.count("imbox"); got != 1 {
 		t.Fatalf("imbox walked %d times", got)
 	}
-	// Inside the window: memory answers, HEY is not asked again.
+	// Inside the window: the cache answers, HEY is not asked again.
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.count("imbox"); got != 1 {
 		t.Fatalf("a fresh listing walked again (%d)", got)
 	}
-	// Past it: one more walk, behind a read that answers from memory.
+	// Past it: one more walk, behind a read that answers from the cache.
 	clock = clock.Add(2 * time.Minute)
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mail.ImboxGrid}); err != nil {
 		t.Fatal(err)
@@ -308,9 +308,9 @@ func TestOneWalkServesABurst(t *testing.T) {
 	}
 }
 
-// A slow walk must not hold the grid: the reader answers with what memory
+// A slow walk must not hold the grid: the reader answers with what the cache
 // holds and the walk runs on behind it.
-func TestASlowWalkAnswersFromMemory(t *testing.T) {
+func TestASlowWalkAnswersFromCache(t *testing.T) {
 	f := newFake()
 	f.block = make(chan struct{})
 	p := stable(t, f, Options{FirstAnswer: 20 * time.Millisecond})
@@ -320,7 +320,7 @@ func TestASlowWalkAnswersFromMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(resp.Entries) != 0 {
-		t.Fatalf("got %d entries from a memory that has never been walked", len(resp.Entries))
+		t.Fatalf("got %d entries from a cache that has never been walked", len(resp.Entries))
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("the reader waited %s for the walk", d)
@@ -536,9 +536,9 @@ func TestAThreadKeepsItsKeyAcrossGrids(t *testing.T) {
 	}
 }
 
-// A first walk that fails is no verdict that blanks the grid: memory answers
+// A first walk that fails is no verdict that blanks the grid: the cache answers
 // what it has, nothing, and "not signed in" reaches the user as the reason.
-func TestAFailedFirstWalkAnswersMemoryWithItsReason(t *testing.T) {
+func TestAFailedFirstWalkAnswersCacheWithItsReason(t *testing.T) {
 	f := newFake()
 	f.err = status.Error(codes.PermissionDenied, "hey plugin: box view imbox: Not logged in")
 	p := stable(t, f, Options{})
@@ -547,13 +547,13 @@ func TestAFailedFirstWalkAnswersMemoryWithItsReason(t *testing.T) {
 		t.Fatalf("a failed walk refused the listing: %v", err)
 	}
 	if len(resp.Entries) != 0 || !strings.Contains(resp.Unreachable, "Not logged in") {
-		t.Fatalf("listing = %+v, want memory (empty) and the reason", resp)
+		t.Fatalf("listing = %+v, want the cache (empty) and the reason", resp)
 	}
 }
 
-// A warm read answers memory, and the refresh that failed behind it is the
+// A warm read answers from the cache, and the refresh that failed behind it is the
 // next read's unreachable reason, until a walk lands (rule 7).
-func TestAWarmReadAnswersMemoryAndTheLastFailure(t *testing.T) {
+func TestAWarmReadAnswersCacheAndTheLastFailure(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{th(1, "lunch", "2026-01-05T14:00:00Z")}
 	var mu sync.Mutex
@@ -584,7 +584,7 @@ func TestAWarmReadAnswersMemoryAndTheLastFailure(t *testing.T) {
 	list()
 	idle(t, p)
 	if r := list(); len(r.Entries) != 1 || !strings.Contains(r.Unreachable, "network") {
-		t.Fatalf("warm read after a failed walk = %+v, want the remembered thread and the reason", r)
+		t.Fatalf("warm read after a failed walk = %+v, want the cached thread and the reason", r)
 	}
 	f.mu.Lock()
 	f.err = nil
@@ -598,10 +598,10 @@ func TestAWarmReadAnswersMemoryAndTheLastFailure(t *testing.T) {
 	}
 }
 
-// Memory forgets a thread once it is in no box AND `hey thread read` says
+// Cache forgets a thread once it is in no box AND `hey thread read` says
 // HEY no longer has it, asked by a walk; never on doubt, and a thread HEY
 // still has (archived) is kept and asked about again on a later walk.
-func TestMemoryForgetsOnlyWhatHEYNoLongerHas(t *testing.T) {
+func TestCacheForgetsOnlyWhatHEYNoLongerHas(t *testing.T) {
 	f := newFake()
 	f.boxes["imbox"] = []mail.Thread{
 		th(1, "gone", "2026-01-01T09:00:00Z"), th(2, "archived", "2026-01-02T09:00:00Z"),
@@ -622,8 +622,8 @@ func TestMemoryForgetsOnlyWhatHEYNoLongerHas(t *testing.T) {
 	f.setBox("imbox", th(4, "stays", "2026-01-04T09:00:00Z"))
 	walk()
 	for id, want := range map[int64]bool{1: false, 2: true, 3: true, 4: true} {
-		if _, ok := p.mem.Get(id); ok != want {
-			t.Errorf("thread %d remembered = %v, want %v", id, ok, want)
+		if _, ok := p.cache.Get(id); ok != want {
+			t.Errorf("thread %d cached = %v, want %v", id, ok, want)
 		}
 	}
 	asked := f.count("thread")
@@ -648,7 +648,7 @@ func TestDeleteIsRefusedWithItsReason(t *testing.T) {
 	}
 }
 
-// The cache is the plugin's memory of HEY across a restart: the next process
+// The cache is the plugin's cache of HEY across a restart: the next process
 // answers the same listing without running the CLI at all.
 func TestTheCacheSurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
@@ -709,7 +709,7 @@ func TestAnUnreadableCacheStartsColdAndSaysSo(t *testing.T) {
 	}
 }
 
-func TestFindReadsMemoryOnly(t *testing.T) {
+func TestFindReadsCacheOnly(t *testing.T) {
 	f := newFake()
 	f.boxes["laterbox"] = []mail.Thread{th(2, "invoice", "2026-01-04T09:00:00Z")}
 	p := stable(t, f, Options{})
@@ -753,7 +753,7 @@ func TestFromConfigTakesNoRequiredKeysAndRefusesABadRefresh(t *testing.T) {
 }
 
 // The seam a fake Source cannot cross: the real heycli.Exec, running the
-// executable CLI contract, feeding the real memory and entry derivation. A
+// executable CLI contract, feeding the real cache and entry derivation. A
 // unit test on each side of "what the CLI prints" would not catch a change
 // to the shape it prints.
 func TestOverTheRealCLIContract(t *testing.T) {
@@ -811,7 +811,7 @@ func TestOverTheRealCLIContract(t *testing.T) {
 	}
 }
 
-// A read the memory has a listing for never waits on the walk behind it,
+// A read the cache has a listing for never waits on the walk behind it,
 // however slow: the walk outlives the read, and the node's refresh paints
 // its answer in.
 func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
@@ -851,7 +851,7 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	}
 }
 
-// A read the memory has nothing for waits for the walk, up to the first-answer
+// A read the cache has nothing for waits for the walk, up to the first-answer
 // bound.
 func TestAColdReadWaitsTheFirstAnswer(t *testing.T) {
 	f := newFake()

@@ -58,4 +58,4 @@ the last client stops showing its pid (`memo.DefaultLinger`). Nothing shown,
 nothing read. The same poll reads the pid's `@info` body, and when it differs
 from the last read it sends one `EntryChanged` with the `@info` entry, so an
 open `@info` shows the process as it is now. Its `content_stamp` is a hash
-of the body: the process table keeps no version and the plugin no memory.
+of the body: the process table keeps no version and the plugin no cache.

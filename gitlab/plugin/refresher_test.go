@@ -166,7 +166,7 @@ func (h *hanging) Page(ctx context.Context, state string, page int) (todos.Reply
 }
 
 // A glance cut short because the last stream ended is the refresher
-// stopping, not GitLab failing: the next read answers memory with no error.
+// stopping, not GitLab failing: the next read answers from the cache with no error.
 func TestAGlanceCutShortIsNotAFailure(t *testing.T) {
 	src := &hanging{oneShot: oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}},
 		hung: make(chan struct{}, 1), gaveUp: make(chan struct{}, 1)}

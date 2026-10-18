@@ -113,8 +113,8 @@ func (p *Plugin) watchOnce(ctx context.Context) (live bool, err error) {
 	return live, err
 }
 
-// apply is one line of the feed, landed. A thread line moves memory and, if
-// the listing changed, tells every subscriber; resync and a delete memory
+// apply is one line of the feed, landed. A thread line moves the cache and, if
+// the listing changed, tells every subscriber; resync and a delete cache
 // cannot map re-read the box; ready re-reads every box, because the feed
 // reports nothing from before it was live and the catch-up may have skipped.
 // A box this plugin does not project is ignored.
@@ -140,7 +140,7 @@ func (p *Plugin) apply(ev mail.Event) {
 		if !ok {
 			return
 		}
-		eff := p.mem.Apply(c.Key, ev)
+		eff := p.cache.Apply(c.Key, ev)
 		if eff.Changed || eff.Everything {
 			p.save()
 		}

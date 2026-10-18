@@ -51,7 +51,7 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 		t.Errorf("plugin = src %v token %v refresh %v full_refresh %v", p.src, p.token, p.refresh, p.fullRefresh)
 	}
 	// state_dir is the node's key, beside uuid and kind. A node that hands
-	// none is no error: the plugin then keeps its memory in process.
+	// none is no error: the plugin then keeps its cache in process.
 	if p.file.Path() != "" {
 		t.Errorf("cache path = %q with no state_dir in the config", p.file.Path())
 	}

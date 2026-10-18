@@ -142,7 +142,7 @@ func TestFromConfigComposesTheClient(t *testing.T) {
 	}
 
 	// state_dir is the node's key, beside uuid and kind. A node that hands
-	// none is no error: the plugin then keeps its memory in process. Info
+	// none is no error: the plugin then keeps its cache in process. Info
 	// asks for the profile, so this one reads a local Gmail, never Google.
 	profile := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")

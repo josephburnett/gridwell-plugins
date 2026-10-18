@@ -40,7 +40,7 @@ func (k *token) count() int {
 // A token GitLab refuses is a config the plugin cannot serve: Info refuses
 // with GitLab's sentence and asks again on every call, so a fixed token heals
 // without a restart. Once Info has passed it never asks again, so a token
-// revoked later is weather memory answers through, not a refusal.
+// revoked later is weather the cache answers through, not a refusal.
 func TestInfoRefusesARefusedTokenThenLatches(t *testing.T) {
 	const sentence = "GitLab refused the token in /etc/gitlab-token (401 Unauthorized): write a personal access token with the read_api scope there"
 	k := &token{err: status.Error(codes.PermissionDenied, sentence)}

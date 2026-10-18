@@ -68,7 +68,7 @@ deleted credential is not rewarmed by use.
 |---|---|---|---|
 | `credentials` | yes | — | the OAuth client JSON from the console |
 | `token` | yes | — | the token file `-auth` wrote |
-| `refresh` | no | `1m` | how often memory catches up with Gmail while a grid is shown |
+| `refresh` | no | `1m` | how often the cache catches up with Gmail while a grid is shown |
 | `max_messages` | no | `500` | how many of a label's newest messages one walk reads |
 | `endpoint` | no | Gmail's own | the Gmail API base URL |
 
@@ -161,7 +161,7 @@ afterwards is yours.
 newest are what a person is looking at. Gmail lists newest first, so a walk
 that stops at the cap is exact down to its oldest message and silent below
 it. Mail above that line that has left the label leaves the grid; mail below
-it stays, so a grid holds everything the plugin remembers for that label.
+it stays, so a grid holds everything the plugin caches for that label.
 
 Whether a message has left a grid is answered for that grid. The inbox or the
 starred grid, read to its end, lists every message it holds and says so, and
@@ -181,21 +181,21 @@ history id after it. It is disposable — delete it any time; the next walk
 rewarms it. A message leaves it once no label holds it and Gmail says it is
 gone. **No credential is ever written there.**
 
-A refresh reads Gmail's history since the id memory is current to and
+A refresh reads Gmail's history since the id the cache is current to and
 applies it: a quiet mailbox costs one request. A full walk of both labels —
-two id listings each, then a metadata read for only the ids the memory has
+two id listings each, then a metadata read for only the ids the cache has
 never seen — runs instead when there is no id yet, when Gmail answers that
 the id is too old, and once a day as a consistency pass. Message bodies are
 not cached at all. A listing is small; a mailbox's bodies are not.
 
-Nothing runs for nobody. A refresh happens when a grid is read and memory is
+Nothing runs for nobody. A refresh happens when a grid is read and the cache is
 older than `refresh`, or on the `refresh` clock while the node holds a
 `Watch` stream showing one of the grids; with no grid shown, Gmail is asked
 nothing. There is no push: Gmail's own (`users.watch`) publishes to a Google
 Cloud Pub/Sub topic that must deliver to a public HTTPS endpoint, and a
 personal node has neither.
 
-A grid answers from memory at once whenever memory has an answer; only a
+A grid answers from the cache at once whenever the cache has an answer; only a
 grid never read waits, briefly, on its first walk. When a refresh fails —
 Google out of reach, or a token revoked since the plugin started — every
 grid keeps what it showed and the plugin says why, which the node shows as

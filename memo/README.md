@@ -1,6 +1,6 @@
 # memo
 
-A plugin's memory of its source, written once for every plugin that keeps
+A plugin's cache of its source, written once for every plugin that keeps
 one (`docs/plugin-standard.md` rule 15 in the gridwell repository). It owns
 four things.
 
@@ -18,16 +18,16 @@ four things.
 another version, or written before memo (logged, except a missing file).
 `Save(func() T)` writes atomically, private (0600), minting the directory;
 the snapshot is taken under the file's lock so the last write holds the
-latest memory. A failing save logs once until one lands. With no `state_dir`
+latest cache. A failing save logs once until one lands. With no `state_dir`
 the File is nil and both are no-ops.
 
 ## Flights
 
 `NewFlights(life, FlightOptions{Walk, Window, ...})`.
 
-- `Read(ctx, key, warm)` is a call's read. Fresh memory answers as it is.
+- `Read(ctx, key, warm)` is a call's read. A fresh cache answers as it is.
   Otherwise a walk starts, or the one in flight is joined. A warm read never
-  waits. A cold read waits at most `FirstAnswer`, then answers memory so far.
+  waits. A cold read waits at most `FirstAnswer`, then answers what the cache holds so far.
   The `unreachable` it returns is the last refresh's failure, for
   `ListResponse.unreachable`; the read itself does not fail on it.
 - `Rewalk(key)` walks whatever the freshness, once more if a walk is in
@@ -98,4 +98,4 @@ touched keeps its place whatever the zone.
    `return p.changes.Serve(req.GetContexts(), stream)`.
 5. Delete `Run` and the `go p.Run(...)` in `FromConfig`. The refresher, glance
    or feed becomes a `Do`, and `Work` names which grids need it.
-6. Keep one test that the plugin's memory survives a restart through `File`.
+6. Keep one test that the plugin's cache survives a restart through `File`.

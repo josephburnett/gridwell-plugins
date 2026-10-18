@@ -89,7 +89,7 @@ func TestACancelledContextStopsRetrying(t *testing.T) {
 }
 
 // New wraps its source once, so every walk — a read's, a descent's, the
-// refresher's — is resilient without Memory.Sync knowing anything about
+// refresher's — is resilient without Cache.Sync knowing anything about
 // retries.
 func TestTheWalkSurvivesAFlakyPage(t *testing.T) {
 	src := &flaky{err: status.Error(codes.Unavailable, "reset"), failures: 1}

@@ -360,7 +360,7 @@ func TestListsEachGridAndRefreshesOnAWindow(t *testing.T) {
 	if got := f.count("INBOX"); got != 1 {
 		t.Fatalf("the inbox was listed %d times", got)
 	}
-	// Inside the window: memory answers, Gmail is not asked again.
+	// Inside the window: the cache answers, Gmail is not asked again.
 	if _, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid}); err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ func TestUnreadComesFromASecondListing(t *testing.T) {
 }
 
 // A starred message that is also in the inbox reads the same on both grids.
-// One fact, one owner: the state is the memory's, not a copy in each row.
+// One fact, one owner: the state is the cache's, not a copy in each row.
 func TestOneMessageReadsTheSameOnBothGrids(t *testing.T) {
 	f := newFake()
 	m := msg("a", "lunch", "2026-01-05T09:00:00Z")
@@ -460,7 +460,7 @@ func TestOneMessageReadsTheSameOnBothGrids(t *testing.T) {
 	f.hold("STARRED", m)
 	p := stable(f, Options{})
 	ctx := context.Background()
-	listAll(t, p) // both walked: the star is a memory fact, not a walk's order
+	listAll(t, p) // both walked: the star is a cache fact, not a walk's order
 
 	inbox, err := p.List(ctx, &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
 	if err != nil {
@@ -515,9 +515,9 @@ func TestOneWalkServesABurst(t *testing.T) {
 	}
 }
 
-// A slow walk must not hold the grid: the reader answers with what memory
+// A slow walk must not hold the grid: the reader answers with what the cache
 // holds and the walk runs on behind it.
-func TestASlowWalkAnswersFromMemory(t *testing.T) {
+func TestASlowWalkAnswersFromCache(t *testing.T) {
 	f := newFake()
 	f.block = make(chan struct{})
 	p := stable(f, Options{FirstAnswer: 20 * time.Millisecond})
@@ -527,7 +527,7 @@ func TestASlowWalkAnswersFromMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(resp.Entries) != 0 {
-		t.Fatalf("got %d entries from a memory that has never been walked", len(resp.Entries))
+		t.Fatalf("got %d entries from a cache that has never been walked", len(resp.Entries))
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("the reader waited %s for the walk", d)
@@ -783,7 +783,7 @@ func TestDeleteIsRefusedWithItsReason(t *testing.T) {
 
 // The cap bounds the WALK, not the grid: a capped read is not a whole read,
 // so the messages below it keep their tiles rather than being retired by a
-// read that never reached them, and the grid holds what memory holds.
+// read that never reached them, and the grid holds what the cache holds.
 func TestTheCapBoundsTheWalkAndACappedReadNeverRetires(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX",
@@ -825,11 +825,11 @@ func TestTheCapBoundsTheWalkAndACappedReadNeverRetires(t *testing.T) {
 		msg("d", "four", "2026-01-05T12:00:00Z"))
 	refreshed(t, p, &clock, 2*time.Minute)
 	if got := keys(t, p, mailbox.InboxGrid); got != "msg:b,msg:c,msg:d" {
-		t.Errorf("inbox after a second capped walk = %s, want what memory holds", got)
+		t.Errorf("inbox after a second capped walk = %s, want what the cache holds", got)
 	}
 }
 
-// The cache is the plugin's memory of Gmail across a restart: the next
+// The cache is the plugin's cache of Gmail across a restart: the next
 // process answers the same listing without calling Gmail at all.
 func TestTheCacheSurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
@@ -916,7 +916,7 @@ func TestTheCacheHoldsNoCredential(t *testing.T) {
 	}
 }
 
-func TestFindReadsMemoryOnly(t *testing.T) {
+func TestFindReadsCacheOnly(t *testing.T) {
 	f := newFake()
 	f.hold("STARRED", msg("b", "invoice", "2026-01-04T09:00:00Z"))
 	p := stable(f, Options{})
@@ -953,13 +953,13 @@ func landed(t *testing.T, p *Plugin) {
 	}
 }
 
-// A read over a memory that has an answer gives it at once, however slow the
+// A read over a cache that has an answer gives it at once, however slow the
 // walk behind it: past the refresh window every read would otherwise pay the
-// first-answer bound for an answer memory already had. The walk still runs
+// first-answer bound for an answer cache already had. The walk still runs
 // and lands. A walk that failed — here a token revoked after Info passed —
-// costs no read its answer: the next warm read answers memory, every entry,
+// costs no read its answer: the next warm read answers from the cache, every entry,
 // and says why in unreachable, until a walk lands again.
-func TestAWarmReadAnswersMemoryAndSaysWhyTheWalkFailed(t *testing.T) {
+func TestAWarmReadAnswersCacheAndSaysWhyTheWalkFailed(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "lunch", "2026-01-05T14:00:00Z"))
 	f.hold("STARRED", msg("a", "lunch", "2026-01-05T14:00:00Z"))
@@ -1000,10 +1000,10 @@ func TestAWarmReadAnswersMemoryAndSaysWhyTheWalkFailed(t *testing.T) {
 	for _, c := range mailbox.GridKeys() {
 		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: c})
 		if err != nil {
-			t.Fatalf("%s after a failed walk = %v, want memory's answer", c, err)
+			t.Fatalf("%s after a failed walk = %v, want the cache's answer", c, err)
 		}
 		if len(resp.Entries) != 1 || resp.Unreachable != "the stored token was refused" || resp.Authoritative {
-			t.Errorf("%s after a failed walk = %d entries, unreachable %q, authoritative %v; want memory, the reason, no authority",
+			t.Errorf("%s after a failed walk = %d entries, unreachable %q, authoritative %v; want the cache, the reason, no authority",
 				c, len(resp.Entries), resp.Unreachable, resp.Authoritative)
 		}
 	}
@@ -1123,14 +1123,14 @@ func TestAnExpiredHistoryIDWalksOnceThenCatchesUp(t *testing.T) {
 	p, clock := warmHistory(t, f, Options{})
 	f.changed("a")
 	f.mu.Lock()
-	f.floor = f.hid // the id memory holds is now too old
+	f.floor = f.hid // the id cache holds is now too old
 	f.mu.Unlock()
 
 	refreshed(t, p, clock, 2*time.Minute)
 	if got := f.count("INBOX"); got != 2 {
 		t.Fatalf("an expired id walked the inbox %d times in all, want 2", got)
 	}
-	if got := p.mem.HistoryID(); got != f.hid {
+	if got := p.cache.HistoryID(); got != f.hid {
 		t.Fatalf("history id after the walk = %d, want Gmail's %d", got, f.hid)
 	}
 	refreshed(t, p, clock, 2*time.Minute)
@@ -1315,7 +1315,7 @@ func TestASlowWatcherNeverBlocksARefresh(t *testing.T) {
 	}
 }
 
-// The history id is how memory keeps up cheaply, never what it shows: a
+// The history id is how the cache keeps up cheaply, never what it shows: a
 // Gmail that will not give one still gets its grids walked, the failure is
 // said, and the next refresh walks again rather than catching up from
 // nothing.

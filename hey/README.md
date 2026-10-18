@@ -124,7 +124,7 @@ The plugin reads exactly these fields:
 - `added` and `updated` carry the posting — the same object a `box view` row
   is, minus `topic_id`: the thread is the line's `thread_id`. `seen` is absent
   while the thread is unseen.
-- `deleted` names only the posting and its box. The plugin remembers which
+- `deleted` names only the posting and its box. The plugin caches which
   posting holds each thread in each box, so it knows which thread left.
 - Every thread line names its box, so a change maps to its grid without
   a read. `box.kind` is the selector `box view` takes; a box that is none of
@@ -148,7 +148,7 @@ about the host is never the reason a command refused.
 Exit status is the whole error vocabulary (`hey help exit-codes`): 2 not
 found, 3 auth required, 4 forbidden, 5 rate limited, 6 network, 7 server or
 local, 1 and 8 usage. 5, 6 and 7 become `Unavailable`, the rest verdicts
-(3 and 4 `PermissionDenied`). Neither refuses a listing: memory answers, and
+(3 and 4 `PermissionDenied`). Neither refuses a listing: the cache answers, and
 the reason rides `ListResponse.unreachable`, which the node shows as the
 plugin's health while it keeps serving the rows. So "not signed in" reaches
 the user without blanking a grid. An email's page answers the code itself.
@@ -168,7 +168,7 @@ stream starts it; it stops 10s after the last one closes, so a stream the
 node reopens with a new scope does not cost a restart. With no stream open,
 no feed runs and nothing walks on a clock.
 
-Every line of the feed lands in memory at once, and a line that changes a
+Every line of the feed lands in the cache at once, and a line that changes a
 grid's listing tells the node through the `Watch` stream, so new mail
 reaches the grid in seconds. `resync` re-reads its box. `ready` re-reads
 every box: the feed says nothing about the time before it was live, so the
@@ -185,7 +185,7 @@ of it walks nothing: the feed keeps it. While the feed is not live — not
 started, disconnected, restarting, or refused — `refresh` rules: a read of a
 grid whose last walk is older than that walks it.
 
-A read answers from memory at once whenever memory has a listing of the
+A read answers from the cache at once whenever the cache has a listing of the
 grid, even while a walk it started runs behind it. Only a read with no
 listing to answer — the first ever — waits for the walk, at most 2s. A read
 never fails because HEY did not answer: the last failed walk's reason, or the
@@ -228,7 +228,7 @@ only when the CLI says the thread does not exist (exit 2).
 
 Everything is never authoritative: a thread in no box may still be in HEY,
 and only `Probe` asks. One box that cannot be read costs everything only that
-box's news: it lists what memory holds for every box, with the failing box's
+box's news: it lists what the cache holds for every box, with the failing box's
 reason as its `unreachable`, so every email's page keeps serving.
 
 `Watch` announces everything whenever a thread's record or the union
@@ -244,7 +244,7 @@ nothing says what changed while no plugin was running. It is disposable —
 delete it any time; the next walks rewarm it. A file from an older plugin is
 a cold start, once. No credential is ever written there.
 
-A thread that leaves every box is remembered, so its tile still reads as the
+A thread that leaves every box is cached, so its tile still reads as the
 email it was, until HEY says it no longer has it: each walk asks `hey thread
 read` about the 16 such threads that have waited longest, forgets one the
 CLI says does not exist (exit 2), and on any other answer sends it to the

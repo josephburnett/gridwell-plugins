@@ -14,7 +14,7 @@ import (
 	"github.com/josephburnett/gridwell-plugins/hey/mail"
 )
 
-// fake is a Runner that answers canned output, and remembers the argv it was
+// fake is a Runner that answers canned output, and records the argv it was
 // asked for: the flags ARE the contract, so the test pins them.
 type fake struct {
 	args   [][]string
@@ -106,7 +106,7 @@ func TestThreadHTMLPinsTheCommand(t *testing.T) {
 }
 
 // The exit status is the whole error vocabulary: weather degrades to the
-// remembered listing, a verdict surfaces. Getting this backwards either hides
+// cached listing, a verdict surfaces. Getting this backwards either hides
 // "you are not signed in" or throws the grid away over a dropped packet.
 func TestExitCodesMapToTheNodesVocabulary(t *testing.T) {
 	cases := []struct {

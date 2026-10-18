@@ -1,7 +1,7 @@
 // Package gitlabapi is the thin HTTP half of the gitlab todos plugin: the
 // pager over GET /api/v4/todos, the mark-as-done write, and the token check
 // over GET /api/v4/user. It knows the wire (token header, per_page,
-// X-Next-Page, X-Total-Pages) and nothing about weeks, memory, or tiles.
+// X-Next-Page, X-Total-Pages) and nothing about weeks, the cache, or tiles.
 package gitlabapi
 
 import (
@@ -42,7 +42,7 @@ type Client struct {
 // DefaultTimeout bounds one request end to end. http.DefaultClient has no
 // timeout, and a GitLab response that stalls mid-body would park the shared
 // walk forever, with no failure to report. A timeout turns the stall into
-// Unavailable, "not right now", and memory answers with that reason until a
+// Unavailable, "not right now", and the cache answers with that reason until a
 // walk lands.
 const DefaultTimeout = 30 * time.Second
 
@@ -124,7 +124,7 @@ func weather(resp *http.Response) bool {
 
 // Page implements todos.Source. A network failure, a 5xx, or a 429 is
 // Unavailable, "not right now", which a walk retries; a 401 or 403 is
-// PermissionDenied, which it does not. Either way a read memory can answer is
+// PermissionDenied, which it does not. Either way a read cache can answer is
 // answered, with the failure as its unreachable reason.
 func (c *Client) Page(ctx context.Context, state string, page int) (todos.Reply, error) {
 	q := url.Values{}

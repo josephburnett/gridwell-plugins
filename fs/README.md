@@ -19,7 +19,7 @@ the (+) menu. A `root` that does not exist, is not a directory, or cannot be
 read refuses `Info` with that reason, and the plugin's row shows it broken
 until the directory is there; no restart is needed. Once the root has been
 served, losing it later is not a refusal: the node keeps showing what it
-remembers and marks the source dark.
+caches and marks the source dark.
 
 The root may itself be a symlink. Everything under it is spelled from the
 directory it resolves to.
@@ -57,7 +57,7 @@ Listings are authoritative: a directory read is the whole directory, so a
 file that is not listed is gone, and its tile goes with it. A directory that
 is gone, or is now a file, lists empty. A directory that cannot be read
 right now (permissions, I/O) is not empty: the node keeps showing what it
-remembers and marks the source dark.
+caches and marks the source dark.
 
 ## Symlinks
 
@@ -94,7 +94,7 @@ Deleting something already gone succeeds.
 ## Find
 
 The plugin finds nothing: a find comes back empty in the tree. It
-keeps no memory of the tree to look in, and walking the disk for a query is
+keeps no cache of the tree to look in, and walking the disk for a query is
 work nobody on screen asked for.
 
 ## Changes

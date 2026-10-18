@@ -187,7 +187,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 }
 
 // Find is refused: a file tree finds nothing (docs/plugin-standard.md
-// rule 20), since the plugin holds no memory to look in and a walk of the
+// rule 20), since the plugin holds no cache to look in and a walk of the
 // disk for a query is work done for nobody.
 func (p *Plugin) Find(context.Context, *pluginv1.FindRequest) (*pluginv1.FindResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "fs plugin: a file tree finds nothing")

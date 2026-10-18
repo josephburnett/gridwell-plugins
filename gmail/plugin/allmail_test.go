@@ -127,7 +127,7 @@ func TestProbeAnswersForTheGridAsked(t *testing.T) {
 }
 
 // A label listing is authoritative when it is definitive: a whole read, every
-// member read, and memory current to Gmail's history. Anything less, and All
+// member read, and the cache current to Gmail's history. Anything less, and All
 // mail always, leaves absence to Probe.
 func TestALabelListingIsAuthoritativeOnlyWhenDefinitive(t *testing.T) {
 	for name, c := range map[string]struct {
@@ -199,9 +199,9 @@ func TestFindLandsOnTheAllMailTile(t *testing.T) {
 	}
 }
 
-// Memory forgets a message only once no label holds it AND Gmail says it is
-// gone. Archived is not gone: Gmail still has it, and so does memory.
-func TestMemoryForgetsAMessageOnlyWhenGmailSaysItIsGone(t *testing.T) {
+// Cache forgets a message only once no label holds it AND Gmail says it is
+// gone. Archived is not gone: Gmail still has it, and so does the cache.
+func TestCacheForgetsAMessageOnlyWhenGmailSaysItIsGone(t *testing.T) {
 	f := newFake()
 	f.hold("INBOX", msg("a", "one", "2026-01-05T09:00:00Z"), msg("b", "two", "2026-01-05T10:00:00Z"))
 	p, clock := warmHistory(t, f, Options{})
@@ -209,7 +209,7 @@ func TestMemoryForgetsAMessageOnlyWhenGmailSaysItIsGone(t *testing.T) {
 	f.hold("INBOX", msg("b", "two", "2026-01-05T10:00:00Z")) // a is archived
 	f.changed("a")
 	refreshed(t, p, clock, 2*time.Minute)
-	if _, known := p.mem.View("a"); !known {
+	if _, known := p.cache.View("a"); !known {
 		t.Fatal("an archived message was forgotten; Gmail still has it")
 	}
 	f.deleted("a")
@@ -217,14 +217,14 @@ func TestMemoryForgetsAMessageOnlyWhenGmailSaysItIsGone(t *testing.T) {
 	if got.Presence != pluginv1.ProbeResponse_PRESENCE_GONE {
 		t.Fatalf("a deleted message probed %v", got.Presence)
 	}
-	if _, known := p.mem.View("a"); known {
-		t.Error("memory kept a message Gmail says is gone and no label holds")
+	if _, known := p.cache.View("a"); known {
+		t.Error("the cache kept a message Gmail says is gone and no label holds")
 	}
 
 	f.deleted("b") // deleted out of the inbox: history says so
 	refreshed(t, p, clock, 2*time.Minute)
-	if _, known := p.mem.View("b"); known {
-		t.Error("memory kept a message history says was deleted")
+	if _, known := p.cache.View("b"); known {
+		t.Error("the cache kept a message history says was deleted")
 	}
 }
 

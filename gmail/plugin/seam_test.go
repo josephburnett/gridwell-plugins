@@ -20,7 +20,7 @@ import (
 
 // The seam a fake Source cannot cross: the real gmailapi.Client, speaking the
 // real generated Gmail client, against the JSON shapes recorded in
-// gmailapi/testdata — feeding the real memory and the real entry derivation.
+// gmailapi/testdata — feeding the real cache and the real entry derivation.
 // A unit test on each side of "what Gmail returns" would not catch a change
 // to the shape it returns, and the delta walk, the unread listing and the key
 // scheme all cross this line.
@@ -145,7 +145,7 @@ func withID(t *testing.T, name, id string) []byte {
 }
 
 // A catch-up over the real contract: the recorded history, read by the real
-// client, applied to the real memory. The recorded pages name an arrival in
+// client, applied to the real cache. The recorded pages name an arrival in
 // the inbox, the first inbox message archived and read, a label change and
 // an arrival this projection cannot see, and the third inbox message deleted.
 func TestACatchUpOverTheRealGmailContract(t *testing.T) {
@@ -217,7 +217,7 @@ func TestACatchUpOverTheRealGmailContract(t *testing.T) {
 	if want := []string{"msg:18c2a1b3f4d5e6f8", "msg:18c2a1b3f4d5e7a1"}; !slices.Equal(got, want) {
 		t.Errorf("inbox after the catch-up = %v, want %v", got, want)
 	}
-	if id := p.mem.HistoryID(); id != 9912431 {
+	if id := p.cache.HistoryID(); id != 9912431 {
 		t.Errorf("history id = %d, want the last page's", id)
 	}
 }

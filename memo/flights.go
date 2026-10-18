@@ -12,14 +12,14 @@ import (
 )
 
 // DefaultFirstAnswer bounds how long a cold read waits on a walk before
-// answering what memory holds so far.
+// answering what the cache holds so far.
 const DefaultFirstAnswer = time.Second
 
 // FlightOptions configures Flights. Walk is required.
 type FlightOptions struct {
 	// Name prefixes every log line: the plugin's kind.
 	Name string
-	// Walk refreshes memory for key from the source. ctx is the plugin's
+	// Walk refreshes the cache for key from the source. ctx is the plugin's
 	// lifetime: a walk is shared by every reader, so no reader's hangup ends
 	// it, and the source call's own timeout bounds it.
 	Walk func(ctx context.Context, key string) error
@@ -46,8 +46,8 @@ type FlightOptions struct {
 }
 
 // Flights runs one walk per key at a time, shared by every reader and
-// detached from all of them, and remembers when each key last landed and why
-// it last failed. A read memory can answer never waits and never fails on the
+// detached from all of them, and records when each key last landed and why
+// it last failed. A read cache can answer never waits and never fails on the
 // source: it answers with the failure as its Unreachable reason (rule 7).
 type Flights struct {
 	life *Life
@@ -68,7 +68,7 @@ type flight struct {
 	err  error
 }
 
-// NewFlights builds the flights for one plugin's memory, its walks run under
+// NewFlights builds the flights for one plugin's cache, its walks run under
 // life.
 func NewFlights(life *Life, o FlightOptions) *Flights {
 	if o.FirstAnswer <= 0 {
@@ -93,12 +93,12 @@ func NewFlights(life *Life, o FlightOptions) *Flights {
 	}
 }
 
-// Read makes key answerable for a call: fresh memory as it is, otherwise a
-// walk, joined if one is in flight. warm says memory already holds an answer
+// Read makes key answerable for a call: a fresh cache as it is, otherwise a
+// walk, joined if one is in flight. warm says the cache already holds an answer
 // for key: then Read never waits, and unreachable is the last refresh's
 // failure, for ListResponse.unreachable. A cold read waits at most
-// FirstAnswer, then answers memory so far; it fails only when its walk failed
-// with nothing remembered, or its caller hung up.
+// FirstAnswer, then answers what the cache holds so far; it fails only when its walk failed
+// with nothing cached, or its caller hung up.
 func (f *Flights) Read(ctx context.Context, key string, warm bool) (unreachable string, err error) {
 	f.mu.Lock()
 	last := f.lastLocked(key)
@@ -124,7 +124,7 @@ func (f *Flights) Read(ctx context.Context, key string, warm bool) (unreachable 
 	}
 }
 
-// Rewalk walks key whatever its freshness: the source said memory cannot
+// Rewalk walks key whatever its freshness: the source said the cache cannot
 // know it without a read. A walk already in flight may have begun before
 // that, so it is followed by one more.
 func (f *Flights) Rewalk(key string) {
@@ -194,7 +194,7 @@ func Reason(err error) string {
 
 // Within reports whether t is less than d before now. A stamp in the future
 // is not: it can come from a File, and a clock that has since stepped back
-// would otherwise freeze memory as fresh.
+// would otherwise freeze the cache as fresh.
 func Within(now, t time.Time, d time.Duration) bool {
 	if t.IsZero() {
 		return false

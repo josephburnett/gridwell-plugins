@@ -290,7 +290,7 @@ func TestHTMLAnswersNothingForAMessageWithNoTextPart(t *testing.T) {
 	}
 }
 
-// The failure vocabulary: weather degrades to the remembered grid, a verdict
+// The failure vocabulary: weather degrades to the cached grid, a verdict
 // surfaces. Getting this backwards either hides "this token was revoked" or
 // throws the grid away over a dropped packet.
 func TestFailuresMapToTheNodesVocabulary(t *testing.T) {

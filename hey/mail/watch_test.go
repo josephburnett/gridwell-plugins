@@ -25,11 +25,11 @@ func TestLookupBoxIsTheSelectorTable(t *testing.T) {
 	}
 }
 
-// Every line moves memory the way a walk would have: a posting added lists
+// Every line moves the cache the way a walk would have: a posting added lists
 // its thread, an update rewrites it, a delete — which names only the posting
 // — takes it out, and each says whether the listing changed.
 func TestApplyMovesTheListingOnePostingAtATime(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
 
 	eff := m.Apply(ImboxGrid, added("imbox", thread(2, "b", "2026-01-03")))
@@ -63,20 +63,20 @@ func TestApplyMovesTheListingOnePostingAtATime(t *testing.T) {
 	}
 }
 
-// A posting the memory never mapped is either one no listing shows (a
+// A posting the cache never mapped is either one no listing shows (a
 // bundle) or a member a restored snapshot brought back without its posting.
 // The first changes nothing; the second only a read of the box can settle.
 func TestAnUnmappedDeleteRewalksOnlyWhenItCouldBeAMember(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
 	if eff := m.Apply(ImboxGrid, deleted("imbox", 999)); eff.Changed || eff.Rewalk {
 		t.Fatalf("a bundle's delete over a mapped listing = %+v", eff)
 	}
 
-	restored := NewMemory()
+	restored := NewCache()
 	restored.Restore(m.Snapshot())
 	if eff := restored.Apply(ImboxGrid, deleted("imbox", 10)); !eff.Rewalk {
-		t.Fatalf("a delete a restored memory cannot map = %+v", eff)
+		t.Fatalf("a delete a restored cache cannot map = %+v", eff)
 	}
 	restored.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true)
 	if eff := restored.Apply(ImboxGrid, deleted("imbox", 10)); !eff.Changed || eff.Rewalk {
@@ -87,13 +87,13 @@ func TestAnUnmappedDeleteRewalksOnlyWhenItCouldBeAMember(t *testing.T) {
 // Before any walk has listed a grid there is no listing for an event to
 // join: a lone thread would read as the whole box.
 func TestAnEventBeforeTheFirstWalkListsNothing(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	eff := m.Apply(ImboxGrid, added("imbox", thread(1, "a", "2026-01-02")))
 	if eff.Changed || m.Shows(ImboxGrid) {
 		t.Fatalf("an event made a listing: %+v, shows=%v", eff, m.Shows(ImboxGrid))
 	}
 	if _, ok := m.Get(1); !ok {
-		t.Error("the event's thread was not remembered")
+		t.Error("the event's thread was not cached")
 	}
 }
 
@@ -101,7 +101,7 @@ func TestAnEventBeforeTheFirstWalkListsNothing(t *testing.T) {
 // those events stand over it: a thread added and a thread deleted during the
 // read are where the feed put them, not where the read saw them.
 func TestEventsDuringAWalkStandOverItsAnswer(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02"), thread(2, "b", "2026-01-03")}, true)
 
 	m.BeginWalk(ImboxGrid)
@@ -134,7 +134,7 @@ func TestEventsDuringAWalkStandOverItsAnswer(t *testing.T) {
 }
 
 func TestAbsorbReportsWhetherTheListingChanged(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	if !m.Absorb(ImboxGrid, []Thread{thread(1, "a", "2026-01-02")}, true).Changed {
 		t.Fatal("a first listing reported no change")
 	}

@@ -13,7 +13,7 @@ const (
 	ChangeDisconnected = "disconnected"
 )
 
-// Event is one line of the live feed in the memory's terms. A word this
+// Event is one line of the live feed in the cache's terms. A word this
 // plugin does not know is carried as it came and ignored downstream, so a
 // newer CLI adding one breaks nothing.
 type Event struct {
@@ -34,10 +34,10 @@ type Effect struct {
 	// Everything says everything's listing differs from before: the union
 	// gained or lost a thread, or a thread's record changed.
 	Everything bool
-	// Rewalk says the memory could not apply the event and only a read of the
+	// Rewalk says the cache could not apply the event and only a read of the
 	// box can: a deleted posting it cannot map to a thread it shows.
 	Rewalk bool
 	// Moved names the threads whose page changed in place, by topic id: a
-	// known stamp moved to another (Memory.putLocked).
+	// known stamp moved to another (Cache.putLocked).
 	Moved []int64
 }

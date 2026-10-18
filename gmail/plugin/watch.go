@@ -8,9 +8,9 @@ import (
 // views is what one grid answers now.
 func (p *Plugin) views(key string) []mailbox.View {
 	if key == mailbox.AllMailGrid {
-		return p.mem.AllMail()
+		return p.cache.AllMail()
 	}
-	return p.mem.Grid(key)
+	return p.cache.Grid(key)
 }
 
 // listings is what every grid answers now.

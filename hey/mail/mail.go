@@ -1,8 +1,8 @@
 // Package mail is the pure half of the hey plugin: the thread record, the
 // six HEY boxes it projects and everything (their union), the keys, labels
 // and placement hints
-// derived from them, the memory of every thread seen, and the disposable
-// cache file that memory rewarms itself from. There is no process and no
+// derived from them, the cache of every thread seen, and the disposable
+// file the cache rewarms itself from. There is no process and no
 // gRPC here, so everything is unit-tested against fakes, and the plugin
 // package only wires it to the wire.
 package mail
@@ -15,14 +15,14 @@ import (
 
 // Thread is one email thread as HEY's CLI lists it: the subset of a posting
 // the plugin shows. The HTML body is not here — it is fetched on descent and
-// never remembered, because a mailbox listing is small and a mailbox's bodies
+// never cached, because a mailbox listing is small and a mailbox's bodies
 // are not.
 type Thread struct {
 	// TopicID is HEY's thread id: what `hey thread read` takes, and the one
 	// fact the plugin's key is built from.
 	TopicID int64 `json:"topicId"`
 	// PostingID is the box item id — the row in one box. It changes when the
-	// thread moves between boxes, so it is remembered for diagnosis and never
+	// thread moves between boxes, so it is cached for diagnosis and never
 	// keyed on.
 	PostingID int64 `json:"postingId"`
 	// Grid is the grid key of the grid the thread was last
@@ -89,7 +89,7 @@ var Grids = []Grid{
 // EverythingGrid is the union of every box: each thread once, its one
 // home. A box lists links to it (BoxEntries), so a thread that moves between
 // boxes keeps its tile and every link to it. It is no box of HEY's, so
-// nothing walks it; it is derived from the boxes' memory.
+// nothing walks it; it is derived from the boxes' cache.
 const (
 	EverythingGrid  = "everything"
 	EverythingLabel = "everything"

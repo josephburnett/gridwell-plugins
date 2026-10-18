@@ -27,7 +27,7 @@ const (
 
 // retrying is a Source whose failed page is retried in place. It wraps the
 // source once, in New, so every walk — a read's, a descent's, the background
-// refresher's — gets the same resilience, and Memory.Sync stays the walk and
+// refresher's — gets the same resilience, and Cache.Sync stays the walk and
 // nothing else.
 type retrying struct {
 	src      todos.Source

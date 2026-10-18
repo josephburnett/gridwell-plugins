@@ -26,8 +26,8 @@ type Reply struct {
 	// walk that knows it fetches pages concurrently; one that does not pages
 	// serially.
 	Pages int
-	// asOf is the memory's clock when the walk asked for this page; see
-	// Memory.marks.
+	// asOf is the cache's clock when the walk asked for this page; see
+	// Cache.marks.
 	asOf uint64
 }
 
@@ -37,13 +37,13 @@ type Reply struct {
 // crowding the API's rate limit.
 const walkConcurrency = 4
 
-// Memory is everything the plugin has seen, keyed by todo id. A todo that
+// Cache is everything the plugin has seen, keyed by todo id. A todo that
 // vanishes from GitLab keeps its record here and shows as done; nothing is
 // ever removed. It survives a restart through the cache file in the plugin's
-// state directory — see Snapshot — which holds this plugin's memory of ITS
+// state directory — see Snapshot — which holds this plugin's cache of ITS
 // SOURCE and never a node fact. It is what every listing answers from: the
 // node keeps no copy of what the plugin said.
-type Memory struct {
+type Cache struct {
 	mu    sync.Mutex
 	todos map[int64]*Todo
 	// doneComplete records that some walk — this process's, or one whose
@@ -56,7 +56,7 @@ type Memory struct {
 	// resumes is where a failed walk stopped, by the window it was walking.
 	// A walk that succeeds leaves none.
 	resumes map[string]*resumePoint
-	// changedWeeks, rootChanged and changedTodos are what the memory changed
+	// changedWeeks, rootChanged and changedTodos are what the cache changed
 	// since the last TakeChanges; see noteLocked.
 	changedWeeks map[time.Time]bool
 	rootChanged  bool
@@ -78,13 +78,13 @@ type resumePoint struct {
 	page  int
 }
 
-// NewMemory builds an empty memory.
-func NewMemory() *Memory {
-	return &Memory{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}, changedWeeks: map[time.Time]bool{},
+// NewCache builds an empty cache.
+func NewCache() *Cache {
+	return &Cache{todos: map[int64]*Todo{}, resumes: map[string]*resumePoint{}, changedWeeks: map[time.Time]bool{},
 		changedTodos: map[int64]bool{}, marks: map[int64]uint64{}}
 }
 
-// Changes is what the memory changed since it was last asked: the weeks whose
+// Changes is what the cache changed since it was last asked: the weeks whose
 // listing moved, newest first, whether the root's did, and the todos whose
 // body changed in place, as they are now, by id.
 type Changes struct {
@@ -106,9 +106,9 @@ func (c Changes) Grids() []string {
 	return out
 }
 
-// TakeChanges answers what the memory changed since the last call and forgets
+// TakeChanges answers what the cache changed since the last call and forgets
 // it, so each change is answered once.
-func (m *Memory) TakeChanges() Changes {
+func (m *Cache) TakeChanges() Changes {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c := Changes{Root: m.rootChanged}
@@ -129,7 +129,7 @@ func (m *Memory) TakeChanges() Changes {
 // only the weeks and their open and done counts, so it moves when a todo
 // arrives, flips state, or changes week. A known todo whose Markdown changed
 // changed in place, whatever its listing did. The caller holds m.mu.
-func (m *Memory) noteLocked(was *Todo, now *Todo) {
+func (m *Cache) noteLocked(was *Todo, now *Todo) {
 	if was != nil && sameRecord(*was, *now) {
 		return
 	}
@@ -163,7 +163,7 @@ func sameRecord(a, b Todo) bool {
 	return a == b
 }
 
-// Sync refreshes the memory from src. A zero since walks everything: every
+// Sync refreshes the cache from src. A zero since walks everything: every
 // pending page, then done pages to the end. Once a walk has reached that end,
 // later walks stop at the first page that carries nothing new, because a page
 // of already-known done todos then means every older one is known too, since
@@ -171,7 +171,7 @@ func sameRecord(a, b Todo) bool {
 // targeted walk for one week: both states stop as soon as a page reaches todos
 // created before since.
 //
-// Completion is derived: a remembered pending todo the pending walk did not
+// Completion is derived: a cached pending todo the pending walk did not
 // see, within the walk's coverage, is done, whether it was marked done or
 // deleted with its target. That derivation is the only place a todo's state
 // changes without GitLab saying so, and it is only safe when the walk really
@@ -191,7 +191,7 @@ func sameRecord(a, b Todo) bool {
 // across the seam in between, so absence proves nothing. Only a walk that
 // started at the first pending page judges absence; the next one does, one
 // refresh later.
-func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
+func (m *Cache) Sync(ctx context.Context, src Source, since time.Time) error {
 	pendingFrom, doneFrom := 1, 1
 	if r := m.takeResume(since); r != nil {
 		if r.state == StatePending {
@@ -250,12 +250,12 @@ func (m *Memory) Sync(ctx context.Context, src Source, since time.Time) error {
 }
 
 // Glance is the light read: pending pages from the newest until one carries a
-// todo the memory knows, each absorbed. A todo enters GitLab's pending list at
+// todo the cache knows, each absorbed. A todo enters GitLab's pending list at
 // the top, so above the first known one everything is new; on a quiet list
 // that is one page. It never judges absence — only Sync, which saw the whole
 // list, may — and leaves no resume mark, since the next glance starts at the
 // top anyway. A page not newest-first ends it: its top proves nothing.
-func (m *Memory) Glance(ctx context.Context, src Source) error {
+func (m *Cache) Glance(ctx context.Context, src Source) error {
 	_, err := m.walkPages(ctx, src, StatePending, 1, func(r Reply) bool {
 		unknown := m.absorb(r.Todos, r.asOf)
 		return len(r.Todos) == 0 || unknown < len(r.Todos) || !descending(r.Todos)
@@ -279,7 +279,7 @@ func pastSince(todos []Todo, since time.Time) bool {
 // ahead of the page visit has reached, so an early stop wastes little. Pages
 // past the named length — the list grew mid-walk — or a list of unknown length
 // are paged one after another.
-func (m *Memory) walkPages(ctx context.Context, src Source, state string, from int, visit func(Reply) (stop bool)) (failed int, err error) {
+func (m *Cache) walkPages(ctx context.Context, src Source, state string, from int, visit func(Reply) (stop bool)) (failed int, err error) {
 	fetch := func(ctx context.Context, page int) (Reply, error) {
 		asOf := m.now()
 		r, err := src.Page(ctx, state, page)
@@ -367,10 +367,10 @@ func walkAhead(ctx context.Context, fetch func(context.Context, int) (Reply, err
 	return false, 0, nil
 }
 
-// deriveDone marks every remembered pending todo the walk did not see, within
+// deriveDone marks every cached pending todo the walk did not see, within
 // the coverage it proved, as done. It is the one place a todo's state changes
 // without GitLab saying so.
-func (m *Memory) deriveDone(seenPending map[int64]bool, coverage time.Time) {
+func (m *Cache) deriveDone(seenPending map[int64]bool, coverage time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, t := range m.todos {
@@ -389,7 +389,7 @@ func (m *Memory) deriveDone(seenPending map[int64]bool, coverage time.Time) {
 // Removing it is the point: a walk that fails again leaves a fresh mark, and
 // a walk that succeeds leaves none, so the walk after it starts at page one
 // and may judge absence again.
-func (m *Memory) takeResume(since time.Time) *resumePoint {
+func (m *Cache) takeResume(since time.Time) *resumePoint {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k := resumeKey(since)
@@ -398,7 +398,7 @@ func (m *Memory) takeResume(since time.Time) *resumePoint {
 	return r
 }
 
-func (m *Memory) keepResume(since time.Time, r *resumePoint) {
+func (m *Cache) keepResume(since time.Time, r *resumePoint) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.resumes[resumeKey(since)] = r
@@ -418,10 +418,10 @@ func rewind(page int) int {
 }
 
 // absorb records a page asked for at clock tick asOf, with GitLab's record
-// replacing the remembered one, its state included, so a restored todo goes
+// replacing the cached one, its state included, so a restored todo goes
 // back to pending — unless the todo was marked done after the page was asked
 // for (see marks). It returns how many were new.
-func (m *Memory) absorb(todos []Todo, asOf uint64) (unknown int) {
+func (m *Cache) absorb(todos []Todo, asOf uint64) (unknown int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range todos {
@@ -455,21 +455,21 @@ func descending(todos []Todo) bool {
 
 // Walked reports whether some walk, in this process or a previous one whose
 // snapshot was restored, has run to the end of GitLab's lists, so
-// absence from this memory means something: an unknown todo is gone, rather
+// absence from this cache means something: an unknown todo is gone, rather
 // than not yet seen. It is the same fact the done walk's early stop keys on.
-func (m *Memory) Walked() bool {
+func (m *Cache) Walked() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.doneComplete
 }
 
-// MarkDone records GitLab's acceptance of a mark-as-done: the remembered todo
+// MarkDone records GitLab's acceptance of a mark-as-done: the cached todo
 // flips to done. It is the write-side sibling of deriveDone's absence rule —
 // the only other place state changes without a walk saying so — and it is only
 // called after GitLab itself accepted the write, so the next walk's record
 // agrees with it, and a page asked for before it cannot undo it (see marks).
 // False when the todo is unknown.
-func (m *Memory) MarkDone(id int64) bool {
+func (m *Cache) MarkDone(id int64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t, ok := m.todos[id]
@@ -484,14 +484,14 @@ func (m *Memory) MarkDone(id int64) bool {
 	return true
 }
 
-func (m *Memory) now() uint64 {
+func (m *Cache) now() uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.clock
 }
 
-// Get answers one remembered todo (a copy).
-func (m *Memory) Get(id int64) (Todo, bool) {
+// Get answers one cached todo (a copy).
+func (m *Cache) Get(id int64) (Todo, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t, ok := m.todos[id]
@@ -501,8 +501,8 @@ func (m *Memory) Get(id int64) (Todo, bool) {
 	return *t, true
 }
 
-// All answers every remembered todo, oldest first (ties by id).
-func (m *Memory) All() []Todo {
+// All answers every cached todo, oldest first (ties by id).
+func (m *Cache) All() []Todo {
 	m.mu.Lock()
 	out := make([]Todo, 0, len(m.todos))
 	for _, t := range m.todos {
@@ -518,9 +518,9 @@ func (m *Memory) All() []Todo {
 	return out
 }
 
-// Week answers the remembered todos created in the week starting at
+// Week answers the cached todos created in the week starting at
 // start, oldest first.
-func (m *Memory) Week(start time.Time) []Todo {
+func (m *Cache) Week(start time.Time) []Todo {
 	end := start.AddDate(0, 0, 7)
 	var out []Todo
 	for _, t := range m.All() {
@@ -531,11 +531,11 @@ func (m *Memory) Week(start time.Time) []Todo {
 	return out
 }
 
-// Shows reports whether the memory has anything to answer a listing with: any
+// Shows reports whether the cache has anything to answer a listing with: any
 // todo at all for a zero week, else any todo created in the week starting
 // there. It is the line between a warm read, answered at once, and a cold one,
 // which waits on the walk.
-func (m *Memory) Shows(week time.Time) bool {
+func (m *Cache) Shows(week time.Time) bool {
 	if week.IsZero() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -550,8 +550,8 @@ type WeekSummary struct {
 	Open, Done int
 }
 
-// Weeks answers every week that holds a remembered todo, newest first.
-func (m *Memory) Weeks() []WeekSummary {
+// Weeks answers every week that holds a cached todo, newest first.
+func (m *Cache) Weeks() []WeekSummary {
 	byStart := map[time.Time]*WeekSummary{}
 	for _, t := range m.All() {
 		s := WeekStart(t.CreatedAt)

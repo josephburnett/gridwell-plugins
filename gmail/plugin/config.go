@@ -23,7 +23,7 @@ import (
 //
 //	credentials  the OAuth client JSON from the Google Cloud console (required)
 //	token        the token file `-auth` wrote (required)
-//	refresh      how often memory catches up with Gmail (default: 1m)
+//	refresh      how often the cache catches up with Gmail (default: 1m)
 //	max_messages how many of a label's newest messages one walk reads (default: 500)
 //	endpoint     the Gmail API base URL (default: Gmail's own)
 //
@@ -46,7 +46,7 @@ func FromConfig(cfg map[string]string) (pluginv1.PluginServer, error) {
 		// state_dir is the private directory the node mints for this plugin
 		// and hands over beside uuid and kind. The plugin caches its walk
 		// there. A node that hands none — an older one, or a hand-launched
-		// binary — is no error: the plugin then keeps its memory for its
+		// binary — is no error: the plugin then keeps its cache for its
 		// process lifetime.
 		StateDir: cfg["state_dir"],
 	}

@@ -84,7 +84,7 @@ func TestListsWeeksThenTodosAndRefreshesOnAWindow(t *testing.T) {
 		t.Fatalf("outset walk made %d calls, want 2 (pending + done)", src.calls.Load())
 	}
 	// The root walk covered every week: a descent inside the window is
-	// answered from memory, no GitLab round trip.
+	// answered from the cache, no GitLab round trip.
 	wk, err := p.List(ctx, &pluginv1.ListRequest{Grid: "week:2026-08-17"})
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestRestartAnswersFromTheCacheFileWithoutWalking(t *testing.T) {
 	}
 }
 
-// Without a state_dir the plugin behaves exactly as it did: memory only, no
+// Without a state_dir the plugin behaves exactly as it did: the cache only, no
 // file, and an unknown todo before the first walk is still Unavailable.
 func TestNoStateDirWritesNothingAndStaysCold(t *testing.T) {
 	p := New(&oneShot{pending: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, Options{})
@@ -263,7 +263,7 @@ func TestNoStateDirWritesNothingAndStaysCold(t *testing.T) {
 
 // The refresher runs only while a Watch stream is open, since the node holds
 // one only while one of these grids is shown: with none open, refresh windows
-// pass and GitLab hears nothing; with one open, a memory is warm because the
+// pass and GitLab hears nothing; with one open, a cache is warm because the
 // interval came round, not because a read paid for it, and the cache file is
 // warm with it; once the stream ends GitLab hears nothing again.
 func TestTheRefresherRunsOnlyWhileWatched(t *testing.T) {
@@ -381,7 +381,7 @@ func (s *paged) Page(ctx context.Context, state string, page int) (todos.Reply, 
 
 // TestListStreamsWhileTheWalkRuns: a cold walk over a real history runs
 // minutes, and a List that waits for all of it shows the user nothing the
-// whole time. List answers what memory holds after FirstAnswer — GitLab pages
+// whole time. List answers what the cache holds after FirstAnswer — GitLab pages
 // newest-first, so the first answer is the most recent weeks, and the walk's
 // announcements paint the rest in as pages land. One walk serves it all: no
 // restarts, no per-reader paging.
@@ -423,7 +423,7 @@ func TestListStreamsWhileTheWalkRuns(t *testing.T) {
 	}
 }
 
-// landed waits out every walk in flight: the root's, each remembered week's,
+// landed waits out every walk in flight: the root's, each cached week's,
 // and those of the weeks named. A warm read answers before the walk it
 // started has landed.
 func landed(t *testing.T, p *Plugin, weeks ...string) {
@@ -431,7 +431,7 @@ func landed(t *testing.T, p *Plugin, weeks ...string) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		keys := append([]string{todos.RootGrid}, weeks...)
-		for _, w := range p.mem.Weeks() {
+		for _, w := range p.cache.Weeks() {
 			keys = append(keys, todos.WeekKey(w.Start))
 		}
 		busy := false
@@ -448,7 +448,7 @@ func landed(t *testing.T, p *Plugin, weeks ...string) {
 	}
 }
 
-// warmOver builds a plugin over src whose memory holds the last process's
+// warmOver builds a plugin over src whose cache holds the last process's
 // walk of pending todos 1 and 2, stamped past the refresh window: warm, and
 // not fresh.
 func warmOver(t *testing.T, src todos.Source, firstAnswer time.Duration) *Plugin {
@@ -464,7 +464,7 @@ func warmOver(t *testing.T, src todos.Source, firstAnswer time.Duration) *Plugin
 	return New(src, Options{StateDir: dir, FirstAnswer: firstAnswer, Now: func() time.Time { return later }})
 }
 
-// A read over a memory that has anything to show answers it at once, however
+// A read over a cache that has anything to show answers it at once, however
 // slow the walk behind it: the refresher walks for longer than its window on
 // a real history, so a read that waited on the walk paid the first-answer
 // bound on nearly every listing. The walk still runs and lands.
@@ -509,7 +509,7 @@ func TestAWarmReadNeverWaitsOnTheWalk(t *testing.T) {
 	}
 }
 
-// A week the memory holds nothing for is cold, whatever else it holds: the
+// A week the cache holds nothing for is cold, whatever else it holds: the
 // read waits up to the first-answer bound, as a cold start does.
 func TestAColdReadStillWaitsForTheFirstAnswer(t *testing.T) {
 	src := &gated{gate: make(chan struct{})}
@@ -545,11 +545,11 @@ func (f *failing) Page(context.Context, string, int) (todos.Reply, error) {
 	return todos.Reply{Todos: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, nil
 }
 
-// A refresh that fails while memory can answer is the source unreachable,
-// never a failed read: the remembered entries answer with the walk's reason
+// A refresh that fails while the cache can answer is the source unreachable,
+// never a failed read: the cached entries answer with the walk's reason
 // as unreachable, a revoked token's included, and the reason clears once a
 // walk lands.
-func TestAWarmReadAnswersMemoryWithTheLastWalksFailure(t *testing.T) {
+func TestAWarmReadAnswersCacheWithTheLastWalksFailure(t *testing.T) {
 	src := &failing{err: status.Error(codes.PermissionDenied, "gitlab: 401 Unauthorized")}
 	p := warmOver(t, src, time.Hour)
 	ctx := context.Background()
@@ -560,7 +560,7 @@ func TestAWarmReadAnswersMemoryWithTheLastWalksFailure(t *testing.T) {
 	for _, key := range []string{todos.RootGrid, "week:2026-08-17"} {
 		resp, err := p.List(ctx, &pluginv1.ListRequest{Grid: key})
 		if err != nil {
-			t.Fatalf("%s: the read after a refused walk = %v, want memory", key, err)
+			t.Fatalf("%s: the read after a refused walk = %v, want the cache", key, err)
 		}
 		if len(resp.Entries) == 0 || resp.Unreachable != "gitlab: 401 Unauthorized" {
 			t.Errorf("%s: the read after a refused walk = %d entries, unreachable %q", key, len(resp.Entries), resp.Unreachable)

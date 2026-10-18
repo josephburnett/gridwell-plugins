@@ -190,12 +190,12 @@ func TestSyncAllWalksPendingFullyAndDoneUntilNothingNew(t *testing.T) {
 		pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(3, "2026-08-18T10:00:00Z", StatePending), mk(5, "2026-08-25T10:00:00Z", StatePending)},
 		done:    []Todo{mk(2, "2026-08-11T10:00:00Z", StateDone), mk(4, "2026-08-19T10:00:00Z", StateDone), mk(6, "2026-08-25T11:00:00Z", StateDone)},
 	}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(m.All()) != 6 {
-		t.Fatalf("remembered %d, want 6", len(m.All()))
+		t.Fatalf("cached %d, want 6", len(m.All()))
 	}
 	// The outset walks everything: 2 pending pages, 2 done pages.
 	if got := strings.Join(src.calls, " "); got != "pending/1 pending/2 done/1 done/2" {
@@ -214,7 +214,7 @@ func TestSyncAllWalksPendingFullyAndDoneUntilNothingNew(t *testing.T) {
 
 func TestSyncDerivesDoneFromAbsenceInPending(t *testing.T) {
 	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(2, "2026-08-24T10:00:00Z", StatePending)}}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestSyncSinceStopsAtTheWeekAndFlipsOnlyWithinCoverage(t *testing.T) {
 		},
 		done: []Todo{mk(6, "2026-07-02T10:00:00Z", StateDone), mk(7, "2026-08-19T10:00:00Z", StateDone), mk(8, "2026-08-26T10:00:00Z", StateDone)},
 	}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestSyncSinceRefusesEarlyStopOnUnorderedPages(t *testing.T) {
 	src := &fakeSource{per: 2, ascending: true,
 		pending: []Todo{mk(1, "2026-07-01T10:00:00Z", StatePending), mk(2, "2026-07-08T10:00:00Z", StatePending), mk(3, "2026-08-18T10:00:00Z", StatePending), mk(4, "2026-08-20T10:00:00Z", StatePending)},
 	}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, week); err != nil {
 		t.Fatal(err)
 	}
@@ -328,9 +328,9 @@ func TestEveryTextEntryDeclaresItsPresentation(t *testing.T) {
 	}
 }
 
-func TestSyncErrorLeavesMemoryUntouched(t *testing.T) {
+func TestSyncErrorLeavesCacheUntouched(t *testing.T) {
 	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending)}}
-	m := NewMemory()
+	m := NewCache()
 	_ = m.Sync(context.Background(), src, time.Time{})
 	src.err = errors.New("boom")
 	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
@@ -342,7 +342,7 @@ func TestSyncErrorLeavesMemoryUntouched(t *testing.T) {
 }
 
 func TestWeeksAndEntries(t *testing.T) {
-	m := NewMemory()
+	m := NewCache()
 	m.absorb([]Todo{
 		mk(1, "2026-08-18T10:00:00Z", StatePending), // Tue, week of 08-17
 		mk(2, "2026-08-18T12:00:00Z", StateDone),    // Tue, same day, second row
@@ -418,7 +418,7 @@ func TestSyncFullAfterTargetedWalksDoneToTheEnd(t *testing.T) {
 			mk(5, "2026-07-01T10:00:00Z", StateDone), mk(4, "2026-06-01T10:00:00Z", StateDone), // never walked by the week
 		},
 	}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, week); err != nil {
 		t.Fatal(err)
 	}
@@ -426,14 +426,14 @@ func TestSyncFullAfterTargetedWalksDoneToTheEnd(t *testing.T) {
 		t.Fatalf("targeted calls = %s", got)
 	}
 	if n := len(m.All()); n != 5 {
-		t.Fatalf("after the week walk remembered %d, want 5", n)
+		t.Fatalf("after the week walk cached %d, want 5", n)
 	}
 	src.calls = nil
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(m.All()); n != 7 {
-		t.Errorf("after the full walk remembered %d, want 7 (calls %s)", n, strings.Join(src.calls, " "))
+		t.Errorf("after the full walk cached %d, want 7 (calls %s)", n, strings.Join(src.calls, " "))
 	}
 	// Now the done list HAS been walked to its end: the next full walk
 	// may stop at the first fully-known page.
@@ -454,7 +454,7 @@ func TestAFailedPendingWalkResumesOnePageBack(t *testing.T) {
 		mk(3, "2026-08-12T10:00:00Z", StatePending), mk(4, "2026-08-13T10:00:00Z", StatePending),
 		mk(5, "2026-08-14T10:00:00Z", StatePending), mk(6, "2026-08-15T10:00:00Z", StatePending),
 	}}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
 		t.Fatal("expected the page failure to fail the walk")
 	}
@@ -472,7 +472,7 @@ func TestAFailedPendingWalkResumesOnePageBack(t *testing.T) {
 		t.Errorf("resumed walk = %s, want it to restart at pending/2", got)
 	}
 	if n := len(m.All()); n != 6 {
-		t.Errorf("after the resumed walk remembered %d, want 6", n)
+		t.Errorf("after the resumed walk cached %d, want 6", n)
 	}
 	// The mark is spent: the walk after a successful one starts over.
 	src.calls = nil
@@ -496,7 +496,7 @@ func TestAResumedPendingWalkDoesNotJudgeAbsence(t *testing.T) {
 		mk(1, "2026-08-11T10:00:00Z", StatePending),
 	}
 	src := &fakeSource{per: 1, pending: all}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +540,7 @@ func TestAFailedDoneWalkResumesWithoutRepeatingPending(t *testing.T) {
 			mk(5, "2026-08-14T10:00:00Z", StateDone), mk(6, "2026-08-15T10:00:00Z", StateDone),
 		},
 	}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
 		t.Fatal("expected the page failure")
 	}
@@ -555,7 +555,7 @@ func TestAFailedDoneWalkResumesWithoutRepeatingPending(t *testing.T) {
 		t.Errorf("resumed walk = %s, want the done list from page 2 and no pending pages", got)
 	}
 	if !m.Walked() || len(m.All()) != 7 {
-		t.Errorf("after the resume: walked=%v remembered=%d, want true and 7", m.Walked(), len(m.All()))
+		t.Errorf("after the resume: walked=%v cached=%d, want true and 7", m.Walked(), len(m.All()))
 	}
 }
 
@@ -568,7 +568,7 @@ func TestAResumeBelongsToItsWindow(t *testing.T) {
 		mk(3, "2026-08-19T10:00:00Z", StatePending), mk(4, "2026-08-20T10:00:00Z", StatePending),
 		mk(5, "2026-08-21T10:00:00Z", StatePending), mk(6, "2026-08-22T10:00:00Z", StatePending),
 	}}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
 		t.Fatal("expected the page failure")
 	}
@@ -610,18 +610,18 @@ func sortedCalls(src *fakeSource) string {
 // A walk whose first page names the list's length fetches the rest
 // walkConcurrency at a time: GitLab answers a page in seconds, and a real
 // history of a dozen pages walked one after another outlasted the refresh
-// window. What it remembers is exactly what the serial walk remembers.
+// window. What it caches is exactly what the serial walk caches.
 func TestAConcurrentWalkTakesRoundTripsNotPages(t *testing.T) {
 	const pages, delay = 24, 50 * time.Millisecond
 	pending, done := history(pages)
 	serial := &fakeSource{per: 1, pending: pending, done: done}
-	want := NewMemory()
+	want := NewCache()
 	if err := want.Sync(context.Background(), serial, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 
 	src := &fakeSource{per: 1, pending: pending, done: done, totals: true, delay: delay}
-	m := NewMemory()
+	m := NewCache()
 	start := time.Now()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
@@ -639,7 +639,7 @@ func TestAConcurrentWalkTakesRoundTripsNotPages(t *testing.T) {
 		t.Errorf("the walk asked for %d pages, want %d", got, pages+1)
 	}
 	if !reflect.DeepEqual(m.Snapshot(), want.Snapshot()) || !m.Walked() {
-		t.Error("the concurrent walk remembers something other than the serial one")
+		t.Error("the concurrent walk caches something other than the serial one")
 	}
 }
 
@@ -649,7 +649,7 @@ func TestAConcurrentWalkTakesRoundTripsNotPages(t *testing.T) {
 func TestAConcurrentWalkFailureResumesOnePageBack(t *testing.T) {
 	pending, done := history(8)
 	src := &fakeSource{per: 1, pending: pending, done: done, totals: true, failOn: "pending/5"}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err == nil {
 		t.Fatal("expected the page failure to fail the walk")
 	}
@@ -667,7 +667,7 @@ func TestAConcurrentWalkFailureResumesOnePageBack(t *testing.T) {
 		t.Errorf("resumed walk = %s", got)
 	}
 	if n := len(m.All()); n != 9 {
-		t.Errorf("after the resume remembered %d, want 9", n)
+		t.Errorf("after the resume cached %d, want 9", n)
 	}
 }
 
@@ -676,7 +676,7 @@ func TestAConcurrentWalkFailureResumesOnePageBack(t *testing.T) {
 func TestAConcurrentWalkJudgesAbsenceOnlyWhenComplete(t *testing.T) {
 	all, _ := history(6)
 	src := &fakeSource{per: 1, pending: all, totals: true}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +712,7 @@ func TestAConcurrentWeekWalkStopsAtTheWeek(t *testing.T) {
 	all, _ := history(16) // 2026-08-25 back to 2026-08-10
 	week := at("2026-08-17T00:00:00Z")
 	src := &fakeSource{per: 1, pending: all, totals: true}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -745,12 +745,12 @@ func TestAConcurrentWeekWalkStopsAtTheWeek(t *testing.T) {
 func TestAListLongerThanItsFirstPageSaidIsWalkedToTheEnd(t *testing.T) {
 	pending, done := history(6)
 	src := &growing{fakeSource: fakeSource{per: 1, pending: pending, done: done, totals: true}, said: 3}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(m.All()); n != 7 {
-		t.Errorf("remembered %d, want all 7", n)
+		t.Errorf("cached %d, want all 7", n)
 	}
 }
 
@@ -769,13 +769,13 @@ func (g *growing) Page(ctx context.Context, state string, page int) (Reply, erro
 	return r, err
 }
 
-// A memory answers what a walk changed, grid by grid, and nothing for a
+// A cache answers what a walk changed, grid by grid, and nothing for a
 // walk that changed nothing: that diff is what the plugin announces to the
 // node, so a change it misses never repaints and a change it invents
 // repaints for nothing.
 func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
 	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(2, "2026-08-18T10:00:00Z", StatePending)}}
-	m := NewMemory()
+	m := NewCache()
 	sync := func() []string {
 		t.Helper()
 		if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
@@ -809,7 +809,7 @@ func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
 		t.Errorf("a repeated mark-done changed %v", got)
 	}
 	// A restore is what was already answered: nothing to announce.
-	fresh := NewMemory()
+	fresh := NewCache()
 	fresh.Restore(m.Snapshot())
 	if got := fresh.TakeChanges().Grids(); got != nil {
 		t.Errorf("a restore changed %v", got)
@@ -822,7 +822,7 @@ func TestChangesNameExactlyTheListingsThatMoved(t *testing.T) {
 // todo.
 func TestABodyChangedInPlaceIsItsTodoNotItsWeek(t *testing.T) {
 	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(2, "2026-08-18T10:00:00Z", StatePending)}}
-	m := NewMemory()
+	m := NewCache()
 	sync := func() Changes {
 		t.Helper()
 		if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
@@ -855,11 +855,11 @@ func TestABodyChangedInPlaceIsItsTodoNotItsWeek(t *testing.T) {
 	}
 }
 
-// A glance pages newest-first until a page carries a todo memory knows:
+// A glance pages newest-first until a page carries a todo the cache knows:
 // above it everything is new. It never judges absence.
 func TestAGlancePagesOnlyToTheFirstKnownTodo(t *testing.T) {
 	src := &fakeSource{per: 2, pending: []Todo{mk(1, "2026-08-10T10:00:00Z", StatePending), mk(2, "2026-08-11T10:00:00Z", StatePending)}}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -882,7 +882,7 @@ func TestAGlancePagesOnlyToTheFirstKnownTodo(t *testing.T) {
 		t.Errorf("a glance over a page of news asked %s", got)
 	}
 	if len(m.All()) != 5 {
-		t.Errorf("remembered %d, want 5", len(m.All()))
+		t.Errorf("cached %d, want 5", len(m.All()))
 	}
 	if one, _ := m.Get(1); one.Done() {
 		t.Error("a glance judged absence")
@@ -923,7 +923,7 @@ func (g *gatedSource) Page(ctx context.Context, state string, page int) (Reply, 
 // GitLab's word again, a reopen included.
 func TestAMarkOutlivesAPageFetchedBeforeIt(t *testing.T) {
 	src := &fakeSource{per: 10, pending: []Todo{mk(1, "2026-08-18T10:00:00Z", StatePending)}}
-	m := NewMemory()
+	m := NewCache()
 	if err := m.Sync(context.Background(), src, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -961,6 +961,6 @@ func TestAMarkOutlivesAPageFetchedBeforeIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, _ := m.Get(1); got.State != StatePending {
-		t.Fatalf("a page fetched after the mark says pending, memory says %q", got.State)
+		t.Fatalf("a page fetched after the mark says pending, the cache says %q", got.State)
 	}
 }

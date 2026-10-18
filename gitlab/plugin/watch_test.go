@@ -216,7 +216,7 @@ func listed(t *testing.T, p *Plugin, gridKey, key string) *pluginv1.Entry {
 	return nil
 }
 
-// A landed walk that changed memory tells every watcher exactly the listings
+// A landed walk that changed the cache tells every watcher exactly the listings
 // it moved, and one that changed nothing tells nobody anything. Before Watch
 // nothing outside the plugin observed a walk landing: the node repainted only
 // when it next read.

@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// Memory is everything the plugin has seen: the record of every thread, and
+// Cache is everything the plugin has seen: the record of every thread, and
 // which threads each grid last held. It survives a restart through the
 // cache file in the plugin's state directory — see Snapshot and store.go —
-// which holds this plugin's memory of ITS SOURCE and never a node fact.
+// which holds this plugin's cache of ITS SOURCE and never a node fact.
 //
 // A grid's membership is REPLACED by a walk that read the whole box,
 // and only merged into by one that did not: a box listing is a live
@@ -21,7 +21,7 @@ import (
 // thread's record outlives its membership, so a tile whose thread has left
 // every box still reads as the email it was, until HEY says the thread is
 // gone (Forget).
-type Memory struct {
+type Cache struct {
 	mu      sync.Mutex
 	threads map[int64]*Thread
 	members map[string][]int64 // grid key → topic ids
@@ -52,9 +52,9 @@ type Memory struct {
 	moved map[int64]bool
 }
 
-// NewMemory builds an empty memory.
-func NewMemory() *Memory {
-	return &Memory{
+// NewCache builds an empty cache.
+func NewCache() *Cache {
+	return &Cache{
 		threads:  map[int64]*Thread{},
 		members:  map[string][]int64{},
 		postings: map[string]map[int64]int64{},
@@ -69,14 +69,14 @@ func NewMemory() *Memory {
 // BeginWalk opens a read of one grid's box: from here until its Absorb
 // or EndWalk, every event applied to the grid is kept and replayed over
 // the read's answer. One walk per grid at a time.
-func (m *Memory) BeginWalk(grid string) {
+func (m *Cache) BeginWalk(grid string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.journal[grid] = []Event{}
 }
 
 // EndWalk closes a read that brought no answer.
-func (m *Memory) EndWalk(grid string) {
+func (m *Cache) EndWalk(grid string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.journal, grid)
@@ -88,7 +88,7 @@ func (m *Memory) EndWalk(grid string) {
 // absence in a partial read is not evidence. The events applied while the
 // walk was open are then replayed in order, so the feed's word stands over a
 // read that began before it.
-func (m *Memory) Absorb(grid string, read []Thread, whole bool) Effect {
+func (m *Cache) Absorb(grid string, read []Thread, whole bool) Effect {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	before, beforeAll := m.gridLocked(grid), m.everythingLocked()
@@ -128,7 +128,7 @@ func (m *Memory) Absorb(grid string, read []Thread, whole bool) Effect {
 // the listing a first walk brings is the whole one, and an event's thread
 // alone is not — but the thread's record is kept, and the event is replayed
 // over that walk if one is open.
-func (m *Memory) Apply(grid string, ev Event) Effect {
+func (m *Cache) Apply(grid string, ev Event) Effect {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	before, beforeAll := m.gridLocked(grid), m.everythingLocked()
@@ -144,7 +144,7 @@ func (m *Memory) Apply(grid string, ev Event) Effect {
 // effectLocked is what a change to one grid did, measured against
 // the listings from before it. A thread that left everything becomes a
 // stray; one that came back is none.
-func (m *Memory) effectLocked(grid string, before, beforeAll []Thread) Effect {
+func (m *Cache) effectLocked(grid string, before, beforeAll []Thread) Effect {
 	all := m.everythingLocked()
 	in := make(map[int64]bool, len(all))
 	for i := range all {
@@ -169,7 +169,7 @@ func (m *Memory) effectLocked(grid string, before, beforeAll []Thread) Effect {
 // putLocked records t. A thread whose known stamp moved to another known one
 // changed in place, a reply landed on it, and is noted moved; a stamp first
 // learned, or a read that does not say, is no change to the page anyone saw.
-func (m *Memory) putLocked(t *Thread) {
+func (m *Cache) putLocked(t *Thread) {
 	if was, ok := m.threads[t.TopicID]; ok && !was.ActiveAt.IsZero() && !t.ActiveAt.IsZero() && !was.ActiveAt.Equal(t.ActiveAt) {
 		m.moved[t.TopicID] = true
 	}
@@ -179,7 +179,7 @@ func (m *Memory) putLocked(t *Thread) {
 // TakeStrays hands out the n threads that left every box and have waited
 // longest to be asked about. The caller asks HEY whether each still exists
 // and answers with Forget or Stray.
-func (m *Memory) TakeStrays(n int) []int64 {
+func (m *Cache) TakeStrays(n int) []int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := m.strayOrderLocked()
@@ -191,7 +191,7 @@ func (m *Memory) TakeStrays(n int) []int64 {
 }
 
 // Stray hands a thread back to the end of the queue, to be asked about again.
-func (m *Memory) Stray(topicID int64) {
+func (m *Cache) Stray(topicID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, known := m.threads[topicID]; known && !m.memberLocked(topicID) {
@@ -199,14 +199,14 @@ func (m *Memory) Stray(topicID int64) {
 	}
 }
 
-func (m *Memory) strayLocked(topicID int64) {
+func (m *Cache) strayLocked(topicID int64) {
 	if _, queued := m.strays[topicID]; !queued {
 		m.strays[topicID] = m.next
 		m.next++
 	}
 }
 
-func (m *Memory) strayOrderLocked() []int64 {
+func (m *Cache) strayOrderLocked() []int64 {
 	out := make([]int64, 0, len(m.strays))
 	for id := range m.strays {
 		out = append(out, id)
@@ -217,7 +217,7 @@ func (m *Memory) strayOrderLocked() []int64 {
 
 // Forget drops a thread's record once HEY said it no longer has it. A thread
 // some box has listed again since is kept.
-func (m *Memory) Forget(topicID int64) {
+func (m *Cache) Forget(topicID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.memberLocked(topicID) {
@@ -228,7 +228,7 @@ func (m *Memory) Forget(topicID int64) {
 
 // applyLocked is Apply without the bookkeeping; it reports whether only a
 // walk can apply the event.
-func (m *Memory) applyLocked(grid string, ev Event) (rewalk bool) {
+func (m *Cache) applyLocked(grid string, ev Event) (rewalk bool) {
 	switch ev.Change {
 	case ChangeAdded, ChangeUpdated:
 		if ev.Thread.TopicID == 0 {
@@ -261,7 +261,7 @@ func (m *Memory) applyLocked(grid string, ev Event) (rewalk bool) {
 				return false
 			}
 		}
-		// Not a posting this memory maps. If every member is mapped, it is
+		// Not a posting this cache maps. If every member is mapped, it is
 		// not one the listing shows — a bundle — and nothing changes;
 		// otherwise it may be a restored member, and only a read can say.
 		for _, id := range m.members[grid] {
@@ -273,10 +273,10 @@ func (m *Memory) applyLocked(grid string, ev Event) (rewalk bool) {
 	return false
 }
 
-// Shows reports whether the memory has a listing of the grid to
+// Shows reports whether the cache has a listing of the grid to
 // answer with — a walk, or the snapshot of one, even of an empty box. It is
 // the one owner of "warm".
-func (m *Memory) Shows(grid string) bool {
+func (m *Cache) Shows(grid string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_, ok := m.members[grid]
@@ -335,13 +335,13 @@ func union(a, b []int64) []int64 {
 // Grid answers one grid's threads, oldest first — the order the
 // placement hints are derived from, so two nodes lay the same mail out the
 // same way. A thread whose record is missing is skipped rather than invented.
-func (m *Memory) Grid(key string) []Thread {
+func (m *Cache) Grid(key string) []Thread {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.gridLocked(key)
 }
 
-func (m *Memory) gridLocked(key string) []Thread {
+func (m *Cache) gridLocked(key string) []Thread {
 	ids := m.members[key]
 	out := make([]Thread, 0, len(ids))
 	for _, id := range ids {
@@ -355,13 +355,13 @@ func (m *Memory) gridLocked(key string) []Thread {
 
 // Everything answers every thread some grid holds, each once, oldest
 // first.
-func (m *Memory) Everything() []Thread {
+func (m *Cache) Everything() []Thread {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.everythingLocked()
 }
 
-func (m *Memory) everythingLocked() []Thread {
+func (m *Cache) everythingLocked() []Thread {
 	var ids []int64
 	for _, c := range Grids {
 		ids = union(ids, m.members[c.Key])
@@ -376,7 +376,7 @@ func (m *Memory) everythingLocked() []Thread {
 	return out
 }
 
-// Presence is what memory can say about a thread in one grid.
+// Presence is what the cache can say about a thread in one grid.
 type Presence int
 
 const (
@@ -388,7 +388,7 @@ const (
 // InBox says whether a grid holds a thread: Present while it does,
 // Gone once a whole walk did not list it or the feed deleted the posting
 // that held it, and Unknown otherwise.
-func (m *Memory) InBox(grid string, topicID int64) Presence {
+func (m *Cache) InBox(grid string, topicID int64) Presence {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
@@ -402,7 +402,7 @@ func (m *Memory) InBox(grid string, topicID int64) Presence {
 
 // Get answers one thread's record, whatever grid it is in and whether
 // or not it still is in one.
-func (m *Memory) Get(topicID int64) (Thread, bool) {
+func (m *Cache) Get(topicID int64) (Thread, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t, ok := m.threads[topicID]
@@ -413,13 +413,13 @@ func (m *Memory) Get(topicID int64) (Thread, bool) {
 }
 
 // Member reports whether some grid currently holds the thread.
-func (m *Memory) Member(topicID int64) bool {
+func (m *Cache) Member(topicID int64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.memberLocked(topicID)
 }
 
-func (m *Memory) memberLocked(topicID int64) bool {
+func (m *Cache) memberLocked(topicID int64) bool {
 	for _, ids := range m.members {
 		if slices.Contains(ids, topicID) {
 			return true
@@ -431,7 +431,7 @@ func (m *Memory) memberLocked(topicID int64) bool {
 // Swept reports whether every grid has been read to its end at least
 // once. It is the one gate on answering GONE: only a complete sweep of all
 // boxes can say a thread is in none of them.
-func (m *Memory) Swept() bool {
+func (m *Cache) Swept() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, c := range Grids {
@@ -442,8 +442,8 @@ func (m *Memory) Swept() bool {
 	return true
 }
 
-// All answers every remembered thread, oldest first.
-func (m *Memory) All() []Thread {
+// All answers every cached thread, oldest first.
+func (m *Cache) All() []Thread {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Thread, 0, len(m.threads))
