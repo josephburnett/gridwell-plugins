@@ -6,7 +6,7 @@
 //
 // The whole point is ServeContent. A listed entry that declares serves_page
 // is a page tile, and descending into one asks this plugin for HTML through
-// the node's content door; a resource the page names by a relative URL comes
+// the node's content API; a resource the page names by a relative URL comes
 // back as the same call with a subpath. The plugin never learns the tile's
 // id, the page's address, or where it is on a grid: those are node facts.
 package plugin
@@ -78,7 +78,7 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 		}
 		if d.Page != nil {
 			// A doc with a page is a url entry serving from the plugin: the
-			// node derives its address at the /content/ door, so there is
+			// node derives its address at the /content/ API, so there is
 			// none to declare.
 			e.Kind = rpc.KindURL
 			e.ServesPage = true
@@ -109,11 +109,11 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 	})
 }
 
-// ServeContent is the web door's plugin half. Subpath "" is the doc's page;
+// ServeContent is the content API's plugin half. Subpath "" is the doc's page;
 // any other subpath is one of that page's own resources, named by the page's
 // relative URLs and resolved by the browser against the tile's address. A
-// subpath the page does not name is a 404 page rather than an error: the door
-// is a browser's, and a missing resource is an ordinary web answer.
+// subpath the page does not name is a 404 page rather than an error: the
+// content API is a browser's, and a missing resource is an ordinary web answer.
 func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1.Plugin_ServeContentServer) error {
 	d := site.Lookup(req.Key)
 	if d == nil || d.Page == nil {
@@ -137,8 +137,8 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 	})
 }
 
-// notFound is the door's own 404: a real HTTP status on the first chunk, so
-// the node writes 404 headers and the browser sees a miss rather than a
+// notFound is the content API's own 404: a real HTTP status on the first chunk,
+// so the node writes 404 headers and the browser sees a miss rather than a
 // gateway failure.
 func notFound(stream pluginv1.Plugin_ServeContentServer) error {
 	return stream.Send(&pluginv1.ServeContentChunk{

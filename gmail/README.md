@@ -3,7 +3,7 @@
 A read-only projection of one Gmail account into Gridwell: the inbox, the
 starred mail, and all mail, their union, with one tile per message.
 Descending into a tile opens the email itself, as the HTML the sender wrote,
-through the node's content door.
+through the node's content API.
 
 Nothing here writes to your mail. There is no delete, no archive, no reply,
 and the token the plugin holds carries the `gmail.readonly` scope and nothing

@@ -1,8 +1,9 @@
 // gridwell-plugin-gmail is the Gmail plugin binary: a read-only projection of
 // one Gmail account's inbox and starred mail, read through the Gmail API. The
-// config vocabulary is plugin.FromConfig's, the one derivation every door
-// shares. It holds no node fact — only a cache file, in the private directory
-// the node hands it as state_dir, holding the walk it would otherwise repeat.
+// config vocabulary is plugin.FromConfig's, the one derivation every entry
+// point shares. It holds no node fact — only a cache file, in the private
+// directory the node hands it as state_dir, holding the walk it would otherwise
+// repeat.
 //
 // It has one other mode, which the node never runs:
 //
@@ -32,7 +33,7 @@ func main() {
 	flag.Parse()
 
 	if !*auth {
-		// The node's door: config arrives in the environment, never in argv.
+		// The node's plugin API: config comes in the environment, never in argv.
 		guest.Main(plugin.FromConfig)
 		return
 	}

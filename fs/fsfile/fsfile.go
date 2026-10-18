@@ -31,8 +31,8 @@ import (
 // pageMediaTypes is fs's own table, deliberately not mime.TypeByExtension,
 // whose answers vary with the host's mime.types and would make serves_page
 // differ between machines. A file is a page when a browser presents it
-// natively; everything else still serves raw through the door, with a sniffed
-// type, but keeps its document descent.
+// natively; everything else still serves raw through the content API, with a
+// sniffed type, but keeps its document descent.
 var pageMediaTypes = map[string]string{
 	".png":  "image/png",
 	".jpg":  "image/jpeg",
@@ -59,11 +59,11 @@ var pageMediaTypes = map[string]string{
 	".txt":  "text/plain; charset=utf-8",
 }
 
-// ServesPage marks which of the served types are worth a page descent, which
-// is the same question as which files are url entries: what a browser presents
+// ServesPage marks which of the served types are worth a page descent, which is
+// the same question as which files are url entries: what a browser presents
 // natively as a whole document. A subresource type — css, js, json, txt —
-// serves through the door for pages that reference it but stays a text entry
-// with its own document descent.
+// serves through the content API for pages that reference it but stays a text
+// entry with its own document descent.
 func ServesPage(name string) bool {
 	mt := PageMediaType(name)
 	switch strings.SplitN(mt, "/", 2)[0] {
@@ -257,11 +257,11 @@ type ServeChunkSender interface {
 // file itself, confined to root; a non-empty subpath is a page-relative
 // resource resolved against the file's directory and confined to that
 // directory's subtree, which is the plugin-side guarantee, independent of the
-// door's URL grammar. Both confinements see through symlinks (Resolve). A
-// named file that links out of the root is refused with that reason, a
+// content API's URL grammar. Both confinements see through symlinks (Resolve).
+// A named file that links out of the root is refused with that reason, a
 // resource that does is a 404 page like any other it cannot have. Absence
-// answers a 404 page; a file that is there and cannot be read is an error
-// that says why.
+// answers a 404 page; a file that is there and cannot be read is an error that
+// says why.
 func ServeFile(stream ServeChunkSender, root, dirPath, name, subpath string) error {
 	target := filepath.Join(dirPath, name)
 	served, confine := name, root
@@ -304,8 +304,8 @@ func ServeFile(stream ServeChunkSender, root, dirPath, name, subpath string) err
 		return readErr
 	}
 	if mediaType == "" {
-		// The door sets X-Content-Type-Options: nosniff, so this server-side
-		// sniff is the only one that happens.
+		// The content API sets X-Content-Type-Options: nosniff, so this
+		// server-side sniff is the only one that happens.
 		mediaType = http.DetectContentType(buf[:n])
 	}
 	if err := stream.Send(&gridwellv1.ServeContentChunk{Status: 200, MediaType: mediaType, Data: buf[:n]}); err != nil {
@@ -343,7 +343,7 @@ func notFoundPage(stream ServeChunkSender) error {
 
 const (
 	// previewMaxEdge bounds the thumbnail: previews are small tiles, and the
-	// full image is always one descent away through the /content/ door.
+	// full image is always one descent away through the /content/ API.
 	previewMaxEdge = 512
 	// previewFileCap skips very large files rather than decode them on every
 	// grid paint. Past it the tile falls back to its label, like a url tile

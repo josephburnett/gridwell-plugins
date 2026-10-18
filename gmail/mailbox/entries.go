@@ -15,7 +15,7 @@ type Entry = pluginv1.Entry
 // message.
 //
 // A message is a page, so it is a url entry that serves one: the node derives
-// the address at its /content/ door, so there is none to declare here, and a
+// the address at its /content/ API, so there is none to declare here, and a
 // url entry offers no text body beside the page.
 func CollectionEntries(views []View) []*Entry {
 	return entries(AllMailContext, views)

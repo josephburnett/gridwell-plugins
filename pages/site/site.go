@@ -63,11 +63,11 @@ type Page struct {
 	// it, as renderIndex does.
 	Body template.HTML
 	// Stylesheet, when set, is a page-relative subpath linked from <head>. It
-	// proves the door's subpath half: the browser resolves it against
+	// proves the content API's subpath half: the browser resolves it against
 	// .../<tile-id>/ and asks the plugin for it by name.
 	Stylesheet string
 	// Assets are the page-relative resources by subpath. A subpath the map
-	// does not hold is a 404, decided here rather than at the door.
+	// does not hold is a 404, decided here rather than at the content API.
 	Assets map[string]Asset
 }
 
@@ -142,10 +142,10 @@ A plugin that serves web pages it makes up.
 
 Every tile in this grid is a key this plugin answers for. Three of them carry
 a page: descending into one asks the plugin for HTML through the node's
-content door, and what comes back is the page you see. Nothing is read from
+content API, and what comes back is the page you see. Nothing is read from
 disk — the bytes are generated to answer the request.
 
-## The door
+## The content API
 
 The node serves a page at ` + "`/content/<token>/<tile-id>/`" + ` and turns
 anything after that trailing slash into the subpath of a ServeContent call.

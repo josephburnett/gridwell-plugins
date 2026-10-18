@@ -3,7 +3,7 @@
 // inbox and the starred mail — as two grids, one context each, read through
 // the Gmail API, and all mail, their union, as a third. A message is one url
 // tile in all mail that serves a page, the email itself as the HTML the
-// sender wrote, through the node's content door; a label lists links to it,
+// sender wrote, through the node's content API; a label lists links to it,
 // so a message starred out of the inbox keeps its one tile.
 //
 // It is a READ-ONLY projection. The token it holds carries the
@@ -123,7 +123,7 @@ type Plugin struct {
 	refresh time.Duration
 	max     int
 	clock   memo.Clock
-	// logf is the plugin's one log door: what must not be swallowed and must
+	// logf is the plugin's one log path: what must not be swallowed and must
 	// not fail a read — a cache it could not read or write, a metadata fetch
 	// that failed — once per episode (episodes).
 	logf     func(format string, args ...any)

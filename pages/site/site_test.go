@@ -29,8 +29,8 @@ func TestAPageIsTheSameBytesEveryTime(t *testing.T) {
 }
 
 // Every page is a whole document, because the node hands the bytes straight to
-// a browser: there is no wrapper, no template around it at the door, and a
-// fragment would render as one.
+// a browser: there is no wrapper, no template around it at the content API, and
+// a fragment would render as one.
 func TestEveryPageIsAWholeDocument(t *testing.T) {
 	for _, d := range Docs() {
 		if d.Page == nil {

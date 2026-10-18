@@ -298,7 +298,7 @@ func fileFacts(out *pluginv1.Entry, dir, name string) {
 	out.PreviewStamp = fsfile.PreviewStamp(dir, name)
 	if fsfile.ServesPage(name) {
 		// A file the browser presents whole is a url entry, and the node
-		// derives its address at the /content/ door, so there is none to
+		// derives its address at the /content/ API, so there is none to
 		// declare. It carries no text body: a url entry has no document
 		// face beside the page.
 		out.Kind = "url"

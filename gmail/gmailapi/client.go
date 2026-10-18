@@ -105,7 +105,7 @@ func endpointOptions(endpoint string) []option.ClientOption {
 
 // NewForTest builds a client against an alternate endpoint with no
 // credentials, which is how the contract tests reach a fake Gmail. It is
-// exported so the plugin package's own seam test can use the same door.
+// exported so the plugin package's own seam test can use the same way in.
 func NewForTest(ctx context.Context, endpoint string, hc *http.Client) (*Client, error) {
 	return newService(ctx, append(endpointOptions(endpoint), option.WithHTTPClient(hc))...)
 }

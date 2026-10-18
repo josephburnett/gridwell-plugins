@@ -12,7 +12,7 @@ import (
 // is a box's fact, so these tiles carry no status.
 //
 // A thread is a page, so it is a url entry that serves one: the node derives
-// the address at its /content/ door, so there is none to declare here, and a
+// the address at its /content/ API, so there is none to declare here, and a
 // url entry offers no text body beside the page.
 func CollectionEntries(threads []Thread) []*pluginv1.Entry {
 	out := make([]*pluginv1.Entry, 0, len(threads))

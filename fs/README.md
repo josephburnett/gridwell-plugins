@@ -28,7 +28,7 @@ directory it resolves to.
 
 - A directory is a well onto its own grid.
 - A file a browser presents whole (images, video, audio, HTML, PDF) is a url
-  tile whose page the node serves through its `/content/` door. A page's
+  tile whose page the node serves through its `/content/` API. A page's
   relative resources are served from its own directory and below, never
   above it.
 - Every other file is a text tile. Plain-text families (source, config,

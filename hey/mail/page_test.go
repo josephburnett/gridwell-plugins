@@ -223,7 +223,7 @@ func TestPlainDocumentPassesThrough(t *testing.T) {
 }
 
 // The page introduces no address but the thread's own in HEY: the stylesheet
-// loads nothing, so it renders under any policy the door sets.
+// loads nothing, so it renders under any policy the content API sets.
 func TestPageIntroducesNoExternalURL(t *testing.T) {
 	in := doc(article("1", "2026-01-05T14:03", `<header>From: Wren — 2026-01-05T14:03</header><a href="https://kites.example/">kites</a>`+
 		figure(t, map[string]any{"contentType": "text/html", "content": shadow(`<img src="https://img.example/a.png">`)})))

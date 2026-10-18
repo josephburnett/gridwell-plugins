@@ -18,7 +18,7 @@ func (m *Message) Preview() string {
 }
 
 // NoticeHTML is the page for a message with no body to show. It is a whole
-// document because that is what the content door serves, and it says which
+// document because that is what the content API serves, and it says which
 // message and why rather than showing an empty frame.
 func NoticeHTML(title, detail string) []byte {
 	return []byte("<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">\n<title>" +

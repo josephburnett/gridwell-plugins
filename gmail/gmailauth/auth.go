@@ -170,8 +170,8 @@ func (s *savingSource) Token() (*oauth2.Token, error) {
 }
 
 // AuthorizeTimeout bounds how long the flow waits for the user to finish at
-// Google. A listener left open forever on a machine nobody is sitting at is a
-// door with nothing behind it.
+// Google. A listener left open forever on a machine nobody is sitting at is an
+// open port with nothing behind it.
 const AuthorizeTimeout = 5 * time.Minute
 
 // shutdownGrace bounds how long Authorize waits for the browser's page to be

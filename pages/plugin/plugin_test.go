@@ -50,7 +50,7 @@ func serve(t *testing.T, p *Plugin, key, subpath string) *pluginv1.ServeContentC
 
 // A doc with a page is a URL row that serves it; a doc without one is a text
 // row with its note. The address is still not the plugin's to hold: the node
-// derives it at the /content/ door when the page is opened, which is what
+// derives it at the /content/ API when the page is opened, which is what
 // serves_page beside an empty url_string says.
 func TestAPageDocIsAURLRowAndANoteATextRow(t *testing.T) {
 	p := New()
@@ -115,8 +115,8 @@ func TestAnyOtherContextIsEmptyAndAuthoritative(t *testing.T) {
 }
 
 // Subpath "" is the page; a named subpath is one of its resources. Both are
-// 200s with a real media type, because the door writes its headers from the
-// first chunk and a plugin that left them empty would serve a typeless body
+// 200s with a real media type, because the content API writes its headers from
+// the first chunk and a plugin that left them empty would serve a typeless body
 // under nosniff.
 func TestServeContentServesThePageAndItsResources(t *testing.T) {
 	p := New()
@@ -142,9 +142,9 @@ func TestServeContentServesThePageAndItsResources(t *testing.T) {
 	}
 }
 
-// Absence is a 404 PAGE, not an RPC error: the door maps an error to 404 too,
-// but only after losing the chance to say anything, and a page whose image is
-// missing must still render.
+// Absence is a 404 PAGE, not an RPC error: the content API maps an error to 404
+// too, but only after losing the chance to say anything, and a page whose image
+// is missing must still render.
 func TestAbsenceIsA404Page(t *testing.T) {
 	p := New()
 	for _, c := range []struct{ key, subpath string }{

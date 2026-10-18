@@ -3,7 +3,7 @@
 // context each, walked through the official HEY CLI and kept current by its
 // live feed while a Watch stream is open (watch.go), and everything, their
 // union, as a seventh. A thread is one url tile in everything that serves a
-// page, the email itself as HEY's own HTML through the node's content door;
+// page, the email itself as HEY's own HTML through the node's content API;
 // a box lists links to it, so a thread that moves between boxes keeps its
 // one tile.
 //
@@ -504,11 +504,10 @@ func (p *Plugin) readAll(ctx context.Context) (unreachable string, err error) {
 }
 
 // ServeContent is the email. Subpath "" is the thread, as mail.Page presents
-// the HTML HEY served; any other subpath is a resource named by a relative
-// URL, and those are paths in HEY's own app that this door cannot serve, so it
-// is an ordinary 404 rather than an error. The document is
-// fetched on descent and never remembered: a mailbox listing is small and a
-// mailbox's bodies are not.
+// the HTML HEY served; any other subpath is a resource named by a relative URL,
+// and those are paths in HEY's own app that this plugin cannot serve, so it is
+// an ordinary 404 rather than an error. The document is fetched on descent and
+// never remembered: a mailbox listing is small and a mailbox's bodies are not.
 func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1.Plugin_ServeContentServer) error {
 	id, ok := mail.ParseKey(req.Key)
 	if !ok || req.Subpath != "" {

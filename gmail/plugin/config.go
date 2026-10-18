@@ -14,9 +14,9 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// FromConfig builds the production plugin from the shared config vocabulary.
-// It is the one owner of the config-to-plugin derivation, so the subprocess
-// main and any other door compose exactly the same plugin. Nothing runs until
+// FromConfig builds the production plugin from the shared config vocabulary. It
+// is the one owner of the config-to-plugin derivation, so the subprocess main
+// and any other entry point compose exactly the same plugin. Nothing runs until
 // a call or a Watch asks.
 //
 // The config carries PATHS and never secrets:

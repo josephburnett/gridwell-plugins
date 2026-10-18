@@ -7,7 +7,7 @@ tiles. The (+) menu offers four of them: imbox, reply later, set aside and
 everything. The Feed, the Paper Trail and Bubble Up are walked into
 everything but are not menu entries. A tile is named for the thread's sender
 and subject; descending into it opens the email itself, as HEY's own HTML,
-through the node's content door.
+through the node's content API.
 
 Nothing here writes to your mail. There is no delete, no archive, no reply.
 

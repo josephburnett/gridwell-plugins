@@ -10,9 +10,9 @@ import (
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
-// FromConfig builds the production plugin from the shared config vocabulary.
-// It is the one owner of the config-to-plugin derivation, so the subprocess
-// main and any other door compose exactly the same plugin. It starts nothing:
+// FromConfig builds the production plugin from the shared config vocabulary. It
+// is the one owner of the config-to-plugin derivation, so the subprocess main
+// and any other entry point compose exactly the same plugin. It starts nothing:
 // a walk runs for a call, and the live feed while a Watch stream is open.
 //
 // There is nothing required to configure: the HEY CLI holds the account and

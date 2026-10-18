@@ -213,7 +213,7 @@ func watchHost() {
 }
 
 // Serve serves impl over the managed subprocess transport. Main is the
-// usual door; Serve is for a main that builds its plugin some other way.
+// usual entry point; Serve is for a main that builds its plugin some other way.
 func Serve(impl pluginv1.PluginServer) {
 	watchHost()
 	logger := hclog.New(&hclog.LoggerOptions{
