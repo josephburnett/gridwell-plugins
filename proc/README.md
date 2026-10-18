@@ -1,7 +1,7 @@
 # gridwell-plugin-proc
 
 A projection of the host's process tree into Gridwell: each process is a
-well whose grid lists its direct children, plus an `@info` tile describing
+door whose grid lists its direct children, plus an `@info` tile describing
 it. It reads `/proc`, so it serves on Linux only. On a host without `/proc`
 (macOS) it builds, and refuses with the reason on the plugin's row.
 

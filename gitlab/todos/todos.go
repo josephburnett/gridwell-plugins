@@ -185,5 +185,5 @@ func ParseWeekKey(key string) (time.Time, bool) {
 	return t, true
 }
 
-// WeekLabel names a week well by its Monday.
+// WeekLabel names a week door by its Monday.
 func WeekLabel(start time.Time) string { return start.UTC().Format("2006-01-02") }

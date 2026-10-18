@@ -1,7 +1,7 @@
 # gridwell-plugin-fs
 
 A projection of one directory tree into Gridwell: each directory is a grid,
-each subdirectory a well, each file a tile. Deleting a tile moves the file to
+each subdirectory a door, each file a tile. Deleting a tile moves the file to
 the trash.
 
 ## Setup
@@ -26,7 +26,7 @@ directory it resolves to.
 
 ## Tiles
 
-- A directory is a well onto its own grid.
+- A directory is a door onto its own grid.
 - A file a browser presents whole (images, video, audio, HTML, PDF) is a url
   tile whose page the node serves through its `/content/` API. A page's
   relative resources are served from its own directory and below, never
@@ -66,7 +66,7 @@ file and directory has one key.
 
 - A link to a file in the tree is a link tile (drawn dashed) to that file.
   It reads, previews and opens as the file.
-- A link to a directory in the tree is a well onto that directory's own
+- A link to a directory in the tree is a door onto that directory's own
   grid. A link back up the tree is the same grid again, not an endless
   descent.
 - A link whose target is outside the root, or does not exist, or loops, is

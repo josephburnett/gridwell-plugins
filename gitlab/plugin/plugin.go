@@ -345,7 +345,7 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 // The tile does not vanish — a todo never disappears from the grid, it changes
 // state — so the next listing shows it done and the week's counts move. The
 // flip lands in memory and its file only after GitLab accepted the
-// write, so a refused write changes nothing anywhere. A week well refuses:
+// write, so a refused write changes nothing anywhere. A week door refuses:
 // one gesture must not resolve a whole week. An already-done todo succeeds
 // without a write — the gesture is idempotent, like fs's already-gone path.
 func (p *Plugin) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {

@@ -278,7 +278,7 @@ func entryOf(context, dir, root string, e fssource.Entry) *pluginv1.Entry {
 	out := &pluginv1.Entry{Key: key, Label: e.Name}
 	switch e.Kind {
 	case fssource.KindDir:
-		out.Kind = "well"
+		out.Kind = "door"
 		out.ChildContext = key
 	case fssource.KindLink:
 		linkEntry(out, root, e)
@@ -310,7 +310,7 @@ func fileFacts(out *pluginv1.Entry, dir, name string) {
 }
 
 // linkEntry lists a symlink as a link to where it lands, so a thing reached
-// two ways is one key: a directory as a well onto the directory's own
+// two ways is one key: a directory as a door onto the directory's own
 // context, so a link back up the tree is one grid rather than an endless
 // descent, and a file as an entry whose link_target is the file's key. A link
 // that lands outside the root, or nowhere, targets the key of where it points,
@@ -322,7 +322,7 @@ func linkEntry(out *pluginv1.Entry, root string, e fssource.Entry) {
 	}
 	reachable := e.TargetKind != "" && !escapes(target)
 	if reachable && e.TargetKind == fssource.KindDir {
-		out.Kind = "well"
+		out.Kind = "door"
 		out.ChildContext = target
 		return
 	}

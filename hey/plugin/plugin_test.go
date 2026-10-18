@@ -193,7 +193,7 @@ func stable(t *testing.T, src Source, o Options) *Plugin {
 
 // The six boxes and everything are seven contexts and seven (+) menu entries.
 // There is no wrapper grid above them and no landing among them: a plugin is
-// not a place, it contributes doorways, and each collection is one.
+// not a place, it contributes doors, and each collection is one.
 func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 	p := stable(t, newFake(), Options{})
 	info, err := p.Info(context.Background(), &pluginv1.InfoRequest{})
@@ -220,11 +220,11 @@ func TestInfoDeclaresEveryCollectionAsAMenuEntry(t *testing.T) {
 		got[e.Context] = true
 	}
 	if len(info.MenuEntries) != 4 || !got[mail.EverythingContext] {
-		t.Fatalf("menu entries = %+v, want the three doorway boxes and everything", info.MenuEntries)
+		t.Fatalf("menu entries = %+v, want the three door boxes and everything", info.MenuEntries)
 	}
 	for _, c := range mail.Collections {
-		if got[c.Key] != c.Doorway {
-			t.Errorf("menu entry for %s = %v, want %v", c.Key, got[c.Key], c.Doorway)
+		if got[c.Key] != c.Door {
+			t.Errorf("menu entry for %s = %v, want %v", c.Key, got[c.Key], c.Door)
 		}
 	}
 }

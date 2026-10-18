@@ -282,7 +282,7 @@ func (k *killer) Kill(pid int64, _ syscall.Signal) error {
 	return k.answer
 }
 
-// Deleting a well stops its process. One already gone is done, so the node's
+// Deleting a door stops its process. One already gone is done, so the node's
 // probe retires its row; one the user may not signal is refused with a
 // sentence. An @info tile describes a process and is not one: deleting it
 // signals nothing.
@@ -337,7 +337,7 @@ func TestStateIsQuietAndNeverInTheLabel(t *testing.T) {
 	}
 	want := map[string]string{"10": "", "11": "", "12": "💀", "13": "⏸", "14": "⏸"}
 	for _, e := range resp.Entries {
-		if e.Kind != "well" {
+		if e.Kind != "door" {
 			if e.StatusDetail != "" {
 				t.Errorf("%s carries status %q; @info has no state", e.Key, e.StatusDetail)
 			}

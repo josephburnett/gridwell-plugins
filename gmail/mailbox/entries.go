@@ -50,7 +50,7 @@ func entries(context string, views []View) []*Entry {
 
 // MenuEntries declares every context, one (+) menu entry each, all mail
 // last. There is no privileged collection and no landing grid: a plugin is
-// not a place, it contributes doorways, and each of these is one.
+// not a place, it contributes doors, and each of these is one.
 func MenuEntries() []*pluginv1.MenuEntry {
 	out := make([]*pluginv1.MenuEntry, 0, len(Collections)+1)
 	for _, c := range Collections {

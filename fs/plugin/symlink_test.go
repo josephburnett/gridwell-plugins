@@ -57,7 +57,7 @@ func listed(t *testing.T, p *Plugin, ctxKey string) (*pluginv1.ListResponse, map
 
 // A symlink is a link to the thing it lands on, so every real file and
 // directory has one key: a linked file is an entry whose link_target is the
-// file's own key, and a linked directory a well onto the directory's own
+// file's own key, and a linked directory a door onto the directory's own
 // context, so a link back up the tree is one grid, not an endless descent.
 // A link out of the root, or to nothing, targets a key this plugin never
 // lists, which the node reads as dead.
@@ -82,16 +82,16 @@ func TestSymlinksListAsLinksToTheOneKey(t *testing.T) {
 		if got.GetContext() != want.Context || got.GetKey() != want.Key {
 			t.Errorf("%s links to %v, want %v", key, got, want)
 		}
-		if top[key].GetKind() == "well" {
-			t.Errorf("%s is a well; a link that is not a reachable directory is a link entry", key)
+		if top[key].GetKind() == "door" {
+			t.Errorf("%s is a door; a link that is not a reachable directory is a link entry", key)
 		}
 	}
 	if top["file"].GetKind() != "text" || top["file"].GetLabel() != "file" {
 		t.Errorf("file = %v, want a text link labelled with its own name", top["file"])
 	}
 	for key, child := range map[string]string{"dirlink": "dir", "cycle": "."} {
-		if e := top[key]; e.GetKind() != "well" || e.GetChildContext() != child || e.GetLinkTarget() != nil {
-			t.Errorf("%s = %v, want a well onto %q", key, e, child)
+		if e := top[key]; e.GetKind() != "door" || e.GetChildContext() != child || e.GetLinkTarget() != nil {
+			t.Errorf("%s = %v, want a door onto %q", key, e, child)
 		}
 	}
 	if e := top["real.md"]; e.GetLinkTarget() != nil {

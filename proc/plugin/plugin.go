@@ -159,7 +159,7 @@ func (p *Plugin) servable() error {
 }
 
 // parseKey resolves a key to the pid it names, and whether it is that pid's
-// @info tile rather than its well.
+// @info tile rather than its door.
 func parseKey(key string) (pid int64, info bool, err error) {
 	s, info := strings.CutPrefix(key, infoKeyPrefix)
 	pid, ok := parsePID(s)
@@ -210,7 +210,7 @@ func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1
 	for _, c := range children {
 		key := strconv.FormatInt(c.PID, 10)
 		resp.Entries = append(resp.Entries, &pluginv1.Entry{
-			Key: key, Kind: "well", Label: key, ChildContext: key,
+			Key: key, Kind: "door", Label: key, ChildContext: key,
 			StatusDetail: stateMark(c.State),
 		})
 	}
@@ -258,7 +258,7 @@ func (p *Plugin) ReadContent(req *pluginv1.ReadContentRequest, stream pluginv1.P
 		return err
 	}
 	if !isInfo {
-		// A process well carries no document body.
+		// A process door carries no document body.
 		return stream.Send(&pluginv1.ContentChunk{})
 	}
 	body, stamp, err := p.info(pid)
@@ -305,7 +305,7 @@ func presence(p pluginv1.ProbeResponse_Presence) *pluginv1.ProbeResponse {
 	return &pluginv1.ProbeResponse{Presence: p}
 }
 
-// Delete sends a well's process SIGTERM; the row retires once Probe says the
+// Delete sends a door's process SIGTERM; the row retires once Probe says the
 // process is gone, which for one already gone is at once. An @info tile is
 // refused: it describes a process and is not one.
 func (p *Plugin) Delete(_ context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {

@@ -78,8 +78,8 @@ func TestStatusIsTheUnseenMarkInABoxOnly(t *testing.T) {
 }
 
 // The (+) menu offers imbox, reply later, set aside and everything; the
-// other boxes are walked into everything but are not doorways.
-func TestMenuEntriesDeclareTheDoorways(t *testing.T) {
+// other boxes are walked into everything but are not doors.
+func TestMenuEntriesDeclareTheDoors(t *testing.T) {
 	got := MenuEntries()
 	want := []Collection{
 		{Key: ImboxContext, Label: "imbox"},
@@ -88,7 +88,7 @@ func TestMenuEntriesDeclareTheDoorways(t *testing.T) {
 		{Key: EverythingContext, Label: EverythingLabel},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("got %d menu entries, want the four doorways (%d)", len(got), len(want))
+		t.Fatalf("got %d menu entries, want the four doors (%d)", len(got), len(want))
 	}
 	for i, e := range got {
 		if e.Context != want[i].Key || e.Id != want[i].Key || e.Label != want[i].Label {

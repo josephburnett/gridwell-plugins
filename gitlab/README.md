@@ -1,6 +1,6 @@
 # gitlab
 
-Your GitLab todos as a grid: one well per week, one text tile per todo.
+Your GitLab todos as a grid: one door per week, one text tile per todo.
 Trashing a todo marks it done at GitLab.
 
 ## Config
