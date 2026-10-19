@@ -90,8 +90,8 @@ func TestGitLabFailingLogsOncePerEpisode(t *testing.T) {
 
 	src.refuse.Store(false)
 	tick()
-	if got := l.take(); len(got) != 0 {
-		t.Errorf("GitLab answering again logged %q", got)
+	if got := l.take(); len(got) != 1 || !strings.Contains(got[0], "recovered") {
+		t.Errorf("GitLab answering again logged %q, want the one recovered line", got)
 	}
 	src.refuse.Store(true)
 	tick()

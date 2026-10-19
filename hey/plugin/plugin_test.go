@@ -935,7 +935,7 @@ func TestAWalkLogsOnlyTheEdgesOfAFailure(t *testing.T) {
 	idle(t, p)
 	mu.Lock()
 	defer mu.Unlock()
-	if len(logs) != 2 {
-		t.Fatalf("a landing and a new failure logged %v, want one more line", logs)
+	if len(logs) != 3 {
+		t.Fatalf("a landing and a new failure logged %v, want the recovered line and one more", logs)
 	}
 }
