@@ -246,11 +246,13 @@ func (f *Flights) failLocked(key string, err error) {
 	f.failed[key] = err
 }
 
+// clearLocked ends key's failure episode, and those of the keys it covers,
+// with one line each, so a dump shows when an outage ended.
 func (f *Flights) clearLocked(key string) {
-	delete(f.failed, key)
 	for k := range f.failed {
-		if slices.Contains(f.o.Covers(k), key) {
+		if k == key || slices.Contains(f.o.Covers(k), key) {
 			delete(f.failed, k)
+			f.o.Logf("%s: refresh %q recovered", f.o.Name, k)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package memo
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -236,9 +237,14 @@ func TestFlights(t *testing.T) {
 			h.f.Rewalk("inbox")
 			h.land(t, nil)
 			h.f.Rewalk("inbox")
+			h.land(t, nil)
+			if h.logs.count() != 2 || h.logs.last() != `test: refresh "inbox" recovered` {
+				t.Fatalf("an ended episode logged %v, want one recovery line", h.logs.all())
+			}
+			h.f.Rewalk("inbox")
 			h.land(t, errDown)
-			if h.logs.count() != 2 {
-				t.Errorf("a second episode logged %d lines in all, want 2", h.logs.count())
+			if h.logs.count() != 3 {
+				t.Errorf("a second episode logged %d lines in all, want 3", h.logs.count())
 			}
 		}},
 	} {
@@ -276,6 +282,9 @@ func TestFlightsCovers(t *testing.T) {
 	}
 	if h.walk.count() != 3 {
 		t.Errorf("a week inside the root's window walked: %d walks, want 3", h.walk.count())
+	}
+	if got := h.logs.all(); !slices.Contains(got, `test: refresh "week:2026-09-28" recovered`) {
+		t.Errorf("the week's episode ended under the root walk unlogged: %v", got)
 	}
 }
 

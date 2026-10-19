@@ -3,6 +3,7 @@ package memo
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -176,4 +177,19 @@ func (l *logs) count() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.lines)
+}
+
+func (l *logs) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.lines)
+}
+
+func (l *logs) last() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.lines) == 0 {
+		return ""
+	}
+	return l.lines[len(l.lines)-1]
 }
