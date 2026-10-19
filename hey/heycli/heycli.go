@@ -27,8 +27,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -283,14 +285,23 @@ type watchLine struct {
 	Posting   *posting `json:"posting"`
 }
 
-// ParseWatchLine reads one line of the live feed.
+// ParseWatchLine reads one line of the live feed. A refusal lands in the
+// node's diagnostic ring, so it describes the line's shape and never quotes
+// it: a line can carry a posting's subject and summary.
 func ParseWatchLine(line []byte) (mail.Event, error) {
 	var w watchLine
 	if err := json.Unmarshal(line, &w); err != nil {
-		return mail.Event{}, fmt.Errorf("hey plugin: watch line: %v", err)
+		var syn *json.SyntaxError
+		if errors.As(err, &syn) {
+			return mail.Event{}, fmt.Errorf("hey plugin: watch line of %d bytes is not JSON (at byte %d)", len(line), syn.Offset)
+		}
+		return mail.Event{}, fmt.Errorf("hey plugin: watch line of %d bytes: %v", len(line), err)
 	}
 	if w.Change == "" {
-		return mail.Event{}, fmt.Errorf("hey plugin: watch line names no change: %.80q", line)
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(line, &fields)
+		keys := slices.Sorted(maps.Keys(fields))
+		return mail.Event{}, fmt.Errorf("hey plugin: watch line names no change (box %q, keys %v, %d bytes)", w.Box.Kind, keys, len(line))
 	}
 	ev := mail.Event{Change: w.Change, Box: w.Box.Kind, PostingID: w.PostingID}
 	if w.Posting != nil {

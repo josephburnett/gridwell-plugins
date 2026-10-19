@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -429,5 +430,32 @@ func TestInstalledNamesAMissingCLI(t *testing.T) {
 	t.Setenv("PATH", dir)
 	if err := (Exec{}).Installed(); err != nil {
 		t.Errorf("hey on PATH → %v, want installed", err)
+	}
+}
+
+// A refused line's error lands in the node's diagnostic ring, so it names the
+// line's shape and never its bytes: a line without its change can open with a
+// posting's fields.
+func TestARefusedWatchLineQuotesNothing(t *testing.T) {
+	const marker = "ZZMARKERZZ"
+	for _, l := range []string{
+		`{"posting":{"name":"` + marker + `","summary":"` + marker + `"},"box":{"kind":"imbox"},"thread_id":7}`,
+		marker + ` not json`,
+		`{"posting":{"name":"` + marker,
+	} {
+		_, err := ParseWatchLine([]byte(l))
+		if err == nil {
+			t.Fatalf("%d-byte line parsed", len(l))
+		}
+		if strings.Contains(err.Error(), marker) || strings.Contains(err.Error(), "ZZ") {
+			t.Errorf("error quotes the line: %v", err)
+		}
+		if !strings.Contains(err.Error(), strconv.Itoa(len(l))+" bytes") {
+			t.Errorf("error does not give the line's length: %v", err)
+		}
+	}
+	_, err := ParseWatchLine([]byte(`{"posting":{"name":"` + marker + `"},"box":{"kind":"imbox"},"thread_id":7}`))
+	if want := `box "imbox", keys [box posting thread_id]`; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want it to name %s", err, want)
 	}
 }
