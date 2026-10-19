@@ -489,3 +489,38 @@ func TestWatchErrorLogsOncePerEpisode(t *testing.T) {
 		t.Fatalf("a second episode logged %d lines in all, want 2:\n%s", n, logged)
 	}
 }
+
+// An overflow is an episode: one line when it starts, however many overflows
+// it holds, and one when the re-walk it forced has finished, with the count.
+func TestWatchOverflowLogsOncePerEpisode(t *testing.T) {
+	root := t.TempDir()
+	mkdirs(t, root, "a", "b")
+	p := New(root, nil)
+	s, err := p.watch.subscribe(map[string]string{root: ".", filepath.Join(root, "a"): "a", filepath.Join(root, "b"): "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.watch.unsubscribe(s)
+	p.watch.mu.Lock()
+	fsw := p.watch.fsw
+	p.watch.mu.Unlock()
+	logged := captureLog(t)
+	started := func() int { return strings.Count(logged.String(), "overflowed") }
+	ended := func() int { return strings.Count(logged.String(), "re-walked 3 shown directories") }
+
+	p.watch.eventError(fsw, fsnotify.ErrEventOverflow)
+	p.watch.eventError(fsw, fsnotify.ErrEventOverflow)
+	if started() != 1 || ended() != 0 {
+		t.Fatalf("two overflows before the re-walk logged:\n%s", logged)
+	}
+	p.watch.take(s)
+	if started() != 1 || ended() != 1 {
+		t.Fatalf("the re-walk's end was not logged once:\n%s", logged)
+	}
+	p.watch.take(s)
+	p.watch.eventError(fsw, fsnotify.ErrEventOverflow)
+	p.watch.take(s)
+	if started() != 2 || ended() != 2 {
+		t.Fatalf("a second episode did not log its own pair:\n%s", logged)
+	}
+}

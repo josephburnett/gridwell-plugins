@@ -117,9 +117,12 @@ type watcher struct {
 	pending map[string]*window
 	// limitLogged and errLogged hold each condition to one log line per
 	// episode: the limit's ends at a subscribe the OS accepts, an OS error's
-	// at the next event delivered.
+	// at the next event delivered. An overflow's episode ends when no stream
+	// still owes its re-walk, and logs its start and its end.
 	limitLogged bool
 	errLogged   bool
+	overflowing bool
+	rewalked    int
 }
 
 // window is one directory's changes while its debounce is open: whether its
@@ -169,6 +172,10 @@ func (w *watcher) take(s *watchSub) (gridKeys []string, files []owedFile) {
 				files = append(files, owedFile{gridKey: k, path: e.AbsPath})
 			}
 		}
+		w.mu.Lock()
+		w.rewalked += len(s.scope)
+		w.endOverflowLocked()
+		w.mu.Unlock()
 	}
 	slices.Sort(gridKeys)
 	slices.SortFunc(files, func(a, b owedFile) int { return strings.Compare(a.path, b.path) })
@@ -218,6 +225,7 @@ func (w *watcher) unsubscribe(s *watchSub) {
 	w.mu.Lock()
 	delete(w.subs, s)
 	_ = w.rescope()
+	w.endOverflowLocked()
 	closing := w.detachIfIdle()
 	w.mu.Unlock()
 	closeWatcher(closing)
@@ -382,10 +390,29 @@ func (w *watcher) eventError(fsw *fsnotify.Watcher, err error) {
 		}
 		return
 	}
+	if !w.overflowing {
+		w.overflowing = true
+		log.Printf("fs plugin: change notifications overflowed; re-walking the %d shown directories", len(w.watched))
+	}
 	for s := range w.subs {
 		s.all = true
 		raise(s.ready)
 	}
+}
+
+// endOverflowLocked closes the overflow episode once no stream owes its
+// re-walk. Callers hold mu.
+func (w *watcher) endOverflowLocked() {
+	if !w.overflowing {
+		return
+	}
+	for s := range w.subs {
+		if s.all {
+			return
+		}
+	}
+	log.Printf("fs plugin: change notifications overflow ended: re-walked %d shown directories", w.rewalked)
+	w.overflowing, w.rewalked = false, 0
 }
 
 // touch adds to dir's debounce window, opening one if none is open; its
