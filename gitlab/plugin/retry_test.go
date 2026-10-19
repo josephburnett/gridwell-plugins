@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func (f *flaky) Page(_ context.Context, _ string, _ int) (todos.Reply, error) {
 // answer, not one failure, and a lid closing mid-walk costs a page.
 func TestAPageRetriesInPlace(t *testing.T) {
 	src := &flaky{err: status.Error(codes.Unavailable, "connection reset"), failures: 2}
-	got, err := retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}.Page(context.Background(), todos.StatePending, 1)
+	got, err := retrying{log: newRetryLog(t.Logf), src: src, attempts: pageAttempts, backoff: time.Millisecond}.Page(context.Background(), todos.StatePending, 1)
 	if err != nil || len(got.Todos) != 1 {
 		t.Fatalf("page = (%v, %v), want the answer after the retries", got, err)
 	}
@@ -45,7 +46,7 @@ func TestAPageRetriesInPlace(t *testing.T) {
 // hanging on a GitLab that is down.
 func TestRetriesRunOutAndTheReasonSurvives(t *testing.T) {
 	src := &flaky{err: status.Error(codes.Unavailable, "connection reset"), failures: 99}
-	_, err := retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}.Page(context.Background(), todos.StatePending, 1)
+	_, err := retrying{log: newRetryLog(t.Logf), src: src, attempts: pageAttempts, backoff: time.Millisecond}.Page(context.Background(), todos.StatePending, 1)
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v, want the source's Unavailable", err)
 	}
@@ -59,7 +60,7 @@ func TestRetriesRunOutAndTheReasonSurvives(t *testing.T) {
 func TestAVerdictIsNotRetried(t *testing.T) {
 	for _, code := range []codes.Code{codes.PermissionDenied, codes.Unauthenticated, codes.InvalidArgument} {
 		src := &flaky{err: status.Error(code, "no"), failures: 99}
-		if _, err := (retrying{src: src, attempts: pageAttempts, backoff: time.Millisecond}).Page(context.Background(), todos.StatePending, 1); status.Code(err) != code {
+		if _, err := (retrying{log: newRetryLog(t.Logf), src: src, attempts: pageAttempts, backoff: time.Millisecond}).Page(context.Background(), todos.StatePending, 1); status.Code(err) != code {
 			t.Fatalf("%v = %v", code, err)
 		}
 		if src.calls != 1 {
@@ -68,7 +69,7 @@ func TestAVerdictIsNotRetried(t *testing.T) {
 	}
 	// An error carrying no status is weather: nothing says it is a verdict.
 	plain := &flaky{err: errors.New("boom"), failures: 1}
-	if _, err := (retrying{src: plain, attempts: pageAttempts, backoff: time.Millisecond}).Page(context.Background(), todos.StatePending, 1); err != nil {
+	if _, err := (retrying{log: newRetryLog(t.Logf), src: plain, attempts: pageAttempts, backoff: time.Millisecond}).Page(context.Background(), todos.StatePending, 1); err != nil {
 		t.Fatalf("plain error = %v", err)
 	}
 }
@@ -80,7 +81,7 @@ func TestACancelledContextStopsRetrying(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	if _, err := (retrying{src: src, attempts: pageAttempts, backoff: time.Hour}).Page(ctx, todos.StatePending, 1); status.Code(err) != codes.Unavailable {
+	if _, err := (retrying{log: newRetryLog(t.Logf), src: src, attempts: pageAttempts, backoff: time.Hour}).Page(ctx, todos.StatePending, 1); status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v", err)
 	}
 	if src.calls != 1 || time.Since(start) > time.Second {
@@ -100,5 +101,38 @@ func TestTheWalkSurvivesAFlakyPage(t *testing.T) {
 	}
 	if len(root.Entries) != 1 || src.calls != 3 {
 		t.Errorf("root = %v after %d page calls (one retried pending page, then done)", root.Entries, src.calls)
+	}
+}
+
+// Each retry is a line with its attempt and the error's class, never its
+// body, and an outage logs a bounded number of them until a page answers.
+func TestRetriesLogTheirClassCapped(t *testing.T) {
+	var l lines
+	src := &flaky{err: status.Error(codes.Unavailable, "ZZBODYZZ"), failures: 99}
+	r := retrying{log: newRetryLog(l.logf), src: src, attempts: pageAttempts, backoff: time.Millisecond}
+	for range 10 {
+		_, _ = r.Page(context.Background(), todos.StatePending, 2)
+	}
+	got := l.take()
+	if len(got) != retryLogCap+1 {
+		t.Fatalf("a long outage logged %d lines, want %d:\n%s", len(got), retryLogCap+1, strings.Join(got, "\n"))
+	}
+	if want := "gitlab plugin: page 2 of pending failed (Unavailable); retry 1 of 2"; !strings.HasPrefix(got[0], want) {
+		t.Errorf("first line = %q, want it to start %q", got[0], want)
+	}
+	for _, line := range got {
+		if strings.Contains(line, "ZZBODYZZ") {
+			t.Errorf("a retry line carries the error's body: %q", line)
+		}
+	}
+	src.failures = src.calls + 1
+	if _, err := r.Page(context.Background(), todos.StatePending, 2); err != nil {
+		t.Fatal(err)
+	}
+	l.take()
+	src.failures = src.calls + 1
+	_, _ = r.Page(context.Background(), todos.StatePending, 2)
+	if got := l.take(); len(got) != 1 {
+		t.Errorf("a page that answered did not end the episode: %q", got)
 	}
 }

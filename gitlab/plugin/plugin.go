@@ -116,7 +116,6 @@ type Options struct {
 // the last process walked.
 func New(src todos.Source, o Options) *Plugin {
 	p := &Plugin{
-		src:         retrying{src: src, attempts: pageAttempts, backoff: pageBackoff},
 		marker:      o.Marker,
 		token:       o.Token,
 		cache:       todos.NewCache(),
@@ -138,6 +137,7 @@ func New(src todos.Source, o Options) *Plugin {
 	if logf == nil {
 		logf = log.Printf
 	}
+	p.src = retrying{log: newRetryLog(logf), src: src, attempts: pageAttempts, backoff: pageBackoff}
 	p.file = memo.NewFile[todos.Snapshot](strings.TrimSpace(o.StateDir), todos.CacheFile, todos.CacheVersion, logf)
 	p.flights = memo.NewFlights(p.life, memo.FlightOptions{
 		Name:        "gitlab plugin",
