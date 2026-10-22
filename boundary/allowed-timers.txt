@@ -1,0 +1,19 @@
+# Every clock the production tree starts, as path:anchor | class | reason
+# (timers_test.go). The anchor is the enclosing function, a word on the
+# timer's line or the line above, or a line number. The classes: a debounce
+# coalesces bursts, a backoff paces a retry, a bound caps a wait that
+# something else ends, and a poll asks a source that cannot tell. A poll is
+# allowed only for a source that cannot tell, and only while watched: its
+# reason says which source, and where it runs.
+
+fs/plugin/watch.go:touch | debounce | one announcement per directory per DebounceWindow, however many OS events a save makes
+gitlab/plugin/retry.go:Page | backoff | a page GitLab answered with a transient failure is retried, the wait doubling, pageAttempts times
+gitlab/plugin/plugin.go:refresher | poll | GitLab cannot tell: it pushes nothing about a user's todos; the refresher is memo.Changes work, so it runs only while a Watch shows a grid, and Linger after
+gmail/plugin/plugin.go:poll | poll | Gmail cannot tell a desktop plugin of a change (its push needs a Pub/Sub endpoint); the history poll is memo.Changes work, so it runs only while a Watch shows a grid, and Linger after
+proc/plugin/watch.go:follow | poll | /proc cannot tell: inotify sees nothing there and the process connector needs CAP_NET_ADMIN; one poll per shown pid, memo.Changes work, so only while a Watch shows it
+hey/plugin/watch.go:watch | backoff | a live feed that ended is restarted, the wait doubling to MaxWatchBackoff; the feed itself runs only while watched
+hey/plugin/watch.go:watchOnce | bound | a disconnected feed has recoverAfter to say ready on its own before it is restarted; ready ends the wait
+memo/life.go:Poll | poll | the loop memo.Poll runs for each caller; each caller is listed above with the source that cannot tell
+memo/changes.go:detach | debounce | Linger: the node replaces a stream by ending it and opening another, and the work is kept across that gap rather than stopped and restarted
+memo/flights.go:Read | bound | FirstAnswer caps how long a cold read waits on its walk; the walk landing ends the wait
+guest/guest.go:watchHost | poll | the host process cannot tell its guest it died (go-plugin gives the guest no signal); a kill(pid, 0) every 2s for the process's life, the one poll not scoped to a Watch, and it asks no source

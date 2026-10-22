@@ -1,0 +1,15 @@
+# The plugins' simplification scoreboard, the shape of gridwell's
+# test/boundary/ratchet.txt (gridwell CLAUDE.md, How to work 10): one row per
+# measure, each counted by code in ratchet_test.go, with the value this tree
+# holds and the floor it is driven to. A value only falls, by the row's
+# mechanism, and every fall is recorded here in the commit that makes it, so a
+# diff of this file is the progress report. A row whose value reaches its floor
+# is deleted and its count kept as a permanent test, as timers_test.go keeps
+# the timer list. A floor of - is a ceiling: lines and packages only have to
+# keep from rising. The value the last commit recorded is the ceiling: a row
+# is never raised.
+#
+# name | recorded | floor | owner | mechanism | decision
+packages | 27 | - | the production tree (directories holding a non-test Go file, as counts_test.go defines it) | merge, never split | gridwell CLAUDE.md, How to work 8
+lines | 11252 | - | the production tree (counts_test.go) | derive, never restate | gridwell CLAUDE.md, How to work 1
+conformance-failures | 2 | 0 | the shipped plugins with a finding in conformance_test.go | bring the plugin to the rule the finding names; never loosen the suite | gridwell docs/plugin-standard.md
