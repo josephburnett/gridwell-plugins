@@ -688,15 +688,17 @@ func TestAMessageKeepsItsKeyAcrossGrids(t *testing.T) {
 	}
 }
 
-// A failed walk is Gmail's verdict, unchanged: "this token was refused" must
-// reach the user rather than becoming an empty grid.
-func TestAWalkFailureSurfaces(t *testing.T) {
+// A token Google refuses after Info passed, on a read the cache has no answer
+// for, is the source unreachable with the refusal as its reason, never an
+// empty grid and never the refusal's code, which the node reads as a verdict
+// (plugin standard rule 3).
+func TestAColdWalkRefusedIsUnavailableWithTheReason(t *testing.T) {
 	f := newFake()
 	f.err = status.Error(codes.PermissionDenied, "the stored token was refused")
 	p := stable(f, Options{})
 	_, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: mailbox.InboxGrid})
-	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "refused") {
-		t.Fatalf("err = %v", err)
+	if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("err = %v, want Unavailable naming the refusal", err)
 	}
 }
 
