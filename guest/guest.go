@@ -106,20 +106,22 @@ func (r *rebuilding) built() (pluginv1.PluginServer, error) {
 	return impl, nil
 }
 
-func (r *rebuilding) Info(ctx context.Context, req *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+// forward is every unary verb: build, then call what was built.
+func forward[Q, R any](r *rebuilding, ctx context.Context, req Q, call func(pluginv1.PluginServer, context.Context, Q) (R, error)) (R, error) {
 	impl, err := r.built()
 	if err != nil {
-		return nil, err
+		var none R
+		return none, err
 	}
-	return impl.Info(ctx, req)
+	return call(impl, ctx, req)
+}
+
+func (r *rebuilding) Info(ctx context.Context, req *pluginv1.InfoRequest) (*pluginv1.InfoResponse, error) {
+	return forward(r, ctx, req, pluginv1.PluginServer.Info)
 }
 
 func (r *rebuilding) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
-	impl, err := r.built()
-	if err != nil {
-		return nil, err
-	}
-	return impl.List(ctx, req)
+	return forward(r, ctx, req, pluginv1.PluginServer.List)
 }
 
 func (r *rebuilding) ReadContent(req *pluginv1.ReadContentRequest, s grpc.ServerStreamingServer[pluginv1.ContentChunk]) error {
@@ -147,35 +149,23 @@ func (r *rebuilding) ServeContent(req *pluginv1.ServeContentRequest, s grpc.Serv
 }
 
 func (r *rebuilding) GetPreview(ctx context.Context, req *pluginv1.GetPreviewRequest) (*pluginv1.GetPreviewResponse, error) {
-	impl, err := r.built()
-	if err != nil {
-		return nil, err
-	}
-	return impl.GetPreview(ctx, req)
+	return forward(r, ctx, req, pluginv1.PluginServer.GetPreview)
 }
 
 func (r *rebuilding) Probe(ctx context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
-	impl, err := r.built()
-	if err != nil {
-		return nil, err
-	}
-	return impl.Probe(ctx, req)
+	return forward(r, ctx, req, pluginv1.PluginServer.Probe)
 }
 
 func (r *rebuilding) Delete(ctx context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {
-	impl, err := r.built()
-	if err != nil {
-		return nil, err
-	}
-	return impl.Delete(ctx, req)
+	return forward(r, ctx, req, pluginv1.PluginServer.Delete)
+}
+
+func (r *rebuilding) Move(ctx context.Context, req *pluginv1.MoveRequest) (*pluginv1.MoveResponse, error) {
+	return forward(r, ctx, req, pluginv1.PluginServer.Move)
 }
 
 func (r *rebuilding) Find(ctx context.Context, req *pluginv1.FindRequest) (*pluginv1.FindResponse, error) {
-	impl, err := r.built()
-	if err != nil {
-		return nil, err
-	}
-	return impl.Find(ctx, req)
+	return forward(r, ctx, req, pluginv1.PluginServer.Find)
 }
 
 func (r *rebuilding) Watch(req *pluginv1.WatchRequest, s grpc.ServerStreamingServer[pluginv1.Change]) error {

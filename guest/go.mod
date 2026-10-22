@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
-	github.com/josephburnett/gridwell/api v0.8.0
+	github.com/josephburnett/gridwell/api v0.9.0
 	google.golang.org/grpc v1.84.0
 )
 
