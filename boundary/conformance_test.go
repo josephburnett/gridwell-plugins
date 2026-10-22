@@ -2,9 +2,7 @@
 // gridwell's docs/plugin-standard.md that a black-box harness can check: it
 // spawns each binary the way the node does (compose.LoadPlugin), against a
 // fake of its source that counts what it is asked, and reads only the wire.
-// A rule a plugin breaks is a finding, logged under the plugin; the ledger's
-// conformance-failures row counts the plugins with one, so a new finding
-// fails the build and a fixed one must be recorded.
+// A rule a plugin breaks is a finding, and TestConformance fails on any.
 //
 // Checked here:
 //
@@ -974,24 +972,8 @@ func conformance() []verdict {
 	return suite
 }
 
-// conformanceFailures are the plugins with a finding, for the ledger.
-func conformanceFailures(t *testing.T) []string {
-	t.Helper()
-	var out []string
-	for _, v := range conformance() {
-		for _, h := range v.harness {
-			t.Errorf("conformance %s: the suite could not stage a check: %s", v.kind, h)
-		}
-		if len(v.findings) > 0 {
-			out = append(out, v.kind)
-		}
-	}
-	return out
-}
-
-// TestConformance names every finding under its plugin. It fails only when
-// the suite cannot stage a check: what a plugin fails is counted by the
-// ledger's conformance-failures row, so a new one fails TestRatchet.
+// TestConformance fails on every finding, under its plugin, and wherever the
+// suite cannot stage a check.
 func TestConformance(t *testing.T) {
 	for _, v := range conformance() {
 		t.Run(v.kind, func(t *testing.T) {
@@ -1002,7 +984,7 @@ func TestConformance(t *testing.T) {
 				t.Error(h)
 			}
 			for _, f := range v.findings {
-				t.Log(f)
+				t.Error(f)
 			}
 		})
 	}

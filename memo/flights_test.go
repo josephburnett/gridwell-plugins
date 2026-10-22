@@ -113,7 +113,10 @@ func await(t *testing.T, ch chan readResult) readResult {
 	}
 }
 
-var errDown = status.Error(codes.Unavailable, "gitlab.example is not answering")
+var (
+	errDown    = status.Error(codes.Unavailable, "gitlab.example is not answering")
+	errRefused = status.Error(codes.PermissionDenied, "gitlab.example refused the token")
+)
 
 // TestFlights: how one read answers, for each state the cache and the source
 // can be in.
@@ -130,12 +133,20 @@ func TestFlights(t *testing.T) {
 				t.Errorf("Read = %+v, want a plain answer", got)
 			}
 		}},
-		{"a cold read whose walk failed answers the failure", func(t *testing.T, h *flightHarness) {
+		{"a cold read whose walk failed is Unavailable with the walk's reason", func(t *testing.T, h *flightHarness) {
 			r := h.readAsync("inbox", false)
 			h.walk.awaitCalls(t, 1)
 			h.land(t, errDown)
-			if got := await(t, r); !errors.Is(got.err, errDown) {
-				t.Errorf("Read err = %v, want the walk's", got.err)
+			if got := await(t, r); status.Code(got.err) != codes.Unavailable || Reason(got.err) != Reason(errDown) {
+				t.Errorf("Read err = %v, want Unavailable with the walk's reason", got.err)
+			}
+		}},
+		{"a cold read whose walk was refused is Unavailable, never the refusal's code", func(t *testing.T, h *flightHarness) {
+			r := h.readAsync("inbox", false)
+			h.walk.awaitCalls(t, 1)
+			h.land(t, errRefused)
+			if got := await(t, r); status.Code(got.err) != codes.Unavailable || Reason(got.err) != Reason(errRefused) {
+				t.Errorf("Read err = %v, want Unavailable with the refusal's reason", got.err)
 			}
 		}},
 		{"a cold read answers what the cache holds so far after the first-answer bound", func(t *testing.T, h *flightHarness) {

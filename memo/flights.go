@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -94,29 +95,28 @@ func NewFlights(life *Life, o FlightOptions) *Flights {
 }
 
 // Read makes key answerable for a call: a fresh cache as it is, otherwise a
-// walk, joined if one is in flight. warm says the cache already holds an answer
-// for key: then Read never waits, and unreachable is the last refresh's
-// failure, for ListResponse.unreachable. A cold read waits at most
-// FirstAnswer, then answers what the cache holds so far; it fails only when its walk failed
-// with nothing cached, or its caller hung up.
+// walk, joined if one is in flight. warm says the cache holds an answer for
+// key: then Read never waits, and unreachable is the last refresh's failure.
+// A cold read waits at most FirstAnswer, then answers what the cache holds so
+// far. It fails only when its caller hung up, or its walk failed with nothing
+// cached: Unavailable with the walk's reason, whatever the source's code (rule 3).
 func (f *Flights) Read(ctx context.Context, key string, warm bool) (unreachable string, err error) {
 	f.mu.Lock()
-	last := f.lastLocked(key)
-	if f.freshLocked(key) {
-		f.mu.Unlock()
-		return Reason(last), nil
-	}
+	last, fresh := f.lastLocked(key), f.freshLocked(key)
 	fl := f.joinLocked(key)
-	if fl == nil {
+	if fl == nil && !fresh {
 		fl = f.startLocked(key)
 	}
 	f.mu.Unlock()
-	if warm {
+	if fresh || warm {
 		return Reason(last), nil
 	}
 	select {
 	case <-fl.done:
-		return "", fl.err
+		if fl.err != nil {
+			return "", status.Error(codes.Unavailable, Reason(fl.err))
+		}
+		return "", nil
 	case <-f.o.Clock.After(f.o.FirstAnswer):
 		return Reason(last), nil
 	case <-ctx.Done():

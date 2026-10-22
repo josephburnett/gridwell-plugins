@@ -17,9 +17,8 @@ import (
 // ratchetCounts maps each ledger row to the code that measures it. A row the
 // ledger names and this map does not is a typo or a count deleted too early.
 var ratchetCounts = map[string]func(t *testing.T, root string) int{
-	"packages":             func(t *testing.T, root string) int { return len(productionPackages(t, root)) },
-	"lines":                productionLines,
-	"conformance-failures": func(t *testing.T, _ string) int { return len(conformanceFailures(t)) },
+	"packages": func(t *testing.T, root string) int { return len(productionPackages(t, root)) },
+	"lines":    productionLines,
 }
 
 type ratchetRow struct {

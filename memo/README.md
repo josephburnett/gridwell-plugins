@@ -7,7 +7,7 @@ four things.
 | Type | Owns | Rules |
 |---|---|---|
 | `File[T]` | the cache file in `state_dir` | `cache.db`'s contract, 14 |
-| `Flights` | one shared walk per key, and how a read answers | 7, 13, 14 |
+| `Flights` | one shared walk per key, and how a read answers | 3, 7, 13, 14 |
 | `Changes` | the `Watch` fan-out, and when background work runs | 8, 9, 18 |
 | `Life` | the context walks and work run under | 13 |
 
@@ -29,7 +29,9 @@ the File is nil and both are no-ops.
   Otherwise a walk starts, or the one in flight is joined. A warm read never
   waits. A cold read waits at most `FirstAnswer`, then answers what the cache holds so far.
   The `unreachable` it returns is the last refresh's failure, for
-  `ListResponse.unreachable`; the read itself does not fail on it.
+  `ListResponse.unreachable`; the read itself does not fail on it. A cold
+  read whose walk failed, with nothing cached, fails `Unavailable` with the
+  walk's reason, whatever code the source gave (rule 3).
 - `Rewalk(key)` walks whatever the freshness, once more if a walk is in
   flight.
 - `Outcome(key, err)` records a refresh that was not a walk (a glance, a
