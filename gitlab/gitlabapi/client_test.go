@@ -43,8 +43,11 @@ func TestPageSpeaksTheGitLabWire(t *testing.T) {
 	if r, _ := c.Page(context.Background(), "pending", 2); r.More || r.Pages != 0 {
 		t.Errorf("page 2 = %+v: no X-Next-Page is the last page, no X-Total-Pages is an unknown length", r)
 	}
-	if _, err := New(srv.URL, "wrong", nil).Page(context.Background(), "pending", 1); status.Code(err) != codes.PermissionDenied {
-		t.Errorf("401 → %v, want PermissionDenied", err)
+	// The sentence is the source's health notice once Info has passed, so it
+	// names the cause.
+	if _, err := New(srv.URL, "wrong", nil).Page(context.Background(), "pending", 1); status.Code(err) != codes.PermissionDenied ||
+		!strings.Contains(err.Error(), "refused the token") || !strings.Contains(err.Error(), "read_api") {
+		t.Errorf("401 → %v, want PermissionDenied saying the token was refused and naming the scope", err)
 	}
 }
 

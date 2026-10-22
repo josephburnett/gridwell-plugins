@@ -402,7 +402,7 @@ func wrap(ctx context.Context, what string, err error) error {
 		switch {
 		case api.Code == http.StatusUnauthorized || api.Code == http.StatusForbidden:
 			return status.Errorf(codes.PermissionDenied,
-				"gmail plugin: %s: %s (the token needs the gmail.readonly scope)", what, api.Message)
+				"gmail plugin: %s: Google refused the token (%s); it needs the gmail.readonly scope", what, api.Message)
 		case api.Code == http.StatusNotFound:
 			return status.Errorf(codes.NotFound, "gmail plugin: %s: %s", what, api.Message)
 		case api.Code == http.StatusTooManyRequests || api.Code >= 500:

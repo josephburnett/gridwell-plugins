@@ -137,7 +137,7 @@ func (c *Client) Page(ctx context.Context, state string, page int) (todos.Reply,
 	}
 	switch {
 	case refused(resp):
-		return todos.Reply{}, status.Errorf(codes.PermissionDenied, "gitlab: %s (check the token's read_api scope)", resp.Status)
+		return todos.Reply{}, status.Errorf(codes.PermissionDenied, "GitLab refused the token (%s): check its read_api scope", resp.Status)
 	case weather(resp):
 		return todos.Reply{}, status.Errorf(codes.Unavailable, "gitlab: %s", resp.Status)
 	case resp.StatusCode != http.StatusOK:

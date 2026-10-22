@@ -319,7 +319,7 @@ func TestFailuresMapToTheNodesVocabulary(t *testing.T) {
 	f := newFake(t)
 	f.status = 401
 	_, _, err := f.client().Label(context.Background(), []string{"INBOX"}, 10)
-	if !strings.Contains(err.Error(), "invalid authentication credentials") || !strings.Contains(err.Error(), "gmail.readonly") {
+	if !strings.Contains(err.Error(), "refused the token") || !strings.Contains(err.Error(), "invalid authentication credentials") || !strings.Contains(err.Error(), "gmail.readonly") {
 		t.Errorf("the reason was lost: %v", err)
 	}
 }
