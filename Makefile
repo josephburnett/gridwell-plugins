@@ -43,6 +43,9 @@ check:
 	@echo "== module proc (darwin cross-build; /proc-bound, no windows release)"
 	@(cd proc && GOOS=darwin GOARCH=arm64 go build -o /dev/null ./...)
 	$(MAKE) build
+	# boundary spawns the binaries just built, so it runs last.
+	@echo "== module boundary (standalone; the conformance suite over the binaries)"
+	@(cd boundary && GOWORK=off go vet ./... && GOWORK=off go test ./...) || exit 1
 
 clean:
 	rm -f gridwell-plugin-fs gridwell-plugin-proc gridwell-plugin-gitlab gridwell-plugin-pages gridwell-plugin-hey gridwell-plugin-gmail

@@ -6,6 +6,7 @@
 go 1.27.1
 
 use (
+	./boundary
 	./fs
 	./gitlab
 	./gmail
