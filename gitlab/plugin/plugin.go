@@ -289,8 +289,7 @@ func (p *Plugin) Info(ctx context.Context, _ *pluginv1.InfoRequest) (*pluginv1.I
 
 // List answers the root, listing weeks, or one week, listing todos. A read
 // the cache can answer is answered from the cache, with the last refresh's failure
-// as unreachable; only a cold read whose walk failed fails, with the walk's
-// own code.
+// as unreachable; only a cold read whose walk failed fails (memo.Flights.Read).
 func (p *Plugin) List(ctx context.Context, req *pluginv1.ListRequest) (*pluginv1.ListResponse, error) {
 	if req.Grid != todos.RootGrid {
 		if _, ok := todos.ParseWeekKey(req.Grid); !ok {

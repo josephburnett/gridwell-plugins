@@ -545,6 +545,18 @@ func (f *failing) Page(context.Context, string, int) (todos.Reply, error) {
 	return todos.Reply{Todos: []todos.Todo{mk(1, "2026-08-18T10:00:00Z", "pending")}}, nil
 }
 
+// A token GitLab refuses after Info passed, on a read the cache has no answer
+// for, is the source unreachable, never the refusal's code: the node reads any
+// other code as a verdict (plugin standard rule 3). The reason travels.
+func TestAColdReadOfARefusedTokenIsUnavailable(t *testing.T) {
+	const reason = "GitLab refused the token (401 Unauthorized): check its read_api scope"
+	p := New(&failing{err: status.Error(codes.PermissionDenied, reason)}, Options{})
+	_, err := p.List(context.Background(), &pluginv1.ListRequest{Grid: todos.RootGrid})
+	if status.Code(err) != codes.Unavailable || status.Convert(err).Message() != reason {
+		t.Fatalf("a cold read of a refused token = %v, want Unavailable saying %q", err, reason)
+	}
+}
+
 // A refresh that fails while the cache can answer is the source unreachable,
 // never a failed read: the cached entries answer with the walk's reason
 // as unreachable, a revoked token's included, and the reason clears once a
