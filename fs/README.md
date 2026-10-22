@@ -91,6 +91,15 @@ Delete moves the file or directory to the user's trash, never unlinks it:
 
 Deleting something already gone succeeds.
 
+## Moving
+
+Dragging a tile onto another directory's grid renames the file or directory
+into that directory under the same name (`Info` declares `move`). Its tile
+keeps its id, and its key becomes its path there. A move never replaces
+anything: a name already taken in the target, a source that is gone, or a
+rename the OS refuses is refused with the reason, and nothing moves. The
+change watch tells both directories, as it does any rename.
+
 ## Find
 
 The plugin does not answer `Find`, so a find returns nothing from the tree. It

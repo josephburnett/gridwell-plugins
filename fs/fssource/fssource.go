@@ -55,8 +55,7 @@ func Read(dir string) ([]Entry, error) {
 	}
 	out := make([]Entry, 0, len(dirents))
 	for _, info := range dirents {
-		e := entryFromFileInfo(dir, info)
-		out = append(out, e)
+		out = append(out, entryFromFileInfo(dir, info))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -138,9 +137,7 @@ func Stat(path string) (Entry, error) {
 // deterministic, so the blob hash dedupes for unchanged files.
 func MetadataMarkdown(e Entry) string {
 	var b strings.Builder
-	b.WriteString("# ")
-	b.WriteString(e.Name)
-	b.WriteString("\n\n")
+	fmt.Fprintf(&b, "# %s\n\n", e.Name)
 	if e.Kind == KindDir {
 		b.WriteString("directory\n\n")
 	}

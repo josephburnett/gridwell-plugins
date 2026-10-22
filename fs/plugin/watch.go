@@ -8,6 +8,7 @@ import (
 	"errors"
 	iofs "io/fs"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -155,9 +156,7 @@ type owedFile struct {
 func (w *watcher) take(s *watchSub) (gridKeys []string, files []owedFile) {
 	w.mu.Lock()
 	all := s.all
-	for k := range s.gridKeys {
-		gridKeys = append(gridKeys, k)
-	}
+	gridKeys = slices.Collect(maps.Keys(s.gridKeys))
 	for path, k := range s.files {
 		files = append(files, owedFile{gridKey: k, path: path})
 	}
@@ -208,8 +207,7 @@ func (w *watcher) subscribe(scope map[string]string) (*watchSub, error) {
 	if err != nil {
 		delete(w.subs, s)
 		_ = w.rescope()
-	}
-	if err == nil {
+	} else {
 		w.limitLogged = false
 	}
 	closing := w.detachIfIdle()
@@ -455,17 +453,16 @@ func (w *watcher) owe(dir string) {
 func (w *watcher) fail(dir string, err error) {
 	for s := range w.subs {
 		if _, ok := s.scope[dir]; ok {
-			select {
-			case s.failed <- err:
-			default:
-			}
+			offer(s.failed, err)
 		}
 	}
 }
 
-func raise(ch chan struct{}) {
+func raise(ch chan struct{}) { offer(ch, struct{}{}) }
+
+func offer[T any](ch chan T, v T) {
 	select {
-	case ch <- struct{}{}:
+	case ch <- v:
 	default:
 	}
 }

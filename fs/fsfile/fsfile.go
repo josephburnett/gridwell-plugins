@@ -24,7 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/josephburnett/gridwell-plugins/fs/fssource"
-	gridwellv1 "github.com/josephburnett/gridwell/api/gen/gridwell/v1"
+	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell/api/rpc"
 )
 
@@ -250,7 +250,7 @@ const ChunkBytes = 256 * 1024
 
 // ServeChunkSender is the streaming half the caller provides.
 type ServeChunkSender interface {
-	Send(*gridwellv1.ServeContentChunk) error
+	Send(*pluginv1.ServeContentChunk) error
 }
 
 // ServeFile streams a file's raw bytes as web content. subpath "" is the named
@@ -273,6 +273,15 @@ func ServeFile(stream ServeChunkSender, root, dirPath, name, subpath string) err
 		}
 	}
 	real, err := Resolve(confine, target)
+	var f *os.File
+	if err == nil {
+		f, err = os.Open(real)
+	}
+	var fi os.FileInfo
+	if err == nil {
+		defer f.Close()
+		fi, err = f.Stat()
+	}
 	switch {
 	case errors.Is(err, ErrOutside) && subpath == "":
 		return status.Errorf(codes.FailedPrecondition, "fs plugin: %s %v", served, err)
@@ -280,49 +289,32 @@ func ServeFile(stream ServeChunkSender, root, dirPath, name, subpath string) err
 		return notFoundPage(stream)
 	case err != nil:
 		return unreadable(served, err)
-	}
-	f, err := os.Open(real)
-	if errors.Is(err, iofs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-		return notFoundPage(stream)
-	}
-	if err != nil {
-		return unreadable(served, err)
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return unreadable(served, err)
-	}
-	if fi.IsDir() {
+	case fi.IsDir():
 		return notFoundPage(stream)
 	}
 
-	mediaType := PageMediaType(served)
 	buf := make([]byte, ChunkBytes)
-	n, readErr := io.ReadFull(f, buf)
-	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
-		return readErr
-	}
-	if mediaType == "" {
-		// The content API sets X-Content-Type-Options: nosniff, so this
-		// server-side sniff is the only one that happens.
-		mediaType = http.DetectContentType(buf[:n])
-	}
-	if err := stream.Send(&gridwellv1.ServeContentChunk{Status: 200, MediaType: mediaType, Data: buf[:n]}); err != nil {
-		return err
-	}
-	for readErr == nil {
-		n, readErr = io.ReadFull(f, buf)
-		if n > 0 {
-			if err := stream.Send(&gridwellv1.ServeContentChunk{Data: buf[:n]}); err != nil {
+	chunk := &pluginv1.ServeContentChunk{Status: 200, MediaType: PageMediaType(served)}
+	for {
+		n, err := io.ReadFull(f, buf)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return err
+		}
+		if chunk.Status != 0 && chunk.MediaType == "" {
+			// The content API sets X-Content-Type-Options: nosniff, so this
+			// server-side sniff is the only one that happens.
+			chunk.MediaType = http.DetectContentType(buf[:n])
+		}
+		if chunk.Data = buf[:n]; chunk.Status != 0 || n > 0 {
+			if err := stream.Send(chunk); err != nil {
 				return err
 			}
 		}
+		if err != nil {
+			return nil
+		}
+		chunk = &pluginv1.ServeContentChunk{}
 	}
-	if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
-		return nil
-	}
-	return readErr
 }
 
 func unreadable(served string, err error) error {
@@ -334,7 +326,7 @@ func unreadable(served string, err error) error {
 }
 
 func notFoundPage(stream ServeChunkSender) error {
-	return stream.Send(&gridwellv1.ServeContentChunk{
+	return stream.Send(&pluginv1.ServeContentChunk{
 		Status:    404,
 		MediaType: "text/plain; charset=utf-8",
 		Data:      []byte("not found"),
@@ -392,17 +384,8 @@ func downscale(img image.Image, maxEdge int) image.Image {
 	if w <= maxEdge && h <= maxEdge {
 		return img
 	}
-	scale := float64(maxEdge) / float64(w)
-	if h > w {
-		scale = float64(maxEdge) / float64(h)
-	}
-	nw, nh := int(float64(w)*scale), int(float64(h)*scale)
-	if nw < 1 {
-		nw = 1
-	}
-	if nh < 1 {
-		nh = 1
-	}
+	scale := float64(maxEdge) / float64(max(w, h))
+	nw, nh := max(1, int(float64(w)*scale)), max(1, int(float64(h)*scale))
 	dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
 	for y := 0; y < nh; y++ {
 		sy := b.Min.Y + y*h/nh

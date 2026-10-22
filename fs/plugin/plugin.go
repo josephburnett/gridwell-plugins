@@ -24,7 +24,6 @@ import (
 	"github.com/josephburnett/gridwell-plugins/fs/fsfile"
 	"github.com/josephburnett/gridwell-plugins/fs/fssource"
 	"github.com/josephburnett/gridwell-plugins/fs/trash"
-	gridwellv1 "github.com/josephburnett/gridwell/api/gen/gridwell/v1"
 	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 )
 
@@ -121,6 +120,15 @@ func (p *Plugin) abs(key string) (string, error) {
 	return filepath.Join(root, filepath.FromSlash(clean)), nil
 }
 
+// lstat is abs and the Lstat of what it maps to.
+func (p *Plugin) lstat(key string) (string, error) {
+	full, err := p.abs(key)
+	if err == nil {
+		_, err = os.Lstat(full)
+	}
+	return full, err
+}
+
 // dir is abs for a grid, which must not be a link itself either.
 func (p *Plugin) dir(gridKey string) (string, error) {
 	full, err := p.abs(gridKey)
@@ -158,14 +166,11 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 		Kind:        "fs",
 		DisplayName: "files",
 		Glyph:       "folder",
-		// A directory tree is host state this plugin projects: its rows are
-		// summaries of files that live outside Gridwell. Declaring it is what
-		// earns the grids their host treatment on the client — the node has
-		// no list of host-backed kinds to consult.
+		// A directory tree is host state: its rows summarize files that live
+		// outside Gridwell (InfoResponse.host_content).
 		HostContent: true,
 	}
-	// No configured root means there is no grid to serve, so the plugin
-	// declares no grid and contributes nothing to the (+) menu.
+	// No configured root: no grid (see FromConfig).
 	if p.root == "" || p.root == "." {
 		return resp, nil
 	}
@@ -180,6 +185,7 @@ func (p *Plugin) Info(context.Context, *pluginv1.InfoRequest) (*pluginv1.InfoRes
 	resp.Grids = []*pluginv1.PluginGrid{{Id: ".", Grid: "."}}
 	resp.Watch = true
 	resp.Writable = true
+	resp.Move = true
 	if label := filepath.Base(p.root); label != "/" && label != "." {
 		resp.DisplayName = label
 	}
@@ -271,10 +277,7 @@ func (p *Plugin) List(_ context.Context, req *pluginv1.ListRequest) (*pluginv1.L
 // under the real root: the one owner, so a Watch's EntryChanged carries the
 // entry a listing would.
 func entryOf(gridKey, dir, root string, e fssource.Entry) *pluginv1.Entry {
-	key := e.Name
-	if gridKey != "." && gridKey != "" {
-		key = gridKey + "/" + e.Name
-	}
+	key := keyIn(gridKey, e.Name)
 	out := &pluginv1.Entry{Key: key, Label: e.Name}
 	switch e.Kind {
 	case fssource.KindDir:
@@ -290,6 +293,14 @@ func entryOf(gridKey, dir, root string, e fssource.Entry) *pluginv1.Entry {
 		}
 	}
 	return out
+}
+
+// keyIn is the key of the thing called name in the directory gridKey names.
+func keyIn(gridKey, name string) string {
+	if gridKey == "." || gridKey == "" {
+		return name
+	}
+	return gridKey + "/" + name
 }
 
 // fileFacts declares a file's content facts from its name. dir "" is a file
@@ -375,7 +386,7 @@ func (p *Plugin) WriteContent(stream pluginv1.Plugin_WriteContentServer) error {
 		return status.Error(codes.InvalidArgument, "fs plugin: write: empty stream")
 	}
 	data := append([]byte(nil), first.Data...)
-	for {
+	for len(data) <= fsfile.MaxWrite {
 		msg, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			break
@@ -383,9 +394,7 @@ func (p *Plugin) WriteContent(stream pluginv1.Plugin_WriteContentServer) error {
 		if err != nil {
 			return err
 		}
-		if data = append(data, msg.Data...); len(data) > fsfile.MaxWrite {
-			return status.Errorf(codes.InvalidArgument, "fs plugin: %q: a body is at most %d MiB", first.Key, fsfile.MaxWrite>>20)
-		}
+		data = append(data, msg.Data...)
 	}
 	if len(data) > fsfile.MaxWrite {
 		return status.Errorf(codes.InvalidArgument, "fs plugin: %q: a body is at most %d MiB", first.Key, fsfile.MaxWrite>>20)
@@ -401,16 +410,13 @@ func (p *Plugin) WriteContent(stream pluginv1.Plugin_WriteContentServer) error {
 // answers the stamp of the bytes written.
 func (p *Plugin) write(key, claimed string, data []byte) (string, error) {
 	real, err := p.content(key)
+	var fi os.FileInfo
+	if err == nil {
+		fi, err = os.Stat(real)
+	}
 	switch {
 	case errors.Is(err, errOutside) || errors.Is(err, fsfile.ErrOutside):
 		return "", status.Errorf(codes.PermissionDenied, "fs plugin: %q %v, and nothing outside it is written", key, err)
-	case gone(err):
-		return "", status.Errorf(codes.NotFound, "fs plugin: %q is gone", key)
-	case err != nil:
-		return "", status.Errorf(codes.Unavailable, "fs plugin: write %s: %v", key, pathErr(err))
-	}
-	fi, err := os.Stat(real)
-	switch {
 	case gone(err):
 		return "", status.Errorf(codes.NotFound, "fs plugin: %q is gone", key)
 	case err != nil:
@@ -478,16 +484,6 @@ func writeRefusal(key string, err error) error {
 	return status.Errorf(codes.Unavailable, "fs plugin: write %s: %v", key, pathErr(err))
 }
 
-// serveStream adapts the plugin chunk stream to fsfile's sender; the two chunk
-// shapes match field for field.
-type serveStream struct {
-	s pluginv1.Plugin_ServeContentServer
-}
-
-func (w serveStream) Send(c *gridwellv1.ServeContentChunk) error {
-	return w.s.Send(&pluginv1.ServeContentChunk{Status: c.Status, MediaType: c.MediaType, Data: c.Data})
-}
-
 func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1.Plugin_ServeContentServer) error {
 	full, err := p.abs(req.Key)
 	if err != nil {
@@ -496,7 +492,7 @@ func (p *Plugin) ServeContent(req *pluginv1.ServeContentRequest, stream pluginv1
 	if fi, statErr := os.Lstat(full); statErr == nil && fi.IsDir() {
 		return status.Error(codes.NotFound, "fs plugin: directories serve no page")
 	}
-	return fsfile.ServeFile(serveStream{stream}, p.root, filepath.Dir(full), filepath.Base(full), req.Subpath)
+	return fsfile.ServeFile(stream, p.root, filepath.Dir(full), filepath.Base(full), req.Subpath)
 }
 
 func (p *Plugin) GetPreview(_ context.Context, req *pluginv1.GetPreviewRequest) (*pluginv1.GetPreviewResponse, error) {
@@ -511,17 +507,11 @@ func (p *Plugin) GetPreview(_ context.Context, req *pluginv1.GetPreviewRequest) 
 }
 
 func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1.ProbeResponse, error) {
-	full, err := p.abs(req.Key)
-	if errors.Is(err, errOutside) {
-		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
-	}
-	if err == nil {
-		_, err = os.Lstat(full)
-	}
+	_, err := p.lstat(req.Key)
 	switch {
 	case err == nil:
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_PRESENT}, nil
-	case gone(err):
+	case gone(err) || errors.Is(err, errOutside):
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_GONE}, nil
 	default:
 		return &pluginv1.ProbeResponse{Presence: pluginv1.ProbeResponse_PRESENCE_UNSPECIFIED}, nil
@@ -533,14 +523,10 @@ func (p *Plugin) Probe(_ context.Context, req *pluginv1.ProbeRequest) (*pluginv1
 // idempotent. A key not in the tree is never listed, so asking to delete one
 // is a bug or an attack, refused loudly.
 func (p *Plugin) Delete(_ context.Context, req *pluginv1.DeleteRequest) (*pluginv1.DeleteResponse, error) {
-	full, err := p.abs(req.Key)
-	if errors.Is(err, errOutside) {
-		return nil, status.Errorf(codes.InvalidArgument, "fs plugin: key %q %v", req.Key, err)
-	}
-	if err == nil {
-		_, err = os.Lstat(full)
-	}
+	full, err := p.lstat(req.Key)
 	switch {
+	case errors.Is(err, errOutside):
+		return nil, status.Errorf(codes.InvalidArgument, "fs plugin: key %q %v", req.Key, err)
 	case gone(err):
 		return &pluginv1.DeleteResponse{}, nil
 	case err != nil:
@@ -550,4 +536,50 @@ func (p *Plugin) Delete(_ context.Context, req *pluginv1.DeleteRequest) (*plugin
 		return nil, status.Errorf(codes.Internal, "fs plugin: remove %s: %v", full, err)
 	}
 	return &pluginv1.DeleteResponse{}, nil
+}
+
+// Move renames key's file, directory or link into to_grid's directory under
+// its name and answers its key there. It replaces nothing: a taken name, a
+// gone source and an OS refusal are FailedPrecondition; a key outside its
+// grid or a target that is not a directory of the tree is InvalidArgument.
+func (p *Plugin) Move(_ context.Context, req *pluginv1.MoveRequest) (*pluginv1.MoveResponse, error) {
+	refuse := func(c codes.Code, why string, a ...any) error {
+		return status.Errorf(c, "fs plugin: %q cannot move to %q: "+why, append([]any{req.Key, req.ToGrid}, a...)...)
+	}
+	clean := path.Clean(req.Key)
+	if clean == "." || path.Dir(clean) != path.Clean(req.Grid) {
+		return nil, refuse(codes.InvalidArgument, "it is not in %q", req.Grid)
+	}
+	from, err := p.lstat(clean)
+	who, dir, fi := "it", "", os.FileInfo(nil)
+	if err == nil {
+		who = "that directory"
+		if dir, err = p.dir(req.ToGrid); err == nil {
+			fi, err = os.Stat(dir)
+		}
+	}
+	switch {
+	case gone(err):
+		return nil, refuse(codes.FailedPrecondition, who+" is gone")
+	case errors.Is(err, errOutside):
+		return nil, refuse(codes.InvalidArgument, who+" %v", err)
+	case err != nil:
+		return nil, refuse(codes.FailedPrecondition, "%v", pathErr(err))
+	case !fi.IsDir():
+		return nil, refuse(codes.InvalidArgument, "that is not a directory")
+	case strings.HasPrefix(path.Clean(req.ToGrid)+"/", clean+"/"):
+		return nil, refuse(codes.InvalidArgument, "a directory cannot move into itself")
+	}
+	to := filepath.Join(dir, filepath.Base(from))
+	_, err = os.Lstat(to)
+	switch {
+	case err == nil:
+		return nil, refuse(codes.FailedPrecondition, "%q is already there", path.Base(clean))
+	case gone(err):
+		err = os.Rename(from, to)
+	}
+	if err != nil {
+		return nil, refuse(codes.FailedPrecondition, "%v", errors.Unwrap(err))
+	}
+	return &pluginv1.MoveResponse{Key: keyIn(req.ToGrid, path.Base(clean))}, nil
 }

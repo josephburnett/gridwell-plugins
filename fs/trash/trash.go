@@ -23,14 +23,20 @@ import (
 // Trash moves path into the user's trash. path may be a file, directory, or
 // symlink.
 func Trash(path string) error {
-	dir, finder, err := place(runtime.GOOS)
-	if err != nil {
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		_, err = os.Lstat(abs)
+	}
+	dir, finder, perr := place(runtime.GOOS)
+	switch {
+	case err != nil:
 		return err
+	case perr != nil:
+		return perr
+	case finder:
+		return intoFinder(dir, abs)
 	}
-	if finder {
-		return intoFinder(dir, path)
-	}
-	return into(dir, path)
+	return into(dir, abs)
 }
 
 // place is the trash directory for goos, and whether it is Finder's.
@@ -48,23 +54,17 @@ func place(goos string) (dir string, finder bool, err error) {
 // there.
 var finderMu sync.Mutex
 
-// intoFinder moves src into Finder's trash under its own name, a clash taking
-// the next free "name N.ext" as Finder names one. The trash keeps no record
-// beside the file: Finder's own "Put Back" record is private to Finder.
+// intoFinder moves src, an absolute path, into Finder's trash under its own
+// name, a clash taking the next free "name N.ext" as Finder names one. The
+// trash keeps no record beside the file: Finder's own "Put Back" record is
+// private to Finder.
 func intoFinder(trashDir, src string) error {
-	abs, err := filepath.Abs(src)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Lstat(abs); err != nil {
-		return err
-	}
 	if err := os.MkdirAll(trashDir, 0o700); err != nil {
 		return err
 	}
 	finderMu.Lock()
 	defer finderMu.Unlock()
-	base := filepath.Base(abs)
+	base := filepath.Base(src)
 	ext := filepath.Ext(base)
 	for i := 1; ; i++ {
 		name := base
@@ -77,7 +77,7 @@ func intoFinder(trashDir, src string) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		return moveOrCopy(abs, dst)
+		return moveOrCopy(src, dst)
 	}
 }
 
@@ -95,32 +95,24 @@ func homeDir() (string, error) {
 	return filepath.Join(base, "Trash"), nil
 }
 
-// into moves src into the trash directory trashDir, writing the matching
+// into moves src, an absolute path, into the trash directory trashDir, writing the matching
 // .trashinfo record (original path + deletion time) per the spec. src may be a
 // file, directory, or symlink. The info record is reserved atomically (O_EXCL)
 // so two deletes of same-named files never collide.
 func into(trashDir, src string) error {
-	abs, err := filepath.Abs(src)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Lstat(abs); err != nil {
-		return err
-	}
 
 	filesDir := filepath.Join(trashDir, "files")
 	infoDir := filepath.Join(trashDir, "info")
-	if err := os.MkdirAll(filesDir, 0o700); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(infoDir, 0o700); err != nil {
-		return err
+	for _, d := range []string{filesDir, infoDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return err
+		}
 	}
 
 	record := []byte(fmt.Sprintf("[Trash Info]\nPath=%s\nDeletionDate=%s\n",
-		encodePath(abs), time.Now().Format("2006-01-02T15:04:05")))
+		encodePath(src), time.Now().Format("2006-01-02T15:04:05")))
 
-	base := filepath.Base(abs)
+	base := filepath.Base(src)
 	for i := 1; ; i++ {
 		name := base
 		if i > 1 {
@@ -134,19 +126,17 @@ func into(trashDir, src string) error {
 		if err != nil {
 			return err
 		}
-		_, werr := f.Write(record)
-		if cerr := f.Close(); werr == nil {
-			werr = cerr
+		_, err = f.Write(record)
+		if cerr := f.Close(); err == nil {
+			err = cerr
 		}
-		if werr != nil {
-			_ = os.Remove(infoPath)
-			return werr
+		if err == nil {
+			err = moveOrCopy(src, filepath.Join(filesDir, name))
 		}
-		if err := moveOrCopy(abs, filepath.Join(filesDir, name)); err != nil {
+		if err != nil {
 			_ = os.Remove(infoPath) // do not leave an orphaned record
-			return err
 		}
-		return nil
+		return err
 	}
 }
 

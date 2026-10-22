@@ -25,7 +25,7 @@ func TestEncodePathPercentEncodesButKeepsSlashes(t *testing.T) {
 }
 
 // TestIntoMissingSourceErrors: trashing a path that doesn't exist is an error
-// (Lstat fails) and writes nothing — no orphaned .trashinfo is left behind.
+// (the move fails) and writes nothing — no orphaned .trashinfo is left behind.
 func TestIntoMissingSourceErrors(t *testing.T) {
 	trashDir := t.TempDir()
 	src := filepath.Join(t.TempDir(), "ghost.txt")

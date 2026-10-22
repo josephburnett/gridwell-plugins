@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	gridwellv1 "github.com/josephburnett/gridwell/api/gen/gridwell/v1"
+	pluginv1 "github.com/josephburnett/gridwell/api/gen/plugin/v1"
 	"github.com/josephburnett/gridwell/api/rpc"
 )
 
@@ -78,9 +78,9 @@ func TestBodyAgreesWithItsDeclaration(t *testing.T) {
 	}
 }
 
-type chunks []*gridwellv1.ServeContentChunk
+type chunks []*pluginv1.ServeContentChunk
 
-func (c *chunks) Send(ch *gridwellv1.ServeContentChunk) error {
+func (c *chunks) Send(ch *pluginv1.ServeContentChunk) error {
 	*c = append(*c, ch)
 	return nil
 }
@@ -126,5 +126,36 @@ func TestTwoSavesInOneSecondAreTwoStamps(t *testing.T) {
 	}
 	if len(stamps) != 2 {
 		t.Fatalf("two saves within one second stamped %v; want two stamps", stamps)
+	}
+}
+
+// A file longer than a chunk serves in chunks, the status and the media type
+// on the first alone, every byte once; an empty file still answers its page.
+func TestServeFileChunksTheBytes(t *testing.T) {
+	dir := t.TempDir()
+	body := bytes.Repeat([]byte("x"), ChunkBytes+10)
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var got chunks
+	if err := ServeFile(&got, dir, dir, "big.txt", ""); err != nil {
+		t.Fatal(err)
+	}
+	var served []byte
+	for i, c := range got {
+		if first := i == 0; first != (c.Status == 200) || first != (c.MediaType != "") {
+			t.Errorf("chunk %d: status %d media type %q", i, c.Status, c.MediaType)
+		}
+		served = append(served, c.Data...)
+	}
+	if len(got) != 2 || !bytes.Equal(served, body) {
+		t.Errorf("served %d bytes in %d chunks, want %d in 2", len(served), len(got), len(body))
+	}
+	got = nil
+	if err := ServeFile(&got, dir, dir, "empty.txt", ""); err != nil || len(got) != 1 || got[0].Status != 200 || len(got[0].Data) != 0 {
+		t.Errorf("empty file served %v, %v; want one empty 200 chunk", got, err)
 	}
 }
