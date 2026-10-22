@@ -7,7 +7,9 @@
 // Checked here:
 //
 //	1   a Watch Info declares is served (it sends its header); one it does
-//	    not declare is Unimplemented
+//	    not declare is Unimplemented; a Move Info declares moves an entry
+//	    into a grid one of its doors opens, under the key it answers; one
+//	    it does not declare is Unimplemented
 //	2   Info refuses a config whose source is missing, with a reason, rather
 //	    than answering grids; passes once the source is there, no restart;
 //	    and latches, so a source that breaks after the first pass is weather
@@ -596,6 +598,64 @@ func (r *run) checkWatch() {
 	}
 }
 
+// checkMove moves a content entry through a door beside it, where Info
+// declares move, and asks Move of a plugin that does not.
+func (r *run) checkMove() {
+	p, _, info, done := r.healthy("move")
+	if p == nil {
+		return
+	}
+	defer done()
+	var key, from, to string
+	for g, entries := range listed(p, info) {
+		var content, door string
+		for _, e := range entries {
+			switch {
+			case e.LinkTarget != nil:
+			case e.ChildGrid != "":
+				door = e.ChildGrid
+			case content == "":
+				content = e.Key
+			}
+		}
+		if content != "" && door != "" && door != g {
+			key, from, to = content, g, door
+		}
+	}
+	ctx, cancel := call()
+	defer cancel()
+	if !info.Move {
+		_, err := p.c.Move(ctx, &pluginv1.MoveRequest{Key: key, Grid: from, ToGrid: to})
+		if status.Code(err) != codes.Unimplemented {
+			r.find(1, "Info declares no move, but Move answered %v rather than Unimplemented", status.Code(err))
+		}
+		return
+	}
+	if key == "" {
+		r.fail("move: a plugin that declares move listed no content entry beside a door")
+		return
+	}
+	moved, err := p.c.Move(ctx, &pluginv1.MoveRequest{Key: key, Grid: from, ToGrid: to})
+	if err != nil {
+		r.find(1, "Info declares move, but Move of %q from %q to %q answered %v", key, from, to, err)
+		return
+	}
+	in := map[string]bool{}
+	for _, g := range []string{from, to} {
+		resp, err := p.list(g)
+		if err != nil {
+			r.fail("move: List %q: %v", g, err)
+			return
+		}
+		for _, e := range resp.Entries {
+			in[g+"\x00"+e.Key] = true
+		}
+	}
+	if !in[to+"\x00"+moved.Key] || in[from+"\x00"+key] {
+		r.find(1, "Move of %q to %q answered key %q, but the listings do not show it moved", key, to, moved.Key)
+	}
+}
+
 // checkUnreachable stages each failure the source can have after Info passed
 // and reads every declared grid cold.
 func (r *run) checkUnreachable() {
@@ -964,6 +1024,7 @@ func conformance() []verdict {
 				r.checkEntries()
 				r.checkFind()
 				r.checkStaleWrite()
+				r.checkMove()
 				v.findings, v.harness = r.findings, r.harness
 			}()
 		}
