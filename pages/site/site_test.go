@@ -3,9 +3,12 @@ package site
 import (
 	"bytes"
 	"image/jpeg"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/josephburnett/gridwell/api/rpc"
 )
 
 // The site's one promise: the same key answers the same bytes. Everything a
@@ -164,4 +167,68 @@ func TestTheReportIsGeneratedFromTheSite(t *testing.T) {
 			t.Errorf("the report does not list %q", d.Key)
 		}
 	}
+}
+
+// A presented page's relative URLs resolve, against its page address, to
+// subpaths Present answers: its assets under rpc.PresentedAssets and the
+// site's other pages at the same host. A browser resolves them; the test
+// resolves them the same way.
+func TestEveryPresentedRelativeURLIsAnswered(t *testing.T) {
+	const tile = "http://node.test/content/tok/n1/12/"
+	for _, d := range Docs() {
+		if d.Page == nil {
+			continue
+		}
+		subpath := "example.test/" + d.Key
+		mediaType, page, ok := Present(subpath)
+		if !ok || !strings.HasPrefix(mediaType, "text/html") {
+			t.Fatalf("Present(%q) = %q %v, want its page", subpath, mediaType, ok)
+		}
+		m := baseRef.FindStringSubmatch(string(page))
+		if m == nil {
+			t.Fatalf("%s: a presented page has no <base>", d.Key)
+		}
+		base := mustURL(t, tile+subpath).ResolveReference(mustURL(t, m[1]))
+		for _, m := range relRef.FindAllStringSubmatch(baseRef.ReplaceAllString(string(page), ""), -1) {
+			got := base.ResolveReference(mustURL(t, m[1])).String()
+			sub, inside := strings.CutPrefix(got, tile)
+			if !inside {
+				t.Errorf("%s names %q, outside the tile's page", d.Key, got)
+				continue
+			}
+			if _, _, ok := Present(sub); !ok {
+				t.Errorf("%s names %q, which Present does not answer", d.Key, sub)
+			}
+			if !strings.HasPrefix(sub, rpc.PresentedAssets) && !strings.HasPrefix(sub, "example.test/") {
+				t.Errorf("%s links %q, off its host", d.Key, sub)
+			}
+		}
+	}
+}
+
+// Only a page doc at one path segment is presented; anything else is a 404.
+func TestPresentAnswersOnlyAPageItHas(t *testing.T) {
+	for _, sub := range []string{"", "example.test", "example.test/", "example.test/about",
+		"example.test/nope", "example.test/a/hello", "_/styled/nope.css", "_/nope/style.css", "_/hello"} {
+		if _, _, ok := Present(sub); ok {
+			t.Errorf("Present(%q) answered; want a 404", sub)
+		}
+	}
+	if mediaType, data, ok := Present("_/styled/style.css"); !ok || !strings.HasPrefix(mediaType, "text/css") || string(data) != styledCSS {
+		t.Errorf("Present(_/styled/style.css) = %q %v, want the stylesheet", mediaType, ok)
+	}
+	if _, page, _ := Present("other.test/hello"); !strings.Contains(string(page), `href="../../other.test/styled"`) {
+		t.Error("a presented page's links leave its host")
+	}
+}
+
+var baseRef = regexp.MustCompile(`<base href="([^"]+)">`)
+
+func mustURL(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }

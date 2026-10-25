@@ -304,3 +304,46 @@ func TestGetPreviewAnswersOnlyForPages(t *testing.T) {
 		t.Errorf("GetPreview(gone) = %d bytes, %v; want none", len(got.GetJpeg()), err)
 	}
 }
+
+// Info declares the globs its config names, space separated, and nothing
+// when it names none: a plugin presents only what it is configured to.
+func TestInfoDeclaresWhatItsConfigPresents(t *testing.T) {
+	for cfg, want := range map[string][]string{
+		"":                      nil,
+		"http://example.test/*": {"http://example.test/*"},
+		" http://a.test/*  https://b.test/x/* \n": {"http://a.test/*", "https://b.test/x/*"},
+	} {
+		impl, err := FromConfig(map[string]string{"presents": cfg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := impl.(*Plugin).Info(context.Background(), &pluginv1.InfoRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(info.Presents, "|") != strings.Join(want, "|") {
+			t.Errorf("presents %q declares %q, want %q", cfg, info.Presents, want)
+		}
+	}
+}
+
+// A keyless request is an address the plugin presents: the subpath is the
+// address without its scheme, a page doc's at <host>/<key>, its assets
+// under rpc.PresentedAssets, and anything else the plugin's own 404.
+func TestAPresentedAddressIsServedByItsPath(t *testing.T) {
+	p := New()
+	page := serve(t, p, "", "example.test/styled")
+	if page.Status != 200 || !strings.HasPrefix(page.MediaType, "text/html") ||
+		!strings.Contains(string(page.Data), "<title>A page with resources</title>") ||
+		!strings.Contains(string(page.Data), `<base href="../`+rpc.PresentedAssets+`styled/">`) {
+		t.Errorf("example.test/styled = %d %q %s", page.Status, page.MediaType, page.Data)
+	}
+	if css := serve(t, p, "", rpc.PresentedAssets+"styled/style.css"); css.Status != 200 || !strings.HasPrefix(css.MediaType, "text/css") {
+		t.Errorf("the stylesheet = %d %q", css.Status, css.MediaType)
+	}
+	for _, sub := range []string{"example.test/nope", "example.test/about", rpc.PresentedAssets + "styled/nope"} {
+		if c := serve(t, p, "", sub); c.Status != 404 {
+			t.Errorf("%q = %d, want the plugin's 404", sub, c.Status)
+		}
+	}
+}

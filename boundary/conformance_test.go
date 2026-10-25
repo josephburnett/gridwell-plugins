@@ -38,7 +38,8 @@
 // is inside the process), 14 (log lines are prose, and an episode's edges
 // are the plugin's), 15 (which package the cache code lives in is a source
 // fact, not a wire one), 16 (the seam tests live in gridwell), 17 (a README
-// read against the code) and 18's EntryChanged-equals-List.
+// read against the code), 18's EntryChanged-equals-List and 21 (a glob
+// names addresses no harness can enumerate; pages tests its own).
 package boundary
 
 import (
