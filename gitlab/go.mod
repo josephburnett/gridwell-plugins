@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	github.com/josephburnett/gridwell-plugins/guest v0.1.0
 	github.com/josephburnett/gridwell-plugins/memo v0.4.2
-	github.com/josephburnett/gridwell/api v0.9.0
+	github.com/josephburnett/gridwell/api v0.10.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 )

@@ -3,7 +3,7 @@ module github.com/josephburnett/gridwell-plugins/boundary
 go 1.27.1
 
 require (
-	github.com/josephburnett/gridwell/api v0.9.0
+	github.com/josephburnett/gridwell/api v0.10.0
 	google.golang.org/grpc v1.84.0
 )
 

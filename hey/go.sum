@@ -26,6 +26,8 @@ github.com/josephburnett/gridwell-plugins/memo v0.4.2 h1:5mo3iZJb2JUYBC8rmWgleuX
 github.com/josephburnett/gridwell-plugins/memo v0.4.2/go.mod h1:JaLTyFu3IvEyYlaD2kWwhLsh4Ow27ldjmsOETMDqHs8=
 github.com/josephburnett/gridwell/api v0.9.0 h1:vjNb+Auc/UJ/kqT+qDFcI4QqmY6X+sIvrncLfwoxn/c=
 github.com/josephburnett/gridwell/api v0.9.0/go.mod h1:YOip8PZe0bfa17occHRbMLZAeDRFnuSS4nvzCB8z+oc=
+github.com/josephburnett/gridwell/api v0.10.0 h1:P2ruiIh5uDowWQ3B5gg5ak3VCbevxp8+34XPbxr+M8c=
+github.com/josephburnett/gridwell/api v0.10.0/go.mod h1:YOip8PZe0bfa17occHRbMLZAeDRFnuSS4nvzCB8z+oc=
 github.com/mattn/go-colorable v0.1.9/go.mod h1:u6P/XSegPjTcexA+o6vUJrdnUu04hMope9wVRipJSqc=
 github.com/mattn/go-colorable v0.1.12/go.mod h1:u5H1YNBxpqRaxsYJYSkiCWKzEfiAb1Gb520KVy5xxl4=
 github.com/mattn/go-colorable v0.1.15 h1:+u9SLTRGnXv73cEsnsmoZBom+dMU88B2M0aDcWy0/jY=
